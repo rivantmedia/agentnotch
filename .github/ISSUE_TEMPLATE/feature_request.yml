@@ -1,12 +1,12 @@
 name: Feature Request
-description: Suggest an idea or improvement for Codenotch.
+description: Suggest an idea or improvement for Agent Notch.
 title: "feat: "
 labels: ["enhancement"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thank you for suggesting an enhancement for Codenotch!
+        Thank you for suggesting an enhancement for Agent Notch!
 
   - type: textarea
     id: problem

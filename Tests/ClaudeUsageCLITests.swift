@@ -226,7 +226,7 @@ final class ClaudeUsageCLITests: XCTestCase {
     func testAScratchDirectoryThatCannotBeMadeThrows() throws {
         let support = try makeHome(executableAt: nil)
         // A file where the parent directory has to go.
-        FileManager.default.createFile(atPath: support.appendingPathComponent("Codenotch").path,
+        FileManager.default.createFile(atPath: support.appendingPathComponent(Fork.applicationSupportFolder).path, // Fork: own folder
                                        contents: Data())
 
         XCTAssertThrowsError(try ClaudeUsageCLI.scratchDirectory(applicationSupport: support))

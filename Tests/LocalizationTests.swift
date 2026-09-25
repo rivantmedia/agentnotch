@@ -696,7 +696,7 @@ final class LocalizationTests: XCTestCase {
         )
         XCTAssertEqual(
             L10n.t("Quit Codenotch", locale: indonesian),
-            "Keluar dari Codenotch"
+            "Keluar dari \(Fork.displayName)" // Fork: R3
         )
     }
 

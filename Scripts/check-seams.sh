@@ -13,7 +13,11 @@
 #     merge-base of HEAD and the ref, so commits fetched from upstream but not
 #     merged yet do not count as fork edits;
 #  3. Packages/ClaudeControl/Sources/ClaudeControl/Engine imports no SwiftUI.
-# Plus: the embedded hook scripts match Packages/ClaudeControl/Scripts/*.py.
+# Plus: the embedded hook scripts match Packages/ClaudeControl/Scripts/*.py,
+# and no string literal under Sources/ names "Codenotch" outside L10n.t (R1
+# puts this app's name into everything L10n.t returns; a literal that skips
+# it, such as a SwiftUI Text("…") key a merge brings in, would show upstream's
+# name on screen). Known literals that aren't on-screen copy are listed below.
 #
 # Exit 0 when everything holds, 1 with a list of problems otherwise. Reads only.
 set -euo pipefail
@@ -107,6 +111,30 @@ echo "engine: no SwiftUI import check done"
 if ! Packages/ClaudeControl/Scripts/embed-scripts.sh --check >/dev/null 2>&1; then
     fail "Engine/Scripts/EmbeddedScripts.swift is stale: run Packages/ClaudeControl/Scripts/embed-scripts.sh"
 fi
+
+# --- Upstream's name outside L10n.t -------------------------------------------
+# path:text pairs that may keep it: not copy anyone reads as this app's name.
+NAME_OK=(
+    'Sources/App/Fork.swift:'                                   # the rebrand itself
+    'Sources/Providers/GitHubCopilotProvider.swift:"Codenotch", forHTTPHeaderField: "User-Agent"'
+    'Sources/PhoneLink/PhoneLinkSnapshotBuilder.swift:source: "Codenotch"'  # read by upstream's phone app
+)
+names=0
+while IFS= read -r hit; do
+    [[ -z "$hit" ]] && continue
+    file="${hit%%:*}"; rest="${hit#*:}"; text="${rest#*:}"
+    [[ "$text" =~ ^[[:space:]]*// ]] && continue
+    [[ "$text" == *'L10n.t('* ]] && continue
+    allowed=0
+    for ok in "${NAME_OK[@]}"; do
+        okFile="${ok%%:*}"; okText="${ok#*:}"
+        [[ "$file" == "$okFile" && "$text" == *"$okText"* ]] && allowed=1 && break
+    done
+    [[ $allowed -eq 1 ]] && continue
+    fail "upstream's name in a literal that skips L10n.t, so it isn't rebranded (see Fork.rebranded): $hit"
+    names=$((names + 1))
+done < <(grep -rnE '"[^"]*Codenotch[^"]*"' Sources --include='*.swift' || true)
+echo "upstream's name outside L10n.t: $names"
 
 if [[ $problems -gt 0 ]]; then
     echo "check-seams: $problems problem(s)"

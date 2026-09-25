@@ -81,7 +81,19 @@ enum L10n {
         return resolved
     }
 
+    // Fork: R1 begin. Upstream's copy names the app "Codenotch"; this app's
+    // own name goes in, in every language (see `Fork.rebranded`).
     static func t(_ key: String.LocalizationValue, locale: Locale = locale) -> String {
+        let text = upstreamT(key, locale: locale)
+        guard Fork.namesUpstream(text) else { return text }
+        let format = LocalizedStringResource(key).key
+        return Fork.rebranded(text, locale: locale, key: format) {
+            bundle(for: locale)?.localizedString(forKey: format, value: nil, table: nil) ?? format
+        }
+    }
+
+    private static func upstreamT(_ key: String.LocalizationValue, locale: Locale) -> String {
+        // Fork: R1 end.
         // `String(localized:locale:)` only formats interpolated numbers; it
         // still looks the string up in the bundle's preferred language. So the
         // locale has to be carried in by *which bundle* is asked — a bundle

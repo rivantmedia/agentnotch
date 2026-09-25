@@ -92,6 +92,7 @@ SEAM	ISO	Sources/App/AppDelegate.swift	appSupport.appendingPathComponent("\(Fork
 SEAM	ISO	Sources/Model/CustomEndpoint.swift	appSupport.appendingPathComponent(Fork.applicationSupportFolder, isDirectory: true) // Fork: own folder
 SEAM	ISO	Sources/Providers/ClaudeUsageCLI.swift	.appendingPathComponent(Fork.applicationSupportFolder, isDirectory: true) // Fork: own folder
 SEAM	ISO	Tests/ClaudeUsageCLITests.swift	support.appendingPathComponent("\(Fork.applicationSupportFolder)/usage-scratch").path) // Fork: own folder
+SEAM	ISO	Tests/ClaudeUsageCLITests.swift	support.appendingPathComponent(Fork.applicationSupportFolder).path, // Fork: own folder
 SEAM	ISO	Sources/PhoneLink/PhoneLinkSecretStore.swift	static let service = Fork.phoneLinkKeychainService // Fork: never the official app's device secrets
 SEAM	ISO	Sources/App/Updater.swift	// Fork: updates off	5
 SEAM	ISO	Sources/App/Log.swift	Logger(subsystem: Fork.logSubsystem,	2
@@ -130,6 +131,22 @@ SEAM	U12	Sources/Info.plist	<key>NSAppleEventsUsageDescription</key>
 SEAM	LIC	project.yml	- name: Copy licence notices
 SEAM	LIC	project.yml	cp "$SRCROOT/Packages/ClaudeControl/NOTICE" "$R/ClaudeControl-NOTICE.txt"
 
+# --- R: the app's own name in upstream's copy ----------------------------------
+# Upstream's strings call the app "Codenotch". L10n.t hands every lookup to
+# Fork.rebranded (R1), so all of them, translations included, name this app
+# instead; SwiftUI literals that skip L10n.t are edited in place (R2), and
+# the XCTest assertions that pin the old wording follow (R3).
+SEAM	R1	Sources/L10n.swift	// Fork: R1 begin.
+SEAM	R1	Sources/L10n.swift	guard Fork.namesUpstream(text) else { return text }
+SEAM	R1	Sources/L10n.swift	return Fork.rebranded(text, locale: locale, key: format) {
+SEAM	R1	Sources/L10n.swift	private static func upstreamT(_ key: String.LocalizationValue, locale: Locale) -> String {
+SEAM	R1	Sources/L10n.swift	// Fork: R1 end.
+SEAM	R2	Sources/Settings/SettingsView.swift	Text(verbatim: Fork.displayName) // Fork: R2
+SEAM	R2	Sources/Settings/SettingsView.swift	Text(verbatim: "\(Fork.displayName) \(updater.currentVersion)") // Fork: R2
+SEAM	R2	Sources/Settings/OllamaSettingsRow.swift	// Fork: R2
+SEAM	R3	Tests/AntigravityTests.swift	XCTAssertTrue(titles.contains("Quit \(Fork.displayName)")) // Fork: R3
+SEAM	R3	Tests/LocalizationTests.swift	"Keluar dari \(Fork.displayName)" // Fork: R3
+
 # --- Files under Sources/ and Tests/ that may differ from upstream -----------
 # Setup (fork identity, sealed mode, CLT build):
 ALLOW	Sources/App/AppDelegate.swift
@@ -151,6 +168,10 @@ ALLOW	Sources/Notch/NotchRootView.swift
 ALLOW	Sources/Notch/NotchViewModel.swift
 ALLOW	Sources/Notch/NotchWindowController.swift
 ALLOW	Sources/Settings/SettingsView.swift
+ALLOW	Sources/L10n.swift
+ALLOW	Sources/Settings/OllamaSettingsRow.swift
+ALLOW	Tests/AntigravityTests.swift
+ALLOW	Tests/LocalizationTests.swift
 ALLOW	Sources/App/StatusItemSummary.swift
 # The fork's own files:
 ALLOW	Sources/ClaudeBridge/**

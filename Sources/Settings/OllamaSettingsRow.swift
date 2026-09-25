@@ -107,7 +107,7 @@ private struct OllamaRelayStatus: View {
                 Text("OLLAMA_HOST=\(OllamaActivityRelay.address) ollama")
                     .font(.system(.caption, design: .monospaced))
                     .textSelection(.enabled)
-                Text("Keep Codenotch open. Speed appears after each completed native Ollama response. Requests sent directly to the server address only provide model detection here.")
+                Text(L10n.t("Keep Codenotch open. Speed appears after each completed native Ollama response. Requests sent directly to the server address only provide model detection here.")) // Fork: R2
                     .foregroundStyle(.secondary)
             }
         }

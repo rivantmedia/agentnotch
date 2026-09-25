@@ -300,7 +300,7 @@ struct SettingsPaneContent: View {
                 }
             }
             HStack(alignment: .firstTextBaseline) {
-                Caption("Banners are silent: sounds and the notch's peek follow Codenotch's Notifications settings.")
+                Caption("Banners are silent: sounds and the notch's peek follow this app's Notifications settings.")
                 Spacer()
                 Button("Sounds and peek…", action: actions.openNotificationsPane)
             }

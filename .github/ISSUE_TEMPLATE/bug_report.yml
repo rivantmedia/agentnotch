@@ -1,5 +1,5 @@
 name: Bug Report
-description: Report an issue or unexpected behavior in Codenotch.
+description: Report an issue or unexpected behavior in Agent Notch.
 title: "fix: "
 labels: ["bug"]
 body:
@@ -22,7 +22,7 @@ body:
       label: Steps to Reproduce
       description: Steps to reproduce the behavior.
       placeholder: |
-        1. Open Codenotch with provider '...'
+        1. Open Agent Notch with provider '...'
         2. Perform action '...'
         3. See error
     validations:
@@ -65,8 +65,8 @@ body:
   - type: input
     id: version
     attributes:
-      label: Codenotch Version
-      description: The version of Codenotch where this occurred (e.g., 1.9.0, or git commit SHA).
+      label: Agent Notch Version
+      description: The version of Agent Notch where this occurred (e.g., 1.9.0, or git commit SHA).
       placeholder: "1.9.0"
     validations:
       required: true
@@ -76,7 +76,7 @@ body:
     attributes:
       label: Relevant Logs (Unified Log)
       description: |
-        Run `/usr/bin/log stream --predicate 'subsystem == "com.vinz.codenotch"' --level debug` and paste relevant lines.
+        Run `/usr/bin/log stream --predicate 'subsystem == "com.rivantmedia.agentnotch"' --level debug` and paste relevant lines.
       render: shell
     validations:
       required: false

@@ -20,6 +20,71 @@ enum Fork {
 
     static let displayName = "Agent Notch"
 
+    /// What upstream's copy calls the app.
+    static let upstreamName = "Codenotch"
+
+    /// Upstream's copy names the app "Codenotch" in some fifty strings and
+    /// their twelve translations. Forking each one would mean re-forking it
+    /// after every merge from upstream (and losing its translations until
+    /// then), so `L10n.t` passes what it looks up through here (seam R1), and
+    /// this app's own name goes in, in every language.
+    ///
+    /// - `key` is the catalog key: upstream's English with `%@`-style
+    ///   placeholders. Copy about products that really are called Codenotch
+    ///   (the phone app this one pairs with, upstream's Windows build and its
+    ///   downloads) keeps the name.
+    /// - `template` is the looked-up string before its arguments are filled
+    ///   in. When it doesn't name Codenotch, an argument did (a project
+    ///   folder, a device or account name): that is the user's data, and it
+    ///   stays as it is. Only asked for when `text` names Codenotch.
+    static func rebranded(_ text: String, locale: Locale, key: String, template: () -> String) -> String {
+        guard namesUpstream(text), !namesUpstreamProduct(key) else { return text }
+        let template = template()
+        guard namesUpstream(template) else { return text }
+        var result = text
+        // A key without a translation falls back to upstream's English.
+        if locale.language.languageCode == .english || template == key {
+            // "an Agent Notch window", not "a Agent Notch window".
+            result = Rebrand.englishArticle.stringByReplacingMatches(
+                in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "$1n \(Rebrand.nameTemplate)")
+        } else if locale.language.languageCode == .french {
+            // The name starts with a vowel, so "de" and "que" (lorsque,
+            // puisque, …) elide: "Réglages d'Agent Notch", "tant qu'Agent Notch".
+            result = Rebrand.frenchElision.stringByReplacingMatches(
+                in: result, range: NSRange(result.startIndex..., in: result), withTemplate: "$1'\(Rebrand.nameTemplate)")
+        }
+        // Compounds join every word of the name: "Agent-Notch-Einstellungen".
+        result = result.replacingOccurrences(
+            of: upstreamName + "-", with: displayName.replacingOccurrences(of: " ", with: "-") + "-")
+        return result.replacingOccurrences(of: upstreamName, with: displayName)
+    }
+
+    /// Whether `text` names upstream at all: the cheap check every lookup
+    /// makes before anything else.
+    static func namesUpstream(_ text: String) -> Bool {
+        text.range(of: upstreamName, options: .literal) != nil
+    }
+
+    /// English copy naming a product other than this app that is called
+    /// Codenotch. Phrases rather than keys, so a reworded string upstream
+    /// still matches while it keeps naming the same product.
+    static let upstreamProductPhrases = [
+        "Codenotch app on your phone", "Codenotch on your phone", "Codenotch phone app",
+        "Codenotch for Windows", "Codenotch-Setup", "hivinz.com",
+    ]
+
+    static func namesUpstreamProduct(_ key: String) -> Bool {
+        upstreamProductPhrases.contains { key.range(of: $0, options: .literal) != nil }
+    }
+
+    /// Compiled once: `L10n.t` runs on the notch's repaint path.
+    private enum Rebrand {
+        static let nameTemplate = NSRegularExpression.escapedTemplate(for: displayName)
+        static let englishArticle = try! NSRegularExpression(pattern: #"\b([aA]) \#(upstreamName)\b"#)
+        static let frenchElision = try! NSRegularExpression(
+            pattern: #"\b([dD]|[qQ]u|[lL]orsqu|[pP]uisqu|[jJ]usqu|[qQ]uoiqu)e \#(upstreamName)\b"#)
+    }
+
     /// `log stream --predicate 'subsystem == "com.rivantmedia.agentnotch"' --level debug`
     static let logSubsystem = bundleID
 
