@@ -61,6 +61,12 @@ nonisolated struct SettingsPaneModel {
     var readsDesktopUsageCache = true
     var isRefreshingUsage = false
 
+    // Cloud
+    /// The website: where sync goes, who is signed in, the sync and summary
+    /// switches and the last sync (the hub's `cloud`). Signed out, with no
+    /// website, until the user sets one.
+    var cloud = ClaudeCloudState()
+
     // Sessions and attention
     var autoOpen: AutoOpenPolicy = .needsInput
     var holdOpen: HoldOpenPolicy = .auto
@@ -304,6 +310,19 @@ struct SettingsPaneActions {
     var setProbeInterval: (Int) -> Void = { _ in }
     var setReadsDesktopUsageCache: (Bool) -> Void = { _ in }
     var refreshUsage: () -> Void = {}
+
+    /// Save the website's address as typed (blank clears it; another
+    /// website signs out of the old one).
+    var saveCloudWebsite: (_ address: String) -> Void = { _ in }
+    /// "Sign in with Google": the host runs the browser step.
+    var cloudSignIn: () -> Void = {}
+    var cloudSignOut: () -> Void = {}
+    var setCloudSync: (Bool) -> Void = { _ in }
+    var setSessionSummaries: (Bool) -> Void = { _ in }
+    var syncCloudNow: () -> Void = {}
+    var openCloudDashboard: () -> Void = {}
+    /// "Share accounts…": the website's pools page (`<dashboard>/pools`).
+    var openCloudPools: () -> Void = {}
 
     var setAutoOpen: (AutoOpenPolicy) -> Void = { _ in }
     var setHoldOpen: (HoldOpenPolicy) -> Void = { _ in }

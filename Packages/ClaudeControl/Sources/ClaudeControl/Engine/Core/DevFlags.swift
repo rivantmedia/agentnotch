@@ -17,6 +17,8 @@
 //  | `AGENTNOTCH_SOCKET=<path>`                     | the hook socket (the scripts only with `AGENTNOTCH_DEV=1` too) |
 //  | `AGENTNOTCH_EXTRA_CONFIG_DIRS=<a>:<b>`         | more Claude config folders to track                      |
 //  | `AGENTNOTCH_USAGE_PROBE`                       | usage probes on schedule even with `--no-install`        |
+//  | `AGENTNOTCH_WEB_URL=<url>`                     | the website sync uses, over the one set in Settings      |
+//  |                                          | (https, or http to this Mac; ignored when sealed)        |
 //  | `--dump-state` / `AGENTNOTCH_DUMP_STATE`       | print a line per session on every change                 |
 //  | `--dev-console` / `AGENTNOTCH_DEV_CONSOLE`     | drive sessions from stdin                                |
 //
@@ -91,6 +93,12 @@ nonisolated enum DevFlags {
     /// `AGENTNOTCH_USAGE_PROBE`: keep scheduled usage probes on in a `--no-install` run.
     static let usageProbeOnDevRun: Bool = truthy(Foundation.ProcessInfo.processInfo.environment["AGENTNOTCH_USAGE_PROBE"])
 
+    /// `AGENTNOTCH_WEB_URL`: the website sync talks to, over the one set in
+    /// Settings (a local development server, say). Only an address the app
+    /// accepts counts (see `CloudWebsite.validated`); a sealed run ignores it.
+    static let webURLOverride: String? = Foundation.ProcessInfo.processInfo.environment["AGENTNOTCH_WEB_URL"]
+        .flatMap { CloudWebsite.validated($0)?.absoluteString }
+
     /// `--dump-state` / `AGENTNOTCH_DUMP_STATE`: print a one-line summary per session on change.
     static let dumpState: Bool = flag("--dump-state", env: "AGENTNOTCH_DUMP_STATE")
 
@@ -120,6 +128,7 @@ nonisolated enum DevFlags {
             logger.notice("Extra config folders (AGENTNOTCH_EXTRA_CONFIG_DIRS): \(extraConfigDirs.joined(separator: ", "), privacy: .public)")
         }
         if usageProbeOnDevRun { logger.notice("Scheduled usage probes forced on (AGENTNOTCH_USAGE_PROBE)") }
+        if let webURLOverride { logger.notice("Website for sync: \(webURLOverride, privacy: .public) (AGENTNOTCH_WEB_URL)") }
         if dumpState { logger.notice("State dump on (--dump-state)") }
         if devConsole { logger.notice("Dev console on (--dev-console)") }
     }

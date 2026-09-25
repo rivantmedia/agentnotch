@@ -31,7 +31,13 @@
   read the conversation and type a reply, and jump to the session's exact terminal tab.
 - **No login token, ever.** Claude usage comes from Claude Code itself (asked for its own
   usage), from the live status line, and from Claude Desktop's on-disk cache if you allow it.
-  This app reads no keychain item or credential file of Claude's.
+  This app reads no keychain item or credential file of Claude's. The only sign-in it keeps
+  is its own, to your website, if you turn on cloud sync: a 0600 file in its support folder,
+  nothing to do with your Claude login.
+- **Optional cloud sync.** Sign in with Google to your own Agent Notch website (`web/`) to
+  see every account's sessions, tokens, cost and limits from all your Macs in one place, and
+  to share an account's history with the other people who use it. Off until you sign in and
+  turn it on; see [Cloud sync](#cloud-sync-optional).
 - **Installs beside the official app.** It has its own bundle id
   (`com.rivantmedia.agentnotch`), preferences, log subsystem, keychain items and
   `~/Library/Application Support/Agent Notch`. It never updates itself: Sparkle
@@ -184,12 +190,107 @@ Agent Notch is the same app under a new name, with a new bundle id
   Settings › *Usage* you can choose Off, 5, 10, 15 or 30 minutes, use **Refresh now**, and
   see each account's last reading.
 
+## Cloud sync (optional)
+
+The website in [`web/`](web/README.md) (Next.js, tRPC, Prisma, Supabase; you host it) keeps a
+history of what your Claude accounts were used for: each account's 5-hour and weekly limits
+over time, the projects it worked in, and the tokens and cost of every Claude Code session,
+from every Mac that syncs. Nothing leaves this Mac until you sign in and turn sync on.
+
+- **Signing in.** In Settings › Claude Code › *Cloud*, paste the website's address
+  (`https://…`, or `http://localhost:3000` while you develop it) and click **Save**, then
+  **Sign in with Google**. Google's sign-in opens in your browser and comes back to the app
+  (`agentnotch://auth-callback`, PKCE through the website's Supabase project). The app keeps
+  that sign-in (a Supabase access token and refresh token) in
+  `~/Library/Application Support/Agent Notch/Claude/cloud-session.json`, a file only your user
+  can read (0600). It isn't in the Keychain and has nothing to do with Claude's login.
+  **Sign out…** ends this Mac's sign-in; what the website has stays there. Saving another
+  website signs you out of the old one; a sign-in still open in the browser when you do is
+  thrown away (and ended on Supabase). The switches below belong to one sign-in: signing out
+  (or being signed out) and saving another website turn them off, and every new sign-in
+  starts with them off. A sync belongs to the sign-in and website it started with: if you
+  sign out, sign in again or save another website while it is under way, its answer is
+  dropped, and a request retried after a refused token only ever carries a token of its own
+  sign-in on its own website.
+- **What sync sends** (with **Sync sessions and usage** on: every 5 minutes, soon after a
+  session ends, or on **Sync now**; at most five requests at a time, the rest half a minute
+  later; after a failure, not before the backoff or the website's Retry-After ends). Sessions
+  are captured, and usage readings kept, only while you are signed in with sync on. Turning
+  sync off stops a sync that is under way.
+  - Earlier sessions are sent too, from their transcripts, but only where the app knows which
+    account ran them: from a folder whose `projects/` is its own (not shared), and only
+    sessions begun after the app first saw that folder signed in as the account it names now.
+    The app keeps that "signed in as … since …" date for each folder (from the first time this
+    version runs, and again whenever someone else signs in there); a folder's history from
+    before it, which may be another account's, is never sent.
+  - Each signed-in Claude account: a key (SHA-256 of its account id and organization, so the
+    same account in the same organization matches across people and Macs), its email,
+    organization and plan, and your name for it.
+  - Each session: its project folder's name and a key for the project (an HMAC of the path
+    keyed with a random secret made on this Mac, `cloud-install-secret`, which never leaves it,
+    so the path can't be guessed back from the key), Claude Code's title for it, where it ran
+    (terminal, VS Code, Claude Desktop, SDK), its models, start, last activity and end times,
+    how many responses, its token counts (input, output, cache writes and reads, subagents
+    included) and Claude Code's cost estimate when the status line gave one. A session resumed
+    under another account (Claude Parallel Profiles' "switch account, continue the same
+    conversation") is sent once per account, each with only the responses and tokens made
+    while that account ran it, and with no cost: the status line's cost is the whole Claude
+    Code process's total (a resumed session starts from what it had already spent), so it
+    can't be divided between the accounts.
+  - Usage-limit readings (5-hour, weekly, per model, extra usage) and where each came from:
+    the usage check, the status line, `.claude.json` or Claude Desktop. A reset time the
+    website wouldn't take (before 2023, or more than 32 days ahead) is sent empty.
+  - This Mac's name, a random id made once, and the app version.
+- **Never sent:** the paths of your files and folders, prompts, Claude's replies, file
+  contents, tool input or output, or your Claude login. Accounts you don't track or have
+  forgotten, and folders nobody is signed in to, are left out. The one exception is what a
+  summary says, if you turn summaries on (below): it is Claude's own sentence about the
+  session, written from your prompts and its replies. Before it leaves the Mac, absolute paths
+  in it (under `/Users`, `/home`, `/private`, `/Volumes`, `/opt`, `/var`, `/Library`, `/etc`,
+  `/tmp` or `~/`) are cut to their last component (a home folder itself, `/Users/<name>` or
+  `/home/<name>`, becomes `~`, so no user name is left), and text matching common key, token
+  and password formats, and the value of any `NAME=value` or `NAME: value` whose name ends in
+  `KEY`, `TOKEN`, `SECRET`, `PASSWORD` or `PASS`, is replaced by `[redacted]`; it may still
+  name a file or folder by its name or a path within the project.
+- **Session summaries** are a separate switch, **Summarise finished sessions with Claude**,
+  off until you turn it on (and only while sync is on). Only sessions that end after you turn
+  it on are summarised, never your earlier history. Ten minutes after such a session ends
+  (with at least two responses), the app runs Claude Code on this Mac as that session's own
+  account (for a session resumed under another account, each account's part as that account,
+  from that part of the conversation only): `claude -p --model haiku --max-budget-usd 0.10`
+  with hooks, tools and MCP servers off and no session saved, from an empty folder. It hands
+  Claude Code your typed prompts and Claude's text replies (no tool output, text matching
+  common key, token and password formats redacted, at most 24,000 characters) and asks for a
+  summary without paths, names, hosts, URLs or credentials. That is an ordinary Claude Code
+  request, so it uses that account's usage: a few cents per session with Haiku, at most $0.10
+  a run, 20 an hour and 60 a day, and none for an account while its 5-hour limit is 80% used
+  or more. Turning summaries or sync off, or signing out, stops a summary that is running.
+  Only the one- or two-sentence summary goes to the website, scrubbed as described above.
+  Turning summaries off (signing out and saving another website do too) deletes the summaries
+  on this Mac that haven't been sent yet. **Summaries already sent stay on the website:**
+  turning summaries off, signing out or removing the app doesn't take them off it, and the
+  people you share the account with keep seeing them there.
+- **Sharing an account.** Pooling happens on the website: **Share accounts…** opens its
+  *Pools* page. Create a share code for an account you have synced and give it to someone
+  else who uses the same Claude account. Once they redeem it, everyone in the pool sees every
+  member's sessions and usage for that account, and nothing else of each other's. The creator
+  can revoke the code or remove members; members can leave.
+- **Claude Desktop** here means two things: its plan-limit readings (with *Also read Claude
+  Desktop's cached usage* on) and the Claude Code sessions it hosts, recorded when Claude
+  Desktop is signed in to a single account and it is the session's. It does not mean
+  claude.ai chats, in Claude Desktop or a browser: the app doesn't read those.
+- **Pointing a run at a development site:** `AGENTNOTCH_WEB_URL=http://localhost:3000`
+  overrides the address for that run (a sign-in saved for another website is set aside, not
+  deleted). A sealed run shows a signed-in example and sends nothing.
+
 ## Privacy: what it reads, writes and runs
 
 - **Never:**
   - a Claude login token, keychain item or credential file (`.credentials.json`,
     `sessions/*.key`);
   - a network request of its own for Claude.
+- **Network:** only with [cloud sync](#cloud-sync-optional), and only to the website you set
+  there and its Supabase project: to sign in, and to sync once you turn sync on.
 - **Reads:**
   - each config folder's `.claude.json` (Claude Parallel Profiles' stores included): only
     the signed-in identity and Claude Code's cached usage figures; the rest of the file is
@@ -198,10 +299,13 @@ Agent Notch is the same app under a new name, with a new bundle id
     kernel (same user only; nothing else of the environment is kept), to tell which account
     runs it;
   - its `sessions/` registry and the transcripts under `projects/`, for titles, tasks,
-    context and the conversation;
+    context and the conversation (and, with cloud sync on, token counts);
+  - with cloud sync on, the folder names in Claude Desktop's
+    `~/Library/Application Support/Claude/claude-code-sessions` (a listing; no file there is
+    opened), to tell which account a session Claude Desktop hosts runs as;
   - with **Also read Claude Desktop's cached usage** on (the default), the cached `/usage`
     response Claude Desktop keeps for the same organization.
-- **Runs `claude`** only for three things:
+- **Runs `claude`** only for these things:
   - to find it: `command -v claude` in your login shell, once, when it isn't in a usual place;
   - to check its version: `claude --version`;
   - to check usage: `claude -p` in stream-JSON mode, with hooks off, no session saved and an
@@ -211,7 +315,12 @@ Agent Notch is the same app under a new name, with a new bundle id
     one of its VS Code workspaces' folders, `~/.claude` only when it has none), never in a
     Claude Parallel Profiles store; an account no window runs isn't checked. Who the folder is
     signed in as is checked right before and after; an answer from a folder that changed
-    hands meanwhile is thrown away.
+    hands meanwhile is thrown away;
+  - to summarise a finished session, only with *Summarise finished sessions with Claude* on:
+    `claude -p --model haiku --max-budget-usd 0.10`, chosen and checked the same way, as the
+    session's own account.
+    This one is a model request, and uses that account's usage (see
+    [Cloud sync](#cloud-sync-optional)).
 
   The usage check runs from the first launch, before you turn on control. Set *Check usage
   every* to **Off** to never run it. Readings then come only from the live status line and
@@ -228,15 +337,23 @@ Agent Notch is the same app under a new name, with a new bundle id
     and keeps the five newest. The file as it was before the first change is kept as
     `settings.json.agentnotch.original.bak`.
   - Nothing is written to a `settings.json` that fails to parse.
-- **Its own state** lives in `~/Library/Application Support/Agent Notch/Claude/`:
-  accounts, the review queue, usage state and the hook socket.
+- **Its own state** lives in `~/Library/Application Support/Agent Notch/Claude/` (0700):
+  accounts, the review queue, usage state, the hook socket, and since when each config folder
+  has been signed in as the account it names (`cloud-folder-logins.json`: digests of who, and
+  a date; never sent; cloud sync's backfill uses it to tell whose older sessions are whose).
+  With cloud sync, also the website sign-in (`cloud-session.json`, 0600, from when you sign
+  in), the secret project keys are made with (`cloud-install-secret`, 0600, never sent:
+  created the first time sync has a session to send, so only once you are signed in with sync
+  on and never at launch, then kept) and what sync keeps between passes (`cloud-*.json`:
+  sessions and readings waiting to be sent, summaries, what was sent).
 - **Turning it off.** Switch off *Hooks in tracked accounts* in Settings › Claude Code. That
   takes the hooks and scripts out of every account and restores each status line exactly.
   Untracking or forgetting an account does the same for that account; with Claude Parallel
   Profiles, `~/.claude` keeps them while another account is tracked (the extension copies
   whichever account you last used into it), and an untracked account's sessions there are
   hidden, their permission prompts left to the terminal.
-- **Removing the app.** Turn the hooks off first, then quit. Delete the app and
+- **Removing the app.** Turn the hooks off first (and **Sign out…** under *Cloud*, if you
+  signed in), then quit. Delete the app and
   `~/Library/Application Support/Agent Notch`, then run
   `defaults delete com.rivantmedia.agentnotch`.
 
@@ -297,6 +414,11 @@ keeps its hooks and usage check. This app follows that layout:
   `--dev-console` / `AGENTNOTCH_DEV_CONSOLE`. Path switches: `AGENTNOTCH_SUPPORT_DIR`, `AGENTNOTCH_SOCKET`
   and `AGENTNOTCH_EXTRA_CONFIG_DIRS` (`:`-separated). See `Engine/Core/DevFlags.swift`. The
   installed hook scripts follow `AGENTNOTCH_SOCKET` only when `AGENTNOTCH_DEV=1` is set too.
+  `AGENTNOTCH_WEB_URL=<url>` sets the cloud sync website for one run (https, or http to this
+  Mac; ignored when sealed). Session summaries never run in a `--no-install` run.
+- **Website.** `web/` is the cloud sync website; its README covers setting up Supabase,
+  Google sign-in, the database and Vercel. The app and the site agree on
+  [`web/contract/`](web/contract/README.md): both test against its JSON fixtures.
 - **Sealed-only switches** (ignored in a live run): `AGENTNOTCH_OPEN_PANEL_ON_LAUNCH=<route>`,
   `AGENTNOTCH_PANEL_CLOSE_AFTER=<seconds>`, `AGENTNOTCH_PANEL_SELF_TEST=1`,
   `AGENTNOTCH_SEALED_SWITCH_OFF=<ring id>`, `AGENTNOTCH_SEALED_CAPTURE=<dir>` (timeline PNGs) and

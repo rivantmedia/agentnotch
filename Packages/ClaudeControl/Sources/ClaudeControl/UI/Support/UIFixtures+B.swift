@@ -389,7 +389,31 @@ enum UIFixtures {
             backups: [AccountPaths.normalize(SampleLayout.workWindow): AccountPaths.normalize(SampleLayout.workWindow) + "/settings.json.agentnotch-20260925-091500-123.bak"],
             windowNames: windowNames, home: home)
         model.claudeBinaryPath = "~/.local/bin/claude"
+        model.cloud = cloudSignedIn()
         return model
+    }
+
+    // MARK: Cloud
+
+    /// The example website the Cloud fixtures use.
+    static let cloudWebsite = "https://agentnotch.example.com"
+
+    /// Signed out with no website: the Cloud section on a first look.
+    static func cloudSignedOut() -> ClaudeCloudState {
+        ClaudeCloudState()
+    }
+
+    /// A website saved, not signed in yet.
+    static func cloudWebsiteSet() -> ClaudeCloudState {
+        ClaudeCloudState(websiteURL: cloudWebsite)
+    }
+
+    /// Signed in, sync on, summaries off; synced three minutes ago, with a
+    /// session and a few readings waiting for the next pass.
+    static func cloudSignedIn() -> ClaudeCloudState {
+        ClaudeCloudState(websiteURL: cloudWebsite, auth: .signedIn(email: "me@personal.dev"), syncEnabled: true,
+                         summariesEnabled: false, summariesAvailable: true, lastSyncAt: now.addingTimeInterval(-180),
+                         pendingSessions: 1, pendingUsage: 4, dashboardURL: URL(string: cloudWebsite + "/dashboard"))
     }
 
     /// The fixture windows' projects, as sessions there tell (UX-6).
@@ -464,6 +488,7 @@ enum UIFixtures {
         model.takeoverCleansStores = true
         model.takeoverCleanupFiles = cleanupFiles
         model.notificationsDenied = true
+        model.cloud = cloudSignedOut()
         let readings = readings()
         let workSummary = summary(work, plan: "Team", hooks: ClaudeHookStatus(vibeNotchHooksPresent: true,
                                                                                superpoweredVibeNotchHooksPresent: true))

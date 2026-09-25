@@ -3,7 +3,8 @@ import SwiftUI
 
 /// The "Claude Code" settings pane (U11): ClaudeControl's pane, given what
 /// Codenotch owns (nicknames, connected rings, its Notifications pane,
-/// opening the panel) through `Preferences`.
+/// opening the panel) through `Preferences`, and the website sign-in's
+/// browser step (`CloudWebAuthSession`).
 ///
 /// Observing `preferences` redraws the pane whenever a nickname or the
 /// connected set changes, including from the Accounts pane: both panes read
@@ -72,5 +73,11 @@ final class PreferencesClaudeSettingsHost: ClaudeSettingsHost {
 
     func openSessionsPanel() {
         ClaudePanelController.shared.open(.sessions(ringID: nil), reason: .settings)
+    }
+
+    /// "Sign in with Google" in the Cloud section: the browser step, over
+    /// this settings window.
+    func presentWebsiteSignIn(_ url: URL) async throws -> URL {
+        try await CloudWebAuthSession.present(url)
     }
 }

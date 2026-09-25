@@ -11,9 +11,10 @@
 //   2. Accounts
 //   3. Hooks and status line
 //   4. Usage
-//   5. Sessions and attention
-//   6. Notifications
-//   7. Advanced
+//   5. Cloud (the website: sync and session summaries; CloudSection.swift)
+//   6. Sessions and attention
+//   7. Notifications
+//   8. Advanced
 //
 
 import SwiftUI
@@ -25,6 +26,8 @@ struct SettingsPaneContent: View {
     var initialNewAccountStep: NewAccountForm.Step = .closed
     /// Snapshots: every account's folder list shown.
     var expandsFolders = false
+    /// Snapshots: the Cloud section's website field open while signed in.
+    var changesCloudWebsite = false
 
     /// "Not now" was answered and the user asked to turn it on after all:
     /// show the card again, files and all, rather than writing blind.
@@ -42,6 +45,8 @@ struct SettingsPaneContent: View {
                             expandsFolders: expandsFolders)
             hooksSection
             usageSection
+            CloudSection(cloud: model.cloud, readsDesktopUsage: model.readsDesktopUsageCache, now: model.now,
+                         actions: actions, changingWebsite: changesCloudWebsite)
             attentionSection
             notificationsSection
             advancedSection
@@ -228,7 +233,7 @@ struct SettingsPaneContent: View {
         }
     }
 
-    // MARK: 5. Attention
+    // MARK: 6. Attention
 
     private var attentionSection: some View {
         Section("Sessions and attention") {
@@ -282,7 +287,7 @@ struct SettingsPaneContent: View {
         }
     }
 
-    // MARK: 6. Notifications
+    // MARK: 7. Notifications
 
     private var notificationsSection: some View {
         Section("Notifications") {
@@ -307,7 +312,7 @@ struct SettingsPaneContent: View {
         }
     }
 
-    // MARK: 7. Advanced
+    // MARK: 8. Advanced
 
     private var advancedSection: some View {
         Section("Advanced") {

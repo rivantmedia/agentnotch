@@ -5,7 +5,9 @@
 //  The "Claude Code" pane of Codenotch's settings window, wired to the
 //  engine. What Codenotch owns (nicknames, which rings are shown, its
 //  Notifications pane, opening the panel) is reached through
-//  `ClaudeSettingsHost`, which the app implements over its Preferences.
+//  `ClaudeSettingsHost`, which the app implements over its Preferences, as
+//  is the browser step of signing in to the website (AuthenticationServices
+//  and the settings window are the app's).
 //
 
 import AppKit
@@ -25,6 +27,12 @@ public protocol ClaudeSettingsHost: AnyObject {
     func openNotificationsSettings()
     /// Open the sessions panel.
     func openSessionsPanel()
+    /// The browser step of signing in to the website: open `url` (Google's
+    /// sign-in through the website's Supabase project) in an
+    /// ASWebAuthenticationSession with callback scheme `agentnotch`, and
+    /// return the `agentnotch://auth-callback…` URL it came back to. Throws
+    /// `CancellationError` when the user closed it.
+    func presentWebsiteSignIn(_ url: URL) async throws -> URL
 }
 
 public struct ClaudeSettingsPane: View {
@@ -84,6 +92,7 @@ public struct ClaudeSettingsPane: View {
         model.probeInterval = ClaudeControlSettings.usageProbeIntervalMinutes
         model.readsDesktopUsageCache = ClaudeControlSettings.readsDesktopUsageCache
         model.isRefreshingUsage = usageStore.isFetching
+        model.cloud = hub.cloud
         model.autoOpen = ClaudeControlSettings.autoOpen
         model.holdOpen = ClaudeControlSettings.holdOpenWhileNeedsYou
         model.ringBadges = ClaudeControlSettings.ringBadges
@@ -192,6 +201,24 @@ public struct ClaudeSettingsPane: View {
             for account in hub.accounts where account.isTracked {
                 Task { await hub.refreshUsage(ringID: account.ringID, reason: .forced) }
             }
+        }
+        // The website. The hub does nothing when sealed; a sealed run's
+        // links (to its example website) don't open either.
+        actions.saveCloudWebsite = { address in Task { await hub.setCloudWebsite(address) } }
+        actions.cloudSignIn = {
+            Task { await hub.cloudSignIn(presentingBrowser: { url in try await host.presentWebsiteSignIn(url) }) }
+        }
+        actions.cloudSignOut = { Task { await hub.cloudSignOut() } }
+        actions.setCloudSync = { on in hub.setCloudSync(on) }
+        actions.setSessionSummaries = { on in hub.setSessionSummaries(on) }
+        actions.syncCloudNow = { Task { await hub.syncCloudNow() } }
+        actions.openCloudDashboard = {
+            guard !SealedMode.isOn, let url = hub.cloudDashboardURL else { return }
+            NSWorkspace.shared.open(url)
+        }
+        actions.openCloudPools = {
+            guard !SealedMode.isOn, let url = hub.cloudPoolsURL else { return }
+            NSWorkspace.shared.open(url)
         }
         actions.setAutoOpen = { value in setting { ClaudeControlSettings.autoOpen = value } }
         actions.setHoldOpen = { value in setting { ClaudeControlSettings.holdOpenWhileNeedsYou = value } }

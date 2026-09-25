@@ -42,6 +42,12 @@ public nonisolated enum ClaudeControlSettings {
         public static let hotKey = prefix + "hotKey"
         public static let didImportVibeNotch = prefix + "didImportVibeNotch"
         public static let claudeBinaryPath = prefix + "claudeBinaryPath"
+        /// The website sync goes to (typed by the user; there is no default).
+        public static let cloudWebsiteURL = prefix + "cloudWebsiteURL"
+        public static let cloudSyncEnabled = prefix + "cloudSyncEnabled"
+        public static let cloudSummariesEnabled = prefix + "cloudSummariesEnabled"
+        /// This Mac's id on the website, made once.
+        public static let cloudDeviceId = prefix + "cloudDeviceId"
     }
 
     private static func bool(_ key: String, default value: Bool) -> Bool {
@@ -187,6 +193,22 @@ public nonisolated enum ClaudeControlSettings {
         set { defaults.set(newValue.rawValue, forKey: Key.hotKey) }
     }
 
+    // MARK: - Website
+
+    /// The website's address, as the user entered it (https, or http to this
+    /// Mac). Nil until they do: there is no built-in website. Change it
+    /// through the hub (`setCloudWebsite`), which signs out of the old one.
+    public static var cloudWebsiteURL: String? { store.cloudWebsiteURL }
+
+    /// Upload sessions and usage readings to the website (while signed in).
+    /// Defaults to off. Change it through the hub (`setCloudSync`).
+    public static var cloudSyncEnabled: Bool { store.cloudSyncEnabled }
+
+    /// Have Claude Code write a one- or two-sentence summary of each
+    /// finished session, and send it with the session. Spends the account's
+    /// usage. Defaults to off. Change it through the hub (`setSessionSummaries`).
+    public static var cloudSummariesEnabled: Bool { store.cloudSummariesEnabled }
+
     // MARK: - Migration
 
     /// Superpowered Vibe Notch's accounts and review queue were imported once.
@@ -244,6 +266,32 @@ extension ClaudeControlSettings {
         var didImportVibeNotch: Bool {
             get { bool(Key.didImportVibeNotch, default: false) }
             nonmutating set { defaults.set(newValue, forKey: Key.didImportVibeNotch) }
+        }
+
+        var cloudWebsiteURL: String? {
+            get { defaults.string(forKey: Key.cloudWebsiteURL).flatMap { $0.isEmpty ? nil : $0 } }
+            nonmutating set {
+                if let newValue, !newValue.isEmpty { defaults.set(newValue, forKey: Key.cloudWebsiteURL) }
+                else { defaults.removeObject(forKey: Key.cloudWebsiteURL) }
+            }
+        }
+
+        var cloudSyncEnabled: Bool {
+            get { bool(Key.cloudSyncEnabled, default: false) }
+            nonmutating set { defaults.set(newValue, forKey: Key.cloudSyncEnabled) }
+        }
+
+        var cloudSummariesEnabled: Bool {
+            get { bool(Key.cloudSummariesEnabled, default: false) }
+            nonmutating set { defaults.set(newValue, forKey: Key.cloudSummariesEnabled) }
+        }
+
+        /// This Mac's id on the website: a UUID made on first use and kept.
+        var cloudDeviceId: String {
+            if let saved = defaults.string(forKey: Key.cloudDeviceId), UUID(uuidString: saved) != nil { return saved }
+            let made = UUID().uuidString
+            defaults.set(made, forKey: Key.cloudDeviceId)
+            return made
         }
     }
 }

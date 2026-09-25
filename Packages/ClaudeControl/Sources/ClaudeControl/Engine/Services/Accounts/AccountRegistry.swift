@@ -170,8 +170,9 @@ final class AccountRegistry: ObservableObject {
     /// Folders accounts.json had (their per-folder choices seed their
     /// identity's, when it has none yet).
     private var savedFolderIds: Set<String> = []
-    /// Identities have been read from the folders at least once.
-    private var identitiesRead = false
+    /// Identities have been read from the folders at least once (before,
+    /// every folder looks signed out).
+    private(set) var identitiesRead = false
     /// Folder → identity key, forgotten identities included.
     private var folderKeys: [String: String] = [:]
     /// The identity `~/.claude`'s own `accountUuid` names (see

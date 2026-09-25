@@ -72,6 +72,9 @@ public final class ClaudeControlHub: ObservableObject {
     @Published public internal(set) var retiredRingIDs: Set<String> = []
     /// Claude Parallel Profiles (its manifest or a store) was found.
     @Published public internal(set) var parallelProfilesDetected = false
+    /// The website: where sync goes, who is signed in, the switches, the
+    /// last sync (see ClaudeControlHub+Cloud.swift).
+    @Published public internal(set) var cloud = ClaudeCloudState()
     /// Run folders nobody is signed in to (no ring; Settings lists them).
     @Published var unsignedFolders: [String] = []
     /// VS Code windows' folders named after their project (see
@@ -181,6 +184,7 @@ public final class ClaudeControlHub: ObservableObject {
         guard !isSealed else { return }
         NotificationService.shared.stop()
         RegistryDirsBridge.shared.stop()
+        CloudSync.shared.stop()
         UsageStore.shared.stop()
         AccountHookManager.shared.stop()
         AttentionTracker.shared.stop()
@@ -201,6 +205,9 @@ public final class ClaudeControlHub: ObservableObject {
         AccountRegistry.shared.start()
         AccountHookManager.shared.start()
         UsageStore.shared.start()
+        // After the usage store, whose readings it records (only while the
+        // user has turned sync on).
+        CloudSync.shared.start(usage: UsageStore.shared.observations.eraseToAnyPublisher())
         ClaudeSessionMonitor.shared.start()
         AttentionTracker.shared.start()
         RegistryDirsBridge.shared.start()
@@ -219,6 +226,7 @@ public final class ClaudeControlHub: ObservableObject {
         fixtureUsage = SampleData.usage(now: now)
         let sessions = SampleSessions.all().map { Self.freshened($0, to: now) }
         Task { await SessionStore.shared.replaceAllWithFixtures(sessions) }
+        cloud = ClaudeCloudState.sealedFixture(now: now)
     }
 
     private func subscribe() {
@@ -247,6 +255,12 @@ public final class ClaudeControlHub: ObservableObject {
             SessionHostCache.shared.changes
                 .receive(on: DispatchQueue.main)
                 .sink { [weak self] in self?.recompute() }
+                .store(in: &cancellables)
+            CloudSync.shared.$state
+                .receive(on: DispatchQueue.main)
+                .sink { [weak self] state in
+                    if self?.cloud != state { self?.cloud = state }
+                }
                 .store(in: &cancellables)
         }
         AppEventBus.shared.panelRequests
@@ -300,6 +314,9 @@ public final class ClaudeControlHub: ObservableObject {
         let knownRingIDs = Set(accounts.map(\.ringID))
         let defaultRing = Self.defaultRingID(accounts: accounts)
         var snapshots: [AttentionSnapshot] = []
+        // Sessions whose account is known for certain, for the website's
+        // session ledger (a guess is never recorded).
+        var attributed: [(state: SessionState, identity: ClaudeIdentityAccount)] = []
         for state in ClaudeSessionMonitor.shared.instances {
             let folderId = state.accountId ?? AccountRegistry.defaultConfigDir(home: registry.homePath)
             let attribution = registry.attribution(forFolderId: folderId, startedAt: state.pidStartedAt)
@@ -308,6 +325,7 @@ public final class ClaudeControlHub: ObservableObject {
                 // Switched off, or forgotten (BHV-3): not on any ring, never announced.
                 if registry.isForgotten(id) { continue }
                 identity = registry.identity(id: id)
+                if let identity, !identity.isHidden { attributed.append((state, identity)) }
             } else {
                 if hiddenAccountIDs.contains(folderId) || registry.isForgotten(folderId) { continue }
                 identity = attribution.bestGuess.flatMap(registry.identity(id:)) ?? registry.identity(forFolderId: folderId)
@@ -331,6 +349,7 @@ public final class ClaudeControlHub: ObservableObject {
         if !isSealed {
             // A pid whose session ended may be reused by another app later.
             SessionHostCache.shared.retain(pids: Set(ClaudeSessionMonitor.shared.instances.compactMap(\.pid)))
+            feedCloud(attributed, liveIDs: Set(ClaudeSessionMonitor.shared.instances.map(\.sessionId)))
         }
 
         // Readings per tracked account.

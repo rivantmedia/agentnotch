@@ -113,6 +113,51 @@ struct PublicContractTests {
         let _: any ObservableObject.Type = ClaudePanelState.self
         let host: ClaudeSettingsHost = ContractSettingsHost()
         #expect(host.isRingShown("claude"))
+        // The browser step of the website sign-in is the app's.
+        let _: (any ClaudeSettingsHost) -> (URL) async throws -> URL = { host in host.presentWebsiteSignIn }
+    }
+
+    /// The website side of the hub: sign-in, the sync and summary switches,
+    /// syncing now, and the state the settings pane shows.
+    @Test func cloudSurface() {
+        let _: KeyPath<ClaudeControlHub, ClaudeCloudState> = \.cloud
+        let _: KeyPath<ClaudeControlHub, URL?> = \.cloudDashboardURL
+        let _: KeyPath<ClaudeControlHub, URL?> = \.cloudPoolsURL
+        let _: (ClaudeControlHub) -> (String?) async -> Bool = ClaudeControlHub.setCloudWebsite
+        let _: (ClaudeControlHub) -> (@escaping ClaudeCloudBrowser) async -> Bool = ClaudeControlHub.cloudSignIn(presentingBrowser:)
+        let _: (ClaudeControlHub) -> () async -> Void = ClaudeControlHub.cloudSignOut
+        let _: (ClaudeControlHub) -> (Bool) -> Void = ClaudeControlHub.setCloudSync
+        let _: (ClaudeControlHub) -> (Bool) -> Void = ClaudeControlHub.setSessionSummaries
+        let _: (ClaudeControlHub) -> () async -> Void = ClaudeControlHub.syncCloudNow
+        let browser: ClaudeCloudBrowser = { url in url }
+        _ = browser
+
+        let empty = ClaudeCloudState()
+        #expect(empty.auth == .signedOut && !empty.syncEnabled && !empty.summariesEnabled && empty.websiteURL == nil)
+        let state = ClaudeCloudState(websiteURL: "https://example.com", websiteIsOverridden: false,
+                                     auth: .signedIn(email: "me@example.com"), syncEnabled: true, summariesEnabled: false,
+                                     summariesAvailable: true, isSyncing: false, lastSyncAt: Date(), lastError: nil,
+                                     pendingSessions: 1, pendingUsage: 2, summarizedSessions: 3,
+                                     dashboardURL: URL(string: "https://example.com/dashboard"))
+        let _: (String?, Bool, ClaudeCloudState.Auth, Bool, Bool, Bool, Bool, Date?, String?, Int, Int, Int, URL?) =
+            (state.websiteURL, state.websiteIsOverridden, state.auth, state.syncEnabled, state.summariesEnabled,
+             state.summariesAvailable, state.isSyncing, state.lastSyncAt, state.lastError, state.pendingSessions,
+             state.pendingUsage, state.summarizedSessions, state.dashboardURL)
+        let _: (Bool, String?, URL?) = (state.isSignedIn, state.email, state.poolsURL)
+        #expect(state.poolsURL?.absoluteString == "https://example.com/dashboard/pools")
+        func auth(_ v: ClaudeCloudState.Auth) -> Int {
+            switch v { case .signedOut: return 0; case .signingIn: return 1; case .signedIn(email: _): return 2; case .error(let text): return text.count }
+        }
+        #expect(auth(.signedIn(email: nil)) == 2)
+
+        let _: (String, String, String, String) = (ClaudeControlSettings.Key.cloudWebsiteURL, ClaudeControlSettings.Key.cloudSyncEnabled,
+                                                   ClaudeControlSettings.Key.cloudSummariesEnabled, ClaudeControlSettings.Key.cloudDeviceId)
+        let _: (String?, Bool, Bool) = (ClaudeControlSettings.cloudWebsiteURL, ClaudeControlSettings.cloudSyncEnabled,
+                                        ClaudeControlSettings.cloudSummariesEnabled)
+        func sendable<T: Sendable>(_: T.Type) {}
+        func hashable<T: Hashable>(_: T.Type) {}
+        hashable(ClaudeCloudState.self); sendable(ClaudeCloudState.self)
+        hashable(ClaudeCloudState.Auth.self); sendable(ClaudeCloudState.Auth.self)
     }
 
     /// Every stored field of the §12 value types, by name and type, and every
@@ -258,6 +303,7 @@ private final class ContractSettingsHost: ClaudeSettingsHost {
     func setRingShown(_ on: Bool, ringID: String) {}
     func openNotificationsSettings() {}
     func openSessionsPanel() {}
+    func presentWebsiteSignIn(_ url: URL) async throws -> URL { url }
 }
 
 /// `ClaudeExternalUsageSource` as the app's Desktop-cache adapter implements it.

@@ -62,6 +62,11 @@ final class UsageStore: ObservableObject {
     /// The claude.ai organization of each signed-in account, read while
     /// Claude Desktop readings are on (the Desktop cache is keyed by it).
     @Published private(set) var organizationUuids: [String: String] = [:]
+    /// Every reading taken in, with where it came from, for the usage
+    /// history the website keeps (`UsageHistoryRecorder`). Claude Desktop's
+    /// cache and `.claude.json` are told apart here; the merged `usage`
+    /// only knows them as caches.
+    let observations = PassthroughSubject<UsageObservation, Never>()
 
     // MARK: - Tuning
 
@@ -474,6 +479,26 @@ final class UsageStore: ObservableObject {
         }
         statusLine[accountId, default: [:]][folderId] = readings
         publish(accountId)
+        // For the history: the windows this line brought (not a repeat).
+        var taken: [CloudSyncRequest.UsageWindow] = []
+        if let window = update.fiveHour, readings.fiveHour?.at == update.receivedAt, window.utilization.isFinite {
+            taken.append(.init(id: UsageRingWindows.sessionID, utilization: window.utilization, resetsAt: window.resetsAt))
+        }
+        if let window = update.sevenDay, readings.sevenDay?.at == update.receivedAt, window.utilization.isFinite {
+            taken.append(.init(id: UsageRingWindows.weeklyID, utilization: window.utilization, resetsAt: window.resetsAt))
+        }
+        if !taken.isEmpty {
+            observations.send(UsageObservation(identityId: accountId, source: .statusLine,
+                                               observedAt: update.receivedAt, windows: taken))
+        }
+    }
+
+    /// Tell the usage history about a full snapshot.
+    private func observe(_ snapshot: AccountUsage, source: CloudUsageSource) {
+        let windows = UsageObservation.windows(from: snapshot)
+        guard !windows.isEmpty else { return }
+        observations.send(UsageObservation(identityId: snapshot.accountId, source: source,
+                                           observedAt: snapshot.updatedAt, windows: windows))
     }
 
     // MARK: - Merging
@@ -631,7 +656,9 @@ final class UsageStore: ObservableObject {
             }
             if wantsOrganizations { organizations[id] = identity.organizationUuid }
             if let cached = Self.freshestCachedUsage(identity: identity, configs: configs) {
-                acceptFullSnapshot(cached.usage.accountUsage(accountId: id, source: .cache, updatedAt: cached.fetchedAt))
+                let snapshot = cached.usage.accountUsage(accountId: id, source: .cache, updatedAt: cached.fetchedAt)
+                observe(snapshot, source: .claudeJson)
+                acceptFullSnapshot(snapshot)
             }
         }
         if organizations != organizationUuids {
@@ -702,6 +729,7 @@ final class UsageStore: ObservableObject {
             let reading = await source.reading(organizationUuid: organization, now: now)
             if let reading, let snapshot = UsageRingWindows.accountUsage(from: reading, accountId: id) {
                 externalMisses.remove(id)
+                observe(snapshot, source: .desktop)
                 acceptFullSnapshot(snapshot)
             } else {
                 externalMisses.insert(id)
@@ -1054,6 +1082,8 @@ final class UsageStore: ObservableObject {
         case .usage(let parsed):
             let answer = Self.interpretProbeAnswer(parsed, accountId: accountId, now: now, cachedCopy: cachedCopy)
             if let snapshot = answer.snapshot {
+                // A seeded answer dated from `.claude.json` is that cache's reading.
+                observe(snapshot, source: snapshot.source == .probe ? .probe : .claudeJson)
                 acceptFullSnapshot(snapshot)
             }
             if let plan = parsed.subscriptionType {

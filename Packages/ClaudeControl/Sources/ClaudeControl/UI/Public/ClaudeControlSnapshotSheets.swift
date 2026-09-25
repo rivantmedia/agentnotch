@@ -200,8 +200,8 @@ import SwiftUI
 
     static func settingsSheets(width: CGFloat) -> [Sheet] {
         [
-            // Narrower wraps more lines: at 400 the pane runs past 2800.
-            Sheet(name: "settings", width: width, height: .fixed(width < 480 ? 3050 : 2800),
+            // Narrower wraps more lines: at 400 the pane runs past 3300.
+            Sheet(name: "settings", width: width, height: .fixed(width < 480 ? 3400 : 3050),
                   view: AnyView(settings(UIFixtures.settings()))),
             Sheet(name: "settings-first-run", width: width, height: .fixed(1000),
                   view: AnyView(settings(UIFixtures.settingsFirstRun(), newAccount: .naming("research")))),
@@ -215,7 +215,26 @@ import SwiftUI
             // A yes given to an earlier build: what it covers now, once.
             Sheet(name: "settings-scope-notice", width: width, height: .fixed(700),
                   view: AnyView(settings(UIFixtures.settingsScopeNotice()))),
+            // The Cloud section alone: no website yet, a website saved, and
+            // signed in with sync on and summaries off.
+            Sheet(name: "settings-cloud-signed-out", width: width, height: .fixed(width < 480 ? 250 : 230),
+                  view: AnyView(cloudSettings(UIFixtures.cloudSignedOut()))),
+            Sheet(name: "settings-cloud-website-set", width: width, height: .fixed(width < 480 ? 250 : 230),
+                  view: AnyView(cloudSettings(UIFixtures.cloudWebsiteSet()))),
+            Sheet(name: "settings-cloud-signed-in", width: width, height: .fixed(width < 480 ? 540 : 470),
+                  view: AnyView(cloudSettings(UIFixtures.cloudSignedIn()))),
         ]
+    }
+
+    /// The Cloud section in a pane of its own, styled as `settings` styles it.
+    private static func cloudSettings(_ cloud: ClaudeCloudState) -> some View {
+        Form {
+            CloudSection(cloud: cloud, readsDesktopUsage: true, now: UIFixtures.now, actions: SettingsPaneActions())
+        }
+        .formStyle(.grouped)
+        .buttonStyle(.claude(.secondary))
+        .claudeControlTheme(.codenotchDark)
+        .environment(\.colorScheme, .dark)
     }
 
     private static func settings(_ model: SettingsPaneModel, newAccount: NewAccountForm.Step = .closed,
