@@ -1,0 +1,6 @@
+{
+  "supabaseUrl": "https://abcdefghijklmnop.supabase.co",
+  "supabasePublishableKey": "sb_publishable_example0000000000000000",
+  "redirectUrl": "agentnotch://auth-callback",
+  "dashboardUrl": "https://agentnotch.example.com/dashboard"
+}

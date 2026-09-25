@@ -1,0 +1,116 @@
+{
+  "schemaVersion": 1,
+  "device": {
+    "id": "0E6F0B4C-2F7A-4E53-9D1B-6A2C7F9E1D35",
+    "name": "Studio MacBook Pro",
+    "appVersion": "1.18.0"
+  },
+  "accounts": [
+    {
+      "key": "8ca65b0df91fc776aded7f419f011fc1e99e2fd120e893692cfaf83f0fa994c0",
+      "email": "me@example.com",
+      "organizationName": null,
+      "plan": "Max 20x",
+      "label": "Personal"
+    },
+    {
+      "key": "d8485d82cdbceb2582311953e97b1666022b76dcbb98ef283fece56b1b5b8874",
+      "email": "me@company.com",
+      "organizationName": "Company",
+      "plan": "Team",
+      "label": null
+    }
+  ],
+  "sessions": [
+    {
+      "accountKey": "8ca65b0df91fc776aded7f419f011fc1e99e2fd120e893692cfaf83f0fa994c0",
+      "sessionId": "a1b2c3d4-e5f6-4789-8abc-def012345678",
+      "project": {
+        "key": "b89e2468be8097b1ca7ece846833a760d91f246a000104f639a0a2aa252802b7",
+        "name": "agentnotch"
+      },
+      "title": "Keep sessions working while background agents run",
+      "source": "vscode",
+      "models": [
+        "claude-opus-4-5-20251101",
+        "claude-haiku-4-5-20251001"
+      ],
+      "startedAt": "2026-09-25T08:02:11.482Z",
+      "lastActivityAt": "2026-09-25T09:47:03Z",
+      "endedAt": "2026-09-25T09:48:00Z",
+      "messageCount": 212,
+      "tokens": {
+        "input": 18234,
+        "output": 96512,
+        "cacheCreation": 402118,
+        "cacheRead": 12873120
+      },
+      "costUsd": 14.82,
+      "summary": {
+        "text": "Changed the notch so a Claude Code session stays 'working' while workflows it started are still running, with tests.",
+        "model": "claude-haiku-4-5-20251001",
+        "generatedAt": "2026-09-25T10:05:00Z"
+      }
+    },
+    {
+      "accountKey": "d8485d82cdbceb2582311953e97b1666022b76dcbb98ef283fece56b1b5b8874",
+      "sessionId": "0f9e8d7c-6b5a-4493-8271-605f4e3d2c1b",
+      "project": {
+        "key": "c11c0b20e86821c5841e35b988c35261bdfd7b5022fa463a05e07ef30e9b14e0",
+        "name": "billing-service"
+      },
+      "title": null,
+      "source": "cli",
+      "models": [
+        "claude-sonnet-4-5-20250929"
+      ],
+      "startedAt": "2026-09-25T11:00:00Z",
+      "lastActivityAt": "2026-09-25T11:20:42Z",
+      "endedAt": null,
+      "messageCount": 37,
+      "tokens": {
+        "input": 5120,
+        "output": 8840,
+        "cacheCreation": 64000,
+        "cacheRead": 910000
+      },
+      "costUsd": null
+    }
+  ],
+  "usage": [
+    {
+      "accountKey": "8ca65b0df91fc776aded7f419f011fc1e99e2fd120e893692cfaf83f0fa994c0",
+      "source": "desktop",
+      "observedAt": "2026-09-25T09:50:00Z",
+      "windows": [
+        {
+          "id": "session",
+          "utilization": 42.0,
+          "resetsAt": "2026-09-25T13:00:00Z"
+        },
+        {
+          "id": "weekly_all",
+          "utilization": 61.5,
+          "resetsAt": "2026-09-29T08:00:00Z"
+        },
+        {
+          "id": "weekly_opus",
+          "utilization": 12.0,
+          "resetsAt": null
+        }
+      ]
+    },
+    {
+      "accountKey": "d8485d82cdbceb2582311953e97b1666022b76dcbb98ef283fece56b1b5b8874",
+      "source": "probe",
+      "observedAt": "2026-09-25T11:15:00Z",
+      "windows": [
+        {
+          "id": "session",
+          "utilization": 8.0,
+          "resetsAt": "2026-09-25T15:00:00Z"
+        }
+      ]
+    }
+  ]
+}

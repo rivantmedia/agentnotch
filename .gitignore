@@ -11,3 +11,6 @@ xcuserdata/
 .forgeguard/
 # SwiftPM (Package.swift, Scripts/spm-*.sh)
 .build/
+
+# Local secrets (never commit)
+credentials.txt

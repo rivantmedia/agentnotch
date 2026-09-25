@@ -1,0 +1,240 @@
+// Agent Notch website database (Supabase Postgres).
+//
+// Every row a user's Mac app sends is owned by that user (`userId`). A Claude account is
+// identified by `accountKey`, a SHA-256 digest computed on the Mac (see contract/README.md), so
+// the same account has the same key for every user: pooling joins on it. Who may read what is
+// decided in one place, src/server/services/access.ts.
+//
+// Migrations: prisma/migrations. They enable row-level security on every table they create,
+// because Supabase's Data API would otherwise expose them to anyone holding the publishable key.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider  = "postgresql"
+  // Pooled connection (Supavisor, port 6543, ?pgbouncer=true) for the running site.
+  url       = env("DATABASE_URL")
+  // Direct connection (port 5432) for migrations.
+  directUrl = env("DIRECT_URL")
+}
+
+/// A signed-in person. `id` is the Supabase Auth user id (the JWT `sub`).
+model User {
+  id        String   @id
+  email     String
+  name      String?
+  createdAt DateTime @default(now())
+
+  devices      Device[]
+  accounts     UserAccount[]
+  projects     Project[]
+  sessions     Session[]
+  usage        UsageReading[]
+  usageWindows UsageWindow[]
+  poolsCreated Pool[]
+  memberships  PoolMember[]
+  joinFailures PoolJoinFailure[]
+}
+
+/// A Mac running the app, as one user knows it. `id` is the UUID the app generates once per Mac
+/// (stored lowercased). Keyed per user: two people syncing from the same Mac each have their own
+/// row, and one person's sync can never change another's.
+model Device {
+  userId     String
+  id         String
+  name       String
+  appVersion String
+  lastSeenAt DateTime
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessions Session[]
+
+  @@id([userId, id])
+}
+
+/// A Claude account, known only by its key (64 lowercase hex). Shared by every user who syncs it.
+model ClaudeAccount {
+  key       String   @id
+  createdAt DateTime @default(now())
+
+  users        UserAccount[]
+  projects     Project[]
+  sessions     Session[]
+  usage        UsageReading[]
+  usageWindows UsageWindow[]
+  pools        Pool[]
+}
+
+/// What THIS user's app last reported about a Claude account. `label` is private to the user.
+model UserAccount {
+  userId           String
+  accountKey       String
+  email            String?
+  organizationName String?
+  plan             String?
+  label            String?
+  firstSeenAt      DateTime @default(now())
+  lastSeenAt       DateTime @default(now())
+
+  user    User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account ClaudeAccount @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+
+  @@id([userId, accountKey])
+  @@index([accountKey])
+}
+
+/// A working directory, known by its key and last path component. The key is an HMAC the Mac
+/// computes with a secret it never sends (contract/README.md); it is never shown to anyone. The
+/// secret is per install, so the same folder on two Macs is two rows.
+model Project {
+  id         String @id @default(cuid())
+  userId     String
+  accountKey String
+  key        String
+  name       String
+
+  user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account  ClaudeAccount @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+  sessions Session[]
+
+  @@unique([userId, accountKey, key])
+  @@index([accountKey])
+}
+
+/// One Claude Code (or Claude Desktop) session under one Claude account. Totals are absolute and
+/// replaced on every sync. A session resumed under another account is another row (the Mac sends
+/// it once per account, each with that account's share).
+model Session {
+  id                  String    @id @default(cuid())
+  userId              String
+  accountKey          String
+  projectId           String
+  sessionId           String
+  title               String?
+  source              String
+  models              String[]
+  startedAt           DateTime
+  lastActivityAt      DateTime
+  endedAt             DateTime?
+  messageCount        Int
+  inputTokens         BigInt
+  outputTokens        BigInt
+  cacheCreationTokens BigInt
+  cacheReadTokens     BigInt
+  costUsd             Decimal?  @db.Decimal(14, 6)
+  summaryText         String?
+  summaryModel        String?
+  summaryAt           DateTime?
+  deviceId            String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  user    User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account ClaudeAccount @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+  project Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  // Always the owner's own device row. Devices are only ever deleted with their user, whose
+  // sessions go in the same statement, so NoAction never blocks anything.
+  device  Device?       @relation(fields: [userId, deviceId], references: [userId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([userId, accountKey, sessionId])
+  @@index([accountKey, startedAt])
+  @@index([userId, startedAt])
+  // The per-user quota on new sessions a day counts these.
+  @@index([userId, createdAt])
+  @@index([projectId])
+}
+
+/// One usage-limit window as read at `observedAt`. Deduplicated on the unique key below.
+model UsageReading {
+  id          BigInt    @id @default(autoincrement())
+  userId      String
+  accountKey  String
+  source      String
+  windowId    String
+  utilization Float
+  resetsAt    DateTime?
+  observedAt  DateTime
+  /// When the website stored it (observedAt is the Mac's word, and can be backdated).
+  createdAt   DateTime  @default(now())
+
+  user    User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account ClaudeAccount @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+
+  @@unique([userId, accountKey, source, windowId, observedAt])
+  @@index([accountKey, observedAt])
+  // The per-user quota on new readings a day counts these.
+  @@index([userId, createdAt])
+}
+
+/// Every usage window id a user has stored readings of on an account. Kept after the readings
+/// are pruned: the per-account cap on window ids counts these, so made-up ids can't pile up.
+model UsageWindow {
+  userId      String
+  accountKey  String
+  windowId    String
+  firstSeenAt DateTime @default(now())
+
+  user    User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account ClaudeAccount @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+
+  @@id([userId, accountKey, windowId])
+}
+
+/// People sharing one Claude account, joined by a share code. One pool per (account, creator).
+/// The code expires, is revoked by hand or by removing a member, and is replaced by a new one for
+/// the same pool; members stay through all of that.
+model Pool {
+  id            String    @id @default(cuid())
+  accountKey    String
+  createdById   String
+  /// The current code: 12 characters of Crockford base32 (no I, L, O or U).
+  code          String    @unique
+  /// When the current code stops working (7 days after it was issued).
+  codeExpiresAt DateTime
+  /// When the current code was revoked; null while it can be redeemed.
+  revokedAt     DateTime?
+  createdAt     DateTime  @default(now())
+
+  account   ClaudeAccount @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+  createdBy User          @relation(fields: [createdById], references: [id], onDelete: Cascade)
+  members   PoolMember[]
+
+  @@unique([accountKey, createdById])
+  @@index([createdById])
+}
+
+/// Membership of a pool. The creator is a member too.
+model PoolMember {
+  poolId   String
+  userId   String
+  joinedAt DateTime @default(now())
+
+  pool Pool @relation(fields: [poolId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([poolId, userId])
+  @@index([userId])
+}
+
+/// A failed attempt to redeem a share code. Kept for an hour: that many failures in a row lock
+/// the user out of joining for a while, so codes can't be guessed.
+model PoolJoinFailure {
+  id     BigInt   @id @default(autoincrement())
+  userId String
+  at     DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, at])
+}
+
+/// A token bucket for a per-user rate limit (key e.g. `sync:<userId>`), shared by every server
+/// instance. `tokens` is what was left at `updatedAt`; it refills continuously from there.
+model RateLimit {
+  key       String   @id
+  tokens    Float
+  updatedAt DateTime
+}

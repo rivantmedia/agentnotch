@@ -1,0 +1,28 @@
+{
+  "_comment": "How the keys in sync-request.json were derived; both sides test against this. accountKey = sha256hex(lower('<accountUuid>/<organizationUuid>')) or sha256hex(lower(accountUuid)) when the organization is unknown; project key = hmac_sha256hex(installSecret, '<accountKey>:<path>').",
+  "accounts": [
+    {
+      "accountUuid": "3f1f0a3e-8a7b-4c1d-9e2f-5a6b7c8d9e0f",
+      "organizationUuid": null,
+      "key": "8ca65b0df91fc776aded7f419f011fc1e99e2fd120e893692cfaf83f0fa994c0"
+    },
+    {
+      "accountUuid": "9d2c7b1a-0000-4e5f-8a9b-1c2d3e4f5a6b",
+      "organizationUuid": "7a6b5c4d-3e2f-4a1b-9c8d-0e1f2a3b4c5d",
+      "key": "d8485d82cdbceb2582311953e97b1666022b76dcbb98ef283fece56b1b5b8874"
+    }
+  ],
+  "projects": [
+    {
+      "accountKey": "8ca65b0df91fc776aded7f419f011fc1e99e2fd120e893692cfaf83f0fa994c0",
+      "path": "/Users/me/code/agentnotch",
+      "key": "b89e2468be8097b1ca7ece846833a760d91f246a000104f639a0a2aa252802b7"
+    },
+    {
+      "accountKey": "d8485d82cdbceb2582311953e97b1666022b76dcbb98ef283fece56b1b5b8874",
+      "path": "/Users/me/work/billing-service",
+      "key": "c11c0b20e86821c5841e35b988c35261bdfd7b5022fa463a05e07ef30e9b14e0"
+    }
+  ],
+  "installSecretHex": "5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f5f"
+}

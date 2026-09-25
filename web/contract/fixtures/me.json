@@ -1,0 +1,8 @@
+{
+  "user": {
+    "id": "5b0c1d2e-3f40-4a5b-8c6d-7e8f9a0b1c2d",
+    "email": "me@example.com",
+    "name": "Me Example"
+  },
+  "dashboardUrl": "https://agentnotch.example.com/dashboard"
+}
