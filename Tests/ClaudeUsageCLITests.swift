@@ -215,7 +215,7 @@ final class ClaudeUsageCLITests: XCTestCase {
         let second = try ClaudeUsageCLI.scratchDirectory(applicationSupport: support)
 
         XCTAssertEqual(first, second)
-        XCTAssertEqual(first.path, support.appendingPathComponent("Codenotch/usage-scratch").path)
+        XCTAssertEqual(first.path, support.appendingPathComponent("\(Fork.applicationSupportFolder)/usage-scratch").path) // Fork: own folder
         var isDirectory: ObjCBool = false
         XCTAssertTrue(FileManager.default.fileExists(atPath: first.path, isDirectory: &isDirectory))
         XCTAssertTrue(isDirectory.boolValue)

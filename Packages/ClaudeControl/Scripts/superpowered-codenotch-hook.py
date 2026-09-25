@@ -1,0 +1,421 @@
+#!/usr/bin/env python3
+"""
+Superpowered Codenotch hook (protocol v2)
+Derived from Superpowered Vibe Notch's superpowered-notch-hook.py (Apache-2.0).
+
+Installed into every Claude Code account's <configDir>/hooks/ and registered
+for the session lifecycle events in that account's settings.json.
+
+- Forwards a compact JSON summary of each hook event to Superpowered
+  Codenotch.app over a Unix socket (fire and forget; the script half-closes
+  its side so the app can read until EOF).
+- For PermissionRequest it waits for the user's decision from the app and
+  prints Claude Code's PermissionRequest hook output.
+
+The app writes its socket path into SOCKET_PATH below when it installs this
+file (normally ~/Library/Application Support/Superpowered Codenotch/Claude/
+hook.sock), so it never collides with Superpowered Vibe Notch's or upstream
+Vibe Notch's.
+SPCN_SOCKET overrides the path, only with SPCN_DEV=1 too (development and
+tests): a leftover export in a shell never redirects a real session.
+
+The script must never break Claude Code: it has no dependencies, runs on
+Python 3.9 (with -S: nothing outside the standard library), never raises and
+always exits 0. The installed command only runs it when the file exists, so
+a moved config folder can't turn into Claude Code's "exit 2 = block". When
+the app is not running (no socket file) it exits immediately without doing
+anything. It runs on every tool call, so it imports as little as it can.
+"""
+import json
+import os
+import socket
+import stat
+import sys
+
+SOCKET_PATH = (os.environ.get("SPCN_SOCKET") if os.environ.get("SPCN_DEV") == "1" else None) or "__SPCN_SOCKET_PATH__"
+
+CONNECT_TIMEOUT_SECONDS = 1.0
+# Matches the 86400 s timeout the installer registers for PermissionRequest.
+# The terminal dialog runs in parallel, so a long wait never blocks the user.
+DECISION_TIMEOUT_SECONDS = 24 * 60 * 60
+MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+
+MAX_TOOL_INPUT_STRING = 20000
+MAX_TOOL_ERROR = 500
+MAX_LAST_ASSISTANT_MESSAGE = 1500
+MAX_PROMPT = 300
+MAX_TEXT = 2000
+
+DEFAULT_DENY_MESSAGE = "Denied by user via Superpowered Codenotch"
+
+# The whole message the app reads is at most this big: a tool input whose
+# strings are already clamped can still be huge (an array of hundreds of
+# edits), and the app drops anything over 8 MiB.
+MAX_MESSAGE_BYTES = 1024 * 1024
+# Items kept per list when a tool input has to be cut down to fit.
+MAX_LIST_ITEMS = 50
+# Background task types forwarded at Stop.
+MAX_BACKGROUND_TYPES = 64
+
+
+def truncate(value, limit):
+    """Clamp a string to `limit` characters; pass anything else through."""
+    if isinstance(value, str) and len(value) > limit:
+        return value[:limit]
+    return value
+
+
+def text_or_none(value, limit=MAX_TEXT):
+    """A non-empty string clamped to `limit`, else None."""
+    if isinstance(value, str) and value:
+        return truncate(value, limit)
+    return None
+
+
+def truncate_deep(value, limit=MAX_TOOL_INPUT_STRING, max_items=None):
+    """Clamp every string nested inside tool_input so one huge Write or Edit
+    can't turn a hook event into a multi-megabyte socket message; with
+    `max_items`, lists are cut to that many items too."""
+    if isinstance(value, str):
+        return truncate(value, limit)
+    if isinstance(value, dict):
+        return {k: truncate_deep(v, limit, max_items) for k, v in value.items()}
+    if isinstance(value, list):
+        items = value if max_items is None else value[:max_items]
+        return [truncate_deep(v, limit, max_items) for v in items]
+    return value
+
+
+def claude_pid():
+    """PID of the Claude Code process. CLAUDE_PID is set for hooks since
+    Claude Code 2.1.214; older versions exec the hook from a shell whose
+    parent is Claude itself."""
+    raw = os.environ.get("CLAUDE_PID")
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    return os.getppid()
+
+
+def attended_flag():
+    """CLAUDE_CODE_SESSION_ATTENDED: "0" marks background, daemon and other
+    unattended sessions, which the app ignores."""
+    raw = os.environ.get("CLAUDE_CODE_SESSION_ATTENDED")
+    if raw == "1":
+        return True
+    if raw == "0":
+        return False
+    return None
+
+
+def status_for(event, data):
+    """Coarse session status, same vocabulary as upstream Vibe Notch."""
+    if event == "PreToolUse":
+        return "running_tool"
+    if event == "PermissionRequest":
+        return "waiting_for_approval"
+    if event in ("Stop", "StopFailure", "SessionStart"):
+        return "waiting_for_input"
+    if event == "SessionEnd":
+        return "ended"
+    if event == "PreCompact":
+        return "compacting"
+    if event == "Notification":
+        if data.get("notification_type") == "idle_prompt":
+            return "waiting_for_input"
+        return "notification"
+    if event in (
+        "UserPromptSubmit",
+        "PostToolUse",
+        "PostToolUseFailure",
+        "PermissionDenied",
+        "SubagentStart",
+        "SubagentStop",
+        "PostCompact",
+        "TaskCreated",
+        "TaskCompleted",
+    ):
+        return "processing"
+    return "unknown"
+
+
+def build_message(data):
+    event = data.get("hook_event_name") or ""
+    pid = claude_pid()
+
+    message = {
+        "event": event,
+        "session_id": data.get("session_id") or "unknown",
+        "cwd": data.get("cwd") or "",
+        "transcript_path": data.get("transcript_path"),
+        "pid": pid,
+        "status": status_for(event, data),
+        # Raw value on purpose: Claude Code hashes this exact string to name
+        # the account's keychain item, so the app must see it verbatim.
+        "config_dir_env": os.environ.get("CLAUDE_CONFIG_DIR"),
+        "attended": attended_flag(),
+        "entrypoint": os.environ.get("CLAUDE_CODE_ENTRYPOINT"),
+        "agent_id": data.get("agent_id"),
+        "agent_type": data.get("agent_type"),
+        "permission_mode": data.get("permission_mode"),
+    }
+
+    if event in (
+        "PreToolUse",
+        "PostToolUse",
+        "PostToolUseFailure",
+        "PermissionRequest",
+        "PermissionDenied",
+    ):
+        message["tool"] = data.get("tool_name")
+        tool_input = data.get("tool_input")
+        message["tool_input"] = truncate_deep(tool_input) if isinstance(tool_input, dict) else {}
+        # PermissionRequest has no tool_use_id; the app correlates it with
+        # the preceding PreToolUse.
+        if data.get("tool_use_id"):
+            message["tool_use_id"] = data.get("tool_use_id")
+
+    if event == "PostToolUse" and data.get("tool_name") == "TaskCreate":
+        response = data.get("tool_response")
+        task = response.get("task") if isinstance(response, dict) else None
+        if isinstance(task, dict):
+            if task.get("id") is not None:
+                message["task_id"] = str(task.get("id"))
+            message["task_subject"] = text_or_none(task.get("subject"))
+
+    if event == "PostToolUseFailure":
+        error = data.get("error")
+        if error is not None and not isinstance(error, str):
+            error = json.dumps(error)
+        message["tool_error"] = text_or_none(error, MAX_TOOL_ERROR)
+        if isinstance(data.get("is_interrupt"), bool):
+            message["is_interrupt"] = data.get("is_interrupt")
+
+    elif event == "PermissionRequest":
+        suggestions = data.get("permission_suggestions")
+        if isinstance(suggestions, list):
+            message["permission_suggestions"] = suggestions
+
+    elif event == "PermissionDenied":
+        message["denial_reason"] = text_or_none(data.get("reason") or data.get("message"))
+
+    elif event == "Notification":
+        message["notification_type"] = data.get("notification_type")
+        message["message"] = text_or_none(data.get("message"))
+        message["title"] = text_or_none(data.get("title"))
+
+    elif event in ("Stop", "StopFailure", "SubagentStop"):
+        message["last_assistant_message"] = text_or_none(
+            data.get("last_assistant_message"), MAX_LAST_ASSISTANT_MESSAGE
+        )
+        if event == "Stop":
+            background = data.get("background_tasks")
+            message["background_task_count"] = len(background) if isinstance(background, list) else 0
+            if isinstance(background, list):
+                # "subagent", "workflow", "teammate", "cloud session" wake
+                # Claude again when they finish; "shell" and "monitor" don't.
+                message["background_task_types"] = [
+                    task.get("type")
+                    for task in background[:MAX_BACKGROUND_TYPES]
+                    if isinstance(task, dict) and isinstance(task.get("type"), str)
+                ]
+            crons = data.get("session_crons")
+            if isinstance(crons, list):
+                message["session_cron_count"] = len(crons)
+            # True when this Stop ends a continuation a blocking Stop hook
+            # (/goal, a plugin loop) forced: the turn had stopped before.
+            if isinstance(data.get("stop_hook_active"), bool):
+                message["stop_hook_active"] = data.get("stop_hook_active")
+        elif event == "StopFailure":
+            error = data.get("error")
+            message["stop_error"] = error if isinstance(error, str) else "unknown"
+            details = data.get("error_details")
+            if details is not None and not isinstance(details, str):
+                details = json.dumps(details)
+            message["stop_error_details"] = text_or_none(details, MAX_TOOL_ERROR)
+        else:
+            message["agent_transcript_path"] = data.get("agent_transcript_path")
+
+    elif event in ("TaskCreated", "TaskCompleted"):
+        if data.get("task_id") is not None:
+            message["task_id"] = str(data.get("task_id"))
+        message["task_subject"] = text_or_none(data.get("task_subject"))
+
+    elif event == "SessionStart":
+        message["source"] = data.get("source")
+        model = data.get("model")
+        message["model"] = model if isinstance(model, str) else None
+        message["session_title"] = text_or_none(data.get("session_title"), 200)
+
+    elif event == "UserPromptSubmit":
+        message["source"] = data.get("source")
+        message["session_title"] = text_or_none(data.get("session_title"), 200)
+        message["prompt"] = text_or_none(data.get("prompt"), MAX_PROMPT)
+
+    elif event == "SessionEnd":
+        message["reason"] = data.get("reason")
+
+    elif event in ("PreCompact", "PostCompact"):
+        message["trigger"] = data.get("trigger")
+
+    return message
+
+
+def encode(message):
+    """The message as JSON bytes, at most MAX_MESSAGE_BYTES: a tool input
+    that is still too big is cut down (the app only shows it; a permission
+    decision is merged onto the original input, never onto this copy)."""
+    payload = json.dumps(message).encode("utf-8")
+    if len(payload) <= MAX_MESSAGE_BYTES or not message.get("tool_input"):
+        return payload
+    smaller = dict(message)
+    smaller["tool_input"] = truncate_deep(message["tool_input"], 500, MAX_LIST_ITEMS)
+    payload = json.dumps(smaller).encode("utf-8")
+    if len(payload) <= MAX_MESSAGE_BYTES:
+        return payload
+    smaller["tool_input"] = {}
+    return json.dumps(smaller).encode("utf-8")
+
+
+def is_own_socket(path):
+    """The socket at `path` is this user's. The /tmp fallback folder is
+    shared: a socket someone else put there must never read our events or
+    answer a permission request."""
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return False
+    return info.st_uid == os.getuid() and stat.S_ISSOCK(info.st_mode)
+
+
+def connect():
+    if not is_own_socket(SOCKET_PATH):
+        raise OSError("no socket of this user at " + SOCKET_PATH)
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(CONNECT_TIMEOUT_SECONDS)
+    sock.connect(SOCKET_PATH)
+    return sock
+
+
+def send_message(message):
+    """Fire and forget: write, half-close so the app sees EOF, close."""
+    sock = None
+    try:
+        sock = connect()
+        sock.sendall(encode(message))
+        try:
+            sock.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+    except Exception:
+        pass
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+
+def request_decision(message):
+    """Send a PermissionRequest and block until the app answers or closes the
+    connection. Returns the decoded response dict, or None."""
+    sock = None
+    try:
+        sock = connect()
+        sock.sendall(encode(message))
+        sock.shutdown(socket.SHUT_WR)
+        sock.settimeout(DECISION_TIMEOUT_SECONDS)
+        chunks = []
+        received = 0
+        while received < MAX_RESPONSE_BYTES:
+            chunk = sock.recv(65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            received += len(chunk)
+        if not chunks:
+            return None
+        response = json.loads(b"".join(chunks).decode("utf-8"))
+        return response if isinstance(response, dict) else None
+    except Exception:
+        return None
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+
+def permission_output(response, original_input):
+    """Translate the app's response into Claude Code's PermissionRequest hook
+    output, or None to fall back to Claude Code's own prompt.
+
+    `updated_input` from the app holds only the fields to change (e.g. the
+    AskUserQuestion `answers`); it is merged onto the ORIGINAL tool_input
+    received from Claude Code, never onto the truncated copy the app saw.
+    An empty `updated_input` echoes the original input unchanged, which is
+    what tools needing user interaction (ExitPlanMode) require.
+    """
+    decision = response.get("decision")
+    if decision == "allow":
+        result = {"behavior": "allow"}
+        updates = response.get("updated_input")
+        if isinstance(updates, dict):
+            merged = dict(original_input) if isinstance(original_input, dict) else {}
+            merged.update(updates)
+            result["updatedInput"] = merged
+        permissions = response.get("updated_permissions")
+        if isinstance(permissions, list) and permissions:
+            result["updatedPermissions"] = permissions
+    elif decision == "deny":
+        reason = response.get("reason")
+        result = {
+            "behavior": "deny",
+            "message": reason if isinstance(reason, str) and reason else DEFAULT_DENY_MESSAGE,
+        }
+        if isinstance(response.get("interrupt"), bool):
+            result["interrupt"] = response.get("interrupt")
+    else:
+        return None
+    return {"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": result}}
+
+
+def main():
+    try:
+        raw = sys.stdin.buffer.read()
+    except Exception:
+        return
+    # App not running: nothing to talk to.
+    if not os.path.exists(SOCKET_PATH):
+        return
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except Exception:
+        return
+    if not isinstance(data, dict):
+        return
+
+    message = build_message(data)
+
+    if message["event"] == "PermissionRequest":
+        response = request_decision(message)
+        if response:
+            output = permission_output(response, data.get("tool_input"))
+            if output is not None:
+                sys.stdout.write(json.dumps(output))
+                sys.stdout.flush()
+        return
+
+    send_message(message)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except BaseException:
+        pass
+    sys.exit(0)

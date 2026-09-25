@@ -485,7 +485,7 @@ final class NotchWindowController {
             moneyWindowCount: snapshot.windows.filter { $0.money != nil }.count,
             usageDetailGroupCount: snapshot.usageDetail?.visibleGroups.count ?? 0,
             sessionCount: snapshot.localModel == nil ? (model.activity(for: snapshot.id)?.sessions.count ?? 0) : 0,
-            sessionCap: model.sessionCap,
+            sessionCap: model.sessionCap(for: snapshot), // Fork: GUX-1
             statusMessage: snapshot.statusMessage,
             blockMessage: snapshot.block?.summary(now: model.now),
             hasTokenUsage: snapshot.tokenUsage != nil,
@@ -530,7 +530,7 @@ final class NotchWindowController {
         if model.isExpanded, let event = model.activeResetAlert, let card = resetCardRect(event: event) {
             rects.append(card)
         }
-        if model.isExpanded, let index = model.hoveredIndex, let card = tooltipRect(index: index) {
+        if model.isExpanded, !model.suppressesTooltips, let index = model.hoveredIndex, let card = tooltipRect(index: index) { // Fork: U10a
             rects.append(card)
         }
         hostingView?.interactiveRects = rects
@@ -1194,7 +1194,7 @@ final class NotchWindowController {
         }
         pendingFocus = nil
         // The same exact-tab jump a session row gives, not just the app.
-        Task { _ = await SessionFocus.focus(pid: pending.pid) }
+        if let focus = model.onFocusSession { focus(pending.pid) } else { Task { _ = await SessionFocus.focus(pid: pending.pid) } } // Fork: U10b
         return true
     }
 

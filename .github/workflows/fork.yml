@@ -1,0 +1,104 @@
+name: Fork
+
+# Superpowered Codenotch's own checks. Upstream's workflows (ci.yml,
+# package.yml, windows*.yml) only run in vinzdg/codenotch; this one runs
+# everywhere else. It answers three questions:
+# - do upstream's tests still pass with the fork's seams in (make test-ci, which
+#   also runs Tests/ClaudeBridgeTests.swift), and do the pins still resolve;
+# - do ClaudeControl's own suites pass (Swift Testing, Scripts/spm-test.sh);
+# - is the fork still a fork: its edits to upstream files are exactly the
+#   seams, the engine imports no SwiftUI, and no Claude usage path can read a
+#   token (Scripts/check-seams.sh, Scripts/verify-token-free.sh).
+# Plus the Command Line Tools build path, which is how the fork is built day
+# to day (Scripts/spm-build-app.sh).
+
+on:
+  push:
+    branches: [superpowered, main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    if: github.repository != 'vinzdg/codenotch'
+    name: Tests and seams
+    # macOS 26, as upstream's CI: an older image's Xcode cannot read the
+    # project (objectVersion 77) or build the Liquid Glass APIs.
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The seam checks diff against the merge-base with upstream.
+          fetch-depth: 0
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/vinzdg/codenotch.git
+          git fetch --no-tags upstream main
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          xcrun --show-sdk-version
+          swift --version
+
+      - name: Seams and fork boundary
+        run: Scripts/check-seams.sh
+
+      # One minimum macOS everywhere a build reads it, so the SwiftPM and the
+      # Xcode builds of a commit cannot disagree about where it runs.
+      - name: Deployment targets agree
+        run: |
+          set -euo pipefail
+          # Package.swift, the package's, project.yml's deploymentTarget and
+          # LSMinimumSystemVersion, and Sources/Info.plist: five values, one answer.
+          values=$(
+            sed -n 's/.*platforms: \[\.macOS("\([0-9.]*\)")\].*/\1/p' Package.swift Packages/ClaudeControl/Package.swift
+            sed -n 's/^ *macOS: "\([0-9.]*\)".*/\1/p' project.yml
+            sed -n 's/^ *LSMinimumSystemVersion: "\([0-9.]*\)".*/\1/p' project.yml
+            plutil -extract LSMinimumSystemVersion raw Sources/Info.plist
+          )
+          echo "minimum macOS:" $values
+          [[ $(wc -l <<< "$values") -eq 5 ]] || { echo "expected 5 deployment targets"; exit 1; }
+          [[ $(sort -u <<< "$values" | wc -l) -eq 1 ]] || { echo "deployment targets disagree"; exit 1; }
+
+      - name: No token paths
+        run: Scripts/verify-token-free.sh
+
+      # The package also builds alone (swift test, the snapshots tool) from its
+      # own Package.resolved: its pins must be the app's (CS-14).
+      - name: Package pins agree
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          def pins(path):
+              return {p["identity"]: p["state"].get("revision") for p in json.load(open(path))["pins"]}
+          app, package = pins("Package.resolved"), pins("Packages/ClaudeControl/Package.resolved")
+          drift = {k: (app.get(k), v) for k, v in package.items() if app.get(k) != v}
+          if drift:
+              sys.exit(f"Packages/ClaudeControl/Package.resolved disagrees with Package.resolved: {drift}")
+          print("package pins agree:", sorted(package))
+          PY
+
+      - name: ClaudeControl tests (Swift Testing)
+        run: Scripts/spm-test.sh
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      # Unsigned, as upstream's CI: no identity exists on a runner.
+      - name: Upstream unit tests and ClaudeBridgeTests
+        run: make test-ci
+
+      - name: Verify SwiftPM resolution
+        run: make verify-deps
+
+      - name: Command Line Tools app build
+        run: Scripts/spm-build-app.sh

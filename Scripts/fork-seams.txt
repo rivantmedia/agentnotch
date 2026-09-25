@@ -1,0 +1,158 @@
+# Superpowered Codenotch's edits to upstream Codenotch files (design §3).
+#
+# Scripts/check-seams.sh reads this file. After a merge from upstream, any
+# SEAM line it reports missing has to be re-applied by hand, in the same
+# place (the design names the anchor for each), with its `// Fork:` tag.
+#
+# Format, tab-separated:
+#   SEAM   <id>   <file>   <text that must appear in the file, verbatim>   [<n>]
+#                          with <n>: on at least n lines (one per call path)
+#   FORBID <id>   <file>   <text that must not appear on a line of the file
+#                          that isn't a comment (#, //, @# after indentation)>
+#   ALLOW  <path or glob>          a path under Sources/ or Tests/ that may
+#                                  differ from upstream (everything else may not)
+#
+# Globs: a trailing /** matches everything below a folder.
+
+# --- U1-U5: App/AppDelegate.swift -------------------------------------------
+SEAM	U1	Sources/App/AppDelegate.swift	private let claudeProfiles: [ClaudeProfile] = [] // Fork: U1
+SEAM	U2	Sources/App/AppDelegate.swift	Fork.prepareDefaults() // Fork: U2
+SEAM	U3	Sources/App/AppDelegate.swift	let allProviders: [UsageProvider] = ClaudeBridge.shared.launchUsageProviders() + claudeProviders // Fork: U3
+SEAM	U4	Sources/App/AppDelegate.swift	ClaudeBridge.shared.attach(fleet: fleet, store: store, preferences: preferences) // Fork: U4
+SEAM	U5	Sources/App/AppDelegate.swift	let events = completions.absorb(sessions).filter { !ClaudeBridge.ownsProvider($0.providerID) } // Fork: U5
+
+# --- U6: Model/UsageStore.swift (one block after registerCustomProviders) ----
+SEAM	U6	Sources/Model/UsageStore.swift	// Fork: U6 begin.
+SEAM	U6	Sources/Model/UsageStore.swift	func replaceProviders(where owned: (String) -> Bool, with fresh: [UsageProvider]) {
+SEAM	U6	Sources/Model/UsageStore.swift	func ingest(_ snapshot: ProviderSnapshot) {
+SEAM	U6	Sources/Model/UsageStore.swift	// Fork: U6 end.
+
+# --- U7: Features/ProviderRing.swift -----------------------------------------
+SEAM	U7a	Sources/Features/ProviderRing.swift	@Environment(\.activitySuccessSettles) private var settles // Fork: U7a
+SEAM	U7a	Sources/Features/ProviderRing.swift	case .waiting: pulse // Fork: U7a
+SEAM	U7a	Sources/Features/ProviderRing.swift	case .success: if settles { steady } else { pulse } // Fork: U7a
+SEAM	U7a	Sources/Features/ProviderRing.swift	private var steady: some View { // Fork: U7a
+SEAM	U7b	Sources/Features/ProviderRing.swift	.modifier(ClaudeRingDecoration(providerID: snapshot.id)) // Fork: U7b
+SEAM	U7c	Sources/Features/ProviderRing.swift	.modifier(ClaudeRingAccessibility(providerID: snapshot.id)) // Fork: U7c
+
+# --- U8: Notch/NotchRootView.swift -------------------------------------------
+SEAM	U8a	Sources/Notch/NotchRootView.swift	ClaudeRestingMarks(model: model, place: place) // Fork: U8a
+SEAM	U8b	Sources/Notch/NotchRootView.swift	model.isExpanded, !model.suppressesTooltips { // Fork: U8b
+SEAM	U8c	Sources/Notch/NotchRootView.swift	.environment(\.claudeCellContext, .init(edge: model.edge, compact: false)) // Fork: U8c
+SEAM	U8d	Sources/Notch/NotchRootView.swift	.environment(\.claudeCellContext, .init(edge: model.edge, compact: true)) // Fork: U8d
+
+# --- U9: Notch/NotchViewModel.swift ------------------------------------------
+SEAM	U9	Sources/Notch/NotchViewModel.swift	@Published var suppressesTooltips = false // Fork: U9
+
+# --- GUX-1: per-card session caps (NotchViewModel, NotchRootView, ------------
+# NotchWindowController). Each hover card lists as many sessions as fit
+# *that* card; the drawn card (three sites), its hover region and the panel
+# size all read `sessionCap(for: snapshot)`.
+SEAM	GUX1	Sources/Notch/NotchViewModel.swift	// Fork: GUX-1 begin.
+SEAM	GUX1	Sources/Notch/NotchViewModel.swift	func sessionCap(for snapshot: ProviderSnapshot) -> Int {
+SEAM	GUX1	Sources/Notch/NotchViewModel.swift	return contentCardHeight { self.sessionCap(for: $0, budget: budget) }
+SEAM	GUX1	Sources/Notch/NotchViewModel.swift	: contentCardHeight { _ in 0 }, // Fork: GUX-1, per-card caps
+SEAM	GUX1	Sources/Notch/NotchViewModel.swift	// Fork: GUX-1 end.
+SEAM	GUX1	Sources/Notch/NotchRootView.swift	sessionCap: model.sessionCap(for: snapshot), // Fork: GUX-1	3
+SEAM	GUX1	Sources/Notch/NotchWindowController.swift	sessionCap: model.sessionCap(for: snapshot), // Fork: GUX-1
+
+# --- U10: Notch/NotchWindowController.swift ----------------------------------
+SEAM	U10a	Sources/Notch/NotchWindowController.swift	if model.isExpanded, !model.suppressesTooltips, let index = model.hoveredIndex, let card = tooltipRect(index: index) { // Fork: U10a
+SEAM	U10b	Sources/Notch/NotchWindowController.swift	if let focus = model.onFocusSession { focus(pending.pid) } else { Task { _ = await SessionFocus.focus(pid: pending.pid) } } // Fork: U10b
+
+# --- U11: Settings/SettingsView.swift ----------------------------------------
+SEAM	U11	Sources/Settings/SettingsView.swift	case claudeCode // Fork: U11
+SEAM	U11	Sources/Settings/SettingsView.swift	@State private var selection: SettingsSection = ClaudeSettingsNavigation.opensOnClaudeCode ? .claudeCode : .accounts // Fork: U11 (GUX-5)
+SEAM	U11	Sources/Settings/SettingsView.swift	case .claudeCode:    return "Claude Code" // Fork: U11
+SEAM	U11	Sources/Settings/SettingsView.swift	case .claudeCode:    return "Sessions, approvals, accounts and hooks." // Fork: U11
+SEAM	U11	Sources/Settings/SettingsView.swift	case .claudeCode:    return "terminal.fill" // Fork: U11
+SEAM	U11	Sources/Settings/SettingsView.swift	case .claudeCode:    return .orange // Fork: U11
+SEAM	U11	Sources/Settings/SettingsView.swift	case .claudeCode:    ClaudeCodeSettingsHost(preferences: preferences) // Fork: U11
+SEAM	U11	Sources/Settings/SettingsView.swift	.onReceive(ClaudeSettingsNavigation.selections) { selectSection($0 == .notifications ? .notifications : .claudeCode) } // Fork: U11
+
+# --- KC: Providers/KeychainItem.swift (setup + WP-D) ------------------------
+# The app's own keychain items (Ollama, LM Studio, MiniMax keys, custom
+# endpoints) are filed under the fork's service names, never the official
+# app's; a sealed launch reads and writes none. On every call path (read,
+# write, delete): re-apply after an upstream merge that touches the file.
+SEAM	KC	Sources/Providers/KeychainItem.swift	let service = Fork.keychainService(service) // Fork: our own items, never the official app's	3
+SEAM	KC	Sources/Providers/KeychainItem.swift	guard !Fork.isSealed else { return nil } // Fork: a sealed launch lists nothing
+SEAM	KC	Sources/Providers/KeychainItem.swift	guard !Fork.isSealed else { return false } // Fork: a sealed launch writes nothing	2
+
+# --- ISO: the fork's isolation from the official Codenotch (setup) ----------
+# Each of these keeps the fork from sharing state with, or quitting, the
+# official app running beside it, or keeps a sealed run sealed. An upstream
+# merge that resolves one of these hunks to upstream's side is caught here.
+SEAM	ISO	Sources/App/AppDelegate.swift	Fork.ownsBundleIdentifier(identifier) else { return } // Fork: own bundle id only
+SEAM	ISO	Sources/App/AppDelegate.swift	private let codexProfiles = Fork.isSealed ? [] : CodexProfile.discover() // Fork: sealed reads no Codex login
+SEAM	ISO	Sources/App/AppDelegate.swift	private let antigravityProfiles = Fork.isSealed ? [] : AntigravityProfile.discover() // Fork: sealed reads no Antigravity login
+SEAM	ISO	Sources/App/AppDelegate.swift	if Fork.isSealed { // Fork: sealed, fixtures only
+SEAM	ISO	Sources/App/AppDelegate.swift	var monitors: [String: any AgentActivityMonitor] = Fork.isSealed ? [:] : [ // Fork: sealed starts no monitor
+SEAM	ISO	Sources/App/AppDelegate.swift	appSupport.appendingPathComponent("\(Fork.applicationSupportFolder)/phone-link", isDirectory: true) // Fork: own folder
+SEAM	ISO	Sources/Model/CustomEndpoint.swift	appSupport.appendingPathComponent(Fork.applicationSupportFolder, isDirectory: true) // Fork: own folder
+SEAM	ISO	Sources/Providers/ClaudeUsageCLI.swift	.appendingPathComponent(Fork.applicationSupportFolder, isDirectory: true) // Fork: own folder
+SEAM	ISO	Tests/ClaudeUsageCLITests.swift	support.appendingPathComponent("\(Fork.applicationSupportFolder)/usage-scratch").path) // Fork: own folder
+SEAM	ISO	Sources/PhoneLink/PhoneLinkSecretStore.swift	static let service = Fork.phoneLinkKeychainService // Fork: never the official app's device secrets
+SEAM	ISO	Sources/App/Updater.swift	// Fork: updates off	5
+SEAM	ISO	Sources/App/Log.swift	Logger(subsystem: Fork.logSubsystem,	2
+SEAM	ISO	Sources/Settings/Preferences.swift	Bundle.main.bundleIdentifier.flatMap { Fork.ownsBundleIdentifier($0) ? $0 : nil } // Fork: own domain only
+SEAM	ISO	Sources/Providers/ClaudeDesktopUsageCache.swift	import CodenotchZstd
+# Makefile: the running copy is quit by bundle id, never `pkill -x Codenotch`
+# (which would quit the official app); `make appcast` refuses to run.
+SEAM	ISO	Makefile	BUNDLE_ID   := com.paraswtf.superpowered-codenotch
+SEAM	ISO	Makefile	QUIT_RUNNING = osascript -e 'if application id "$(BUNDLE_ID)" is running then tell application id "$(BUNDLE_ID)" to quit' >/dev/null 2>&1 || true
+SEAM	ISO	Makefile	$(QUIT_RUNNING)	2
+SEAM	ISO	Makefile	@echo "appcast: Sparkle updates are disabled in Superpowered Codenotch" && exit 1
+FORBID	ISO	Makefile	pkill -x Codenotch
+FORBID	ISO	Makefile	release: notarize verify-release appcast
+# project.yml / Info.plist: our own bundle id, no Sparkle feed or key.
+SEAM	ISO	project.yml	PRODUCT_BUNDLE_IDENTIFIER: com.paraswtf.superpowered-codenotch
+FORBID	ISO	project.yml	PRODUCT_BUNDLE_IDENTIFIER: com.vinz
+FORBID	ISO	project.yml	SUFeedURL
+FORBID	ISO	project.yml	SUPublicEDKey
+FORBID	ISO	Sources/Info.plist	SUFeedURL
+FORBID	ISO	Sources/Info.plist	SUPublicEDKey
+
+# --- MBL: App/StatusItemSummary.swift (PP) -----------------------------------
+# The menu bar summary labels rings that share a mark with the profile's
+# slug; an account ring's id (`claude-acct-<hash>`) has none worth reading,
+# so its label is the account's nickname or short name.
+SEAM	MBL	Sources/App/StatusItemSummary.swift	? ClaudeBridge.menuBarLabel(providerID: snapshot.id) ?? ClaudeProfile.slug(fromProviderID: snapshot.id) ?? CodexProfile.slug(fromProviderID: snapshot.id) // Fork: MBL
+
+# --- U12: project.yml, Sources/Info.plist ------------------------------------
+SEAM	U12	project.yml	NSAppleEventsUsageDescription: "Superpowered Codenotch selects the terminal tab a Claude session runs in and types your replies into it."
+SEAM	U12	Sources/Info.plist	<key>NSAppleEventsUsageDescription</key>
+
+# --- LIC: project.yml (integration) -------------------------------------------
+# The Xcode build copies the same licence notices into the bundle as
+# Scripts/spm-build-app.sh (Codenotch MIT, zstd, ClaudeControl LICENSE and
+# NOTICE, swift-markdown, swift-cmark): a post-build phase on the app target.
+SEAM	LIC	project.yml	- name: Copy licence notices
+SEAM	LIC	project.yml	cp "$SRCROOT/Packages/ClaudeControl/NOTICE" "$R/ClaudeControl-NOTICE.txt"
+
+# --- Files under Sources/ and Tests/ that may differ from upstream -----------
+# Setup (fork identity, sealed mode, CLT build):
+ALLOW	Sources/App/AppDelegate.swift
+ALLOW	Sources/App/Fork.swift
+ALLOW	Sources/App/Log.swift
+ALLOW	Sources/App/Updater.swift
+ALLOW	Sources/Info.plist
+ALLOW	Sources/Model/CustomEndpoint.swift
+ALLOW	Sources/PhoneLink/PhoneLinkSecretStore.swift
+ALLOW	Sources/Providers/ClaudeDesktopUsageCache.swift
+ALLOW	Sources/Providers/ClaudeUsageCLI.swift
+ALLOW	Sources/Providers/KeychainItem.swift
+ALLOW	Sources/Settings/Preferences.swift
+ALLOW	Tests/ClaudeUsageCLITests.swift
+# The seams (U1-U12):
+ALLOW	Sources/Model/UsageStore.swift
+ALLOW	Sources/Features/ProviderRing.swift
+ALLOW	Sources/Notch/NotchRootView.swift
+ALLOW	Sources/Notch/NotchViewModel.swift
+ALLOW	Sources/Notch/NotchWindowController.swift
+ALLOW	Sources/Settings/SettingsView.swift
+ALLOW	Sources/App/StatusItemSummary.swift
+# The fork's own files:
+ALLOW	Sources/ClaudeBridge/**
+ALLOW	Tests/ClaudeBridgeTests.swift
+ALLOW	Tests/ForkSPM/**

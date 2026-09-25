@@ -86,11 +86,14 @@ verify-deps:
 		exit 1; \
 	}
 
+# Fork: the app is "Superpowered Codenotch.app". The running copy is quit by
+# bundle id, never by process name: `pkill -x Codenotch` would also quit the
+# official Codenotch running beside it.
 run: build
-	@APP=$$(xcodebuild -project $(PROJECT) -scheme $(SCHEME) -destination '$(DEST)' \
+	@APP="$$(xcodebuild -project $(PROJECT) -scheme $(SCHEME) -destination '$(DEST)' \
 		-configuration Debug -showBuildSettings 2>/dev/null \
-		| awk -F' = ' '/ BUILT_PRODUCTS_DIR/ {print $$2; exit}')/Codenotch.app; \
-	pkill -x Codenotch 2>/dev/null; sleep 0.5; \
+		| awk -F' = ' '/ BUILT_PRODUCTS_DIR/ {print $$2; exit}')/$(APP_NAME).app"; \
+	$(QUIT_RUNNING); sleep 0.5; \
 	open "$$APP"
 
 # Build a Release .app, sign it with whatever identity is available (Developer
@@ -104,12 +107,12 @@ run: build
 install: gen
 	xcodebuild -project $(PROJECT) -scheme $(SCHEME) -destination '$(DEST)' \
 		-configuration Release $(DEV_SIGN) build
-	@APP=$$(xcodebuild -project $(PROJECT) -scheme $(SCHEME) -destination '$(DEST)' \
+	@APP="$$(xcodebuild -project $(PROJECT) -scheme $(SCHEME) -destination '$(DEST)' \
 		-configuration Release -showBuildSettings 2>/dev/null \
-		| awk -F' = ' '/ BUILT_PRODUCTS_DIR/ {print $$2; exit}')/Codenotch.app; \
-	pkill -x Codenotch || true; \
+		| awk -F' = ' '/ BUILT_PRODUCTS_DIR/ {print $$2; exit}')/$(APP_NAME).app"; \
+	$(QUIT_RUNNING); \
 	cp -R "$$APP" /Applications/; \
-	open /Applications/Codenotch.app
+	open "/Applications/$(APP_NAME).app"
 
 clean:
 	rm -rf build DerivedData $(PROJECT)
@@ -127,13 +130,19 @@ clean:
 # → App-Specific Passwords. Not your Apple ID password.
 
 RELEASE_DIR := build/release
-APP_NAME    := Codenotch
+# Fork: the bundle's name has a space, so it is quoted wherever it is used and
+# never appears in a make target; DIST_NAME names the archive and disk images.
+APP_NAME    := Superpowered Codenotch
+DIST_NAME   := SuperpoweredCodenotch
+BUNDLE_ID   := com.paraswtf.superpowered-codenotch
+# Asks only if it is running: a bare `tell application id ... to quit` can launch it first.
+QUIT_RUNNING = osascript -e 'if application id "$(BUNDLE_ID)" is running then tell application id "$(BUNDLE_ID)" to quit' >/dev/null 2>&1 || true
 # The label of the stored notarytool credential in the login keychain, not
 # anything to do with the app's name — it was created before the rename and
 # renaming the variable is what broke `make release` after it. Recreating it
 # needs an app-specific password, so the label simply stays as it is.
 NOTARY_PROFILE := UsageNotch
-DMG := $(RELEASE_DIR)/$(APP_NAME).dmg
+DMG := $(RELEASE_DIR)/$(DIST_NAME).dmg
 
 .PHONY: archive dmg notarize release verify-release publish
 
@@ -148,7 +157,7 @@ archive: gen
 	@# real one in /Applications. This stops the whole tree being indexed.
 	@touch build/.metadata_never_index
 	xcodebuild -project $(PROJECT) -scheme $(SCHEME) -destination '$(DEST)' \
-		-configuration Release -archivePath $(RELEASE_DIR)/$(APP_NAME).xcarchive archive
+		-configuration Release -archivePath $(RELEASE_DIR)/$(DIST_NAME).xcarchive archive
 	printf '%s\n' \
 		'<?xml version="1.0" encoding="UTF-8"?>' \
 		'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
@@ -159,7 +168,7 @@ archive: gen
 		'<key>signingCertificate</key><string>Developer ID Application</string>' \
 		'</dict></plist>' > $(RELEASE_DIR)/ExportOptions.plist
 	xcodebuild -exportArchive \
-		-archivePath $(RELEASE_DIR)/$(APP_NAME).xcarchive \
+		-archivePath $(RELEASE_DIR)/$(DIST_NAME).xcarchive \
 		-exportOptionsPlist $(RELEASE_DIR)/ExportOptions.plist \
 		-exportPath $(RELEASE_DIR)
 
@@ -169,7 +178,7 @@ dmg: archive
 	rm -f $(DMG)
 	rm -rf $(RELEASE_DIR)/stage
 	mkdir -p $(RELEASE_DIR)/stage
-	cp -R $(RELEASE_DIR)/$(APP_NAME).app $(RELEASE_DIR)/stage/
+	cp -R "$(RELEASE_DIR)/$(APP_NAME).app" $(RELEASE_DIR)/stage/
 	ln -s /Applications $(RELEASE_DIR)/stage/Applications
 	hdiutil create -volname "$(APP_NAME)" -srcfolder $(RELEASE_DIR)/stage \
 		-ov -format UDZO $(DMG)
@@ -177,7 +186,7 @@ dmg: archive
 	@# The app is inside the dmg now. Leaving the loose copies around is how
 	@# three spare "Codenotch" entries end up in Spotlight; everything
 	@# downstream (notarize, verify, appcast) works from the dmg alone.
-	rm -rf $(RELEASE_DIR)/stage $(RELEASE_DIR)/$(APP_NAME).app
+	rm -rf $(RELEASE_DIR)/stage "$(RELEASE_DIR)/$(APP_NAME).app"
 
 # Submits and waits. `--wait` blocks until Apple answers, which is usually a
 # couple of minutes; on rejection, the log says which binary failed and why.
@@ -203,7 +212,11 @@ PAGES_DIR := site
 # match it exactly, or an update downloads and then fails to verify.
 DOWNLOAD_PREFIX := https://hivinz.com/
 
-appcast: $(DMG)
+# Fork: Sparkle is off (see Sources/App/Fork.swift). This target would sign
+# an appcast for upstream's hivinz.com feed, so it refuses to run; the recipe
+# below is upstream's, kept for merges.
+appcast:
+	@echo "appcast: Sparkle updates are disabled in Superpowered Codenotch" && exit 1
 	@test -n "$(SPARKLE_BIN)" || (echo "Sparkle tools not found — run make build first" && exit 1)
 	mkdir -p $(PAGES_DIR)
 	@# Rebuilt from what is actually in the folder, never merged into the old
@@ -216,7 +229,7 @@ appcast: $(DMG)
 	$(SPARKLE_BIN)/generate_appcast $(PAGES_DIR) --download-url-prefix $(DOWNLOAD_PREFIX)
 	@echo "Publish by committing $(PAGES_DIR)/ and pushing."
 
-release: notarize verify-release appcast
+release: notarize verify-release
 	@echo "Notarized: $(DMG)"
 
 # The GitHub release page is where someone who has never installed the app
@@ -243,8 +256,8 @@ publish: $(DMG)
 verify-release:
 	xcrun stapler validate $(DMG)
 	hdiutil attach $(DMG) -nobrowse -mountpoint $(RELEASE_DIR)/mnt
-	codesign --verify --deep --strict --verbose=2 $(RELEASE_DIR)/mnt/$(APP_NAME).app
-	spctl --assess --type execute --verbose=4 $(RELEASE_DIR)/mnt/$(APP_NAME).app
+	codesign --verify --deep --strict --verbose=2 "$(RELEASE_DIR)/mnt/$(APP_NAME).app"
+	spctl --assess --type execute --verbose=4 "$(RELEASE_DIR)/mnt/$(APP_NAME).app"
 	hdiutil detach $(RELEASE_DIR)/mnt
 # --- Unsigned builds -----------------------------------------------------------
 # Everything above needs the maintainer's Developer ID certificate and the
@@ -267,7 +280,7 @@ verify-release:
 CI_DIR     := build/ci
 CI_DERIVED := $(CI_DIR)/DerivedData
 CI_APP     := $(CI_DERIVED)/Build/Products/Release/$(APP_NAME).app
-CI_DMG     := $(CI_DIR)/$(APP_NAME)-$(VERSION)-unsigned.dmg
+CI_DMG     := $(CI_DIR)/$(DIST_NAME)-$(VERSION)-unsigned.dmg
 # Absolute: xcodebuild resolves CODE_SIGN_ENTITLEMENTS against the project
 # directory, not the working directory.
 CI_ENTITLEMENTS := $(CURDIR)/$(CI_DIR)/adhoc.entitlements
@@ -324,10 +337,10 @@ build-ci: gen
 	@# The outer bundle only: the framework beside it keeps the signature it
 	@# was built with, and re-sealing the app recomputes its hashes anyway.
 	codesign --force --options runtime --entitlements $(CI_ENTITLEMENTS) \
-		--sign - $(CI_APP)
+		--sign - "$(CI_APP)"
 	@# Proof rather than assumption, because this is invisible until someone
 	@# thinks to look: fail the build if the entitlement came back.
-	@codesign -d --entitlements - --xml $(CI_APP) 2>/dev/null \
+	@codesign -d --entitlements - --xml "$(CI_APP)" 2>/dev/null \
 		| grep -q 'get-task-allow' \
 		&& { echo "get-task-allow survived the re-sign"; exit 1; } || true
 
@@ -338,7 +351,7 @@ build-ci: gen
 dmg-ci: build-ci
 	rm -rf $(CI_DIR)/stage
 	mkdir -p $(CI_DIR)/stage
-	cp -R $(CI_APP) $(CI_DIR)/stage/
+	cp -R "$(CI_APP)" $(CI_DIR)/stage/
 	ln -s /Applications $(CI_DIR)/stage/Applications
 	for i in 1 2 3; do \
 		hdiutil create -volname "$(APP_NAME)" -srcfolder $(CI_DIR)/stage \

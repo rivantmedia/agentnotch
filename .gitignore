@@ -9,3 +9,5 @@ xcuserdata/
 .swiftpm/
 .agents/
 .forgeguard/
+# SwiftPM (Package.swift, Scripts/spm-*.sh)
+.build/

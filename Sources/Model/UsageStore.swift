@@ -63,6 +63,52 @@ final class UsageStore: ObservableObject {
         refreshNow()
     }
 
+    // Fork: U6 begin. ClaudeControl's rings (Sources/ClaudeBridge) come and go
+    // at runtime and are handed readings the engine already has, so they need
+    // neither a restart nor a refetch. Worth offering upstream.
+    /// Replace the providers `owned` claims with `fresh`, in place. Removed ids
+    /// stop and forget their readings; newcomers show their archived reading
+    /// or a placeholder, and are not fetched.
+    func replaceProviders(where owned: (String) -> Bool, with fresh: [UsageProvider]) {
+        let freshIDs = Set(fresh.map(\.id))
+        let removed = providers.filter { owned($0.id) && !freshIDs.contains($0.id) }.map(\.id)
+        let known = Set(providers.map(\.id))
+        let added = fresh.filter { !known.contains($0.id) }
+        for id in removed {
+            cancelRefresh(providerID: id)
+            snapshots.removeAll { $0.id == id }
+            lastGood.removeValue(forKey: id)
+        }
+        let at = min(providers.firstIndex { owned($0.id) } ?? 0, providers.count)
+        providers.removeAll { owned($0.id) }
+        providers.insert(contentsOf: fresh, at: min(at, providers.count))
+        if !removed.isEmpty { archive.save(lastGood) }
+        for provider in added where !disconnected.contains(provider.id) {
+            guard let remembered = lastGood[provider.id] else { publish(Self.placeholder(provider)); continue }
+            var snapshot = remembered.snapshot
+            snapshot.status = .stale(since: remembered.fetchedAt)
+            publish(snapshot)
+        }
+        providerAccountRevision += 1
+    }
+
+    /// A reading pushed by its provider rather than fetched: remembered like a
+    /// fetch, never marked `refreshing` (which presses and spins the ring).
+    func ingest(_ snapshot: ProviderSnapshot) {
+        guard providers.contains(where: { $0.id == snapshot.id }), !disconnected.contains(snapshot.id) else { return }
+        if !snapshot.windows.isEmpty {
+            lastGood[snapshot.id] = (snapshot, Date())
+            if Date().timeIntervalSince(lastIngestArchive) >= 30 {
+                archive.save(lastGood)
+                lastIngestArchive = Date()
+            }
+        }
+        publish(snapshot)
+    }
+
+    private var lastIngestArchive = Date.distantPast
+    // Fork: U6 end.
+
     /// Provider ids plus any model cells currently on screen.
     var knownIDs: [String] {
         Array(Set(providers.map(\.id) + snapshots.map(\.id) + localModelSummaries.map(\.id)))

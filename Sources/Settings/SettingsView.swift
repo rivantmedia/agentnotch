@@ -26,6 +26,7 @@ extension View {
 /// crossing-and-notification machinery it switches is Notifications' to
 /// explain.
 private enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
+    case claudeCode // Fork: U11, first in the sidebar
     case accounts, phone, deepseek, ollama, lmstudio, customEndpoints, appearance, notifications, general
 
     /// The sections the sidebar lists; Phone only once pairing is offered.
@@ -47,6 +48,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
 
     var title: String {
         switch self {
+        case .claudeCode:    return "Claude Code" // Fork: U11
         case .accounts:      return L10n.t("Accounts")
         case .phone:         return L10n.t("Phone")
         case .deepseek:      return "DeepSeek"
@@ -73,6 +75,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
     /// The line under the pane's title.
     var subtitle: String {
         switch self {
+        case .claudeCode:    return "Sessions, approvals, accounts and hooks." // Fork: U11
         case .accounts:      return L10n.t("Choose which providers the notch reads.")
         case .phone:         return L10n.t("See your usage on your phone.")
         case .deepseek:      return L10n.t("Peak and off-peak pricing for your DeepSeek spend.")
@@ -87,6 +90,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
 
     var icon: String {
         switch self {
+        case .claudeCode:    return "terminal.fill" // Fork: U11
         case .accounts:      return "person.crop.circle.fill"
         case .phone:         return "iphone"
         case .deepseek:      return "chart.line.uptrend.xyaxis"
@@ -104,6 +108,7 @@ private enum SettingsSection: String, CaseIterable, Identifiable, Hashable {
     /// icons are not.
     var tint: Color {
         switch self {
+        case .claudeCode:    return .orange // Fork: U11
         case .accounts:      return .blue
         case .phone:         return .green
         case .deepseek:      return .orange
@@ -381,7 +386,7 @@ struct SettingsView: View {
     /// The providers the menu bar can show, from the same snapshots it draws.
     @State private var menuBarChoices: [MenuBarChoice] = []
     @State private var displays: [DisplayOption] = []
-    @State private var selection: SettingsSection = .accounts
+    @State private var selection: SettingsSection = ClaudeSettingsNavigation.opensOnClaudeCode ? .claudeCode : .accounts // Fork: U11 (GUX-5)
     /// Whether Accounts shows its provider panes. Remembered, so someone who
     /// folds the group away finds it folded next time.
     @AppStorage("settingsAccountsExpanded") private var accountsExpanded = true
@@ -508,6 +513,7 @@ struct SettingsView: View {
         // traffic lights stranded in it.
         .ignoresSafeArea()
         .onAppear { refreshVisibleState() }
+        .onReceive(ClaudeSettingsNavigation.selections) { selectSection($0 == .notifications ? .notifications : .claudeCode) } // Fork: U11
         .onReceive(NotificationCenter.default.publisher(
             for: NSWindow.didBecomeKeyNotification
         )) { _ in refreshVisibleState() }
@@ -676,6 +682,7 @@ struct SettingsView: View {
     @ViewBuilder
     private func paneContent(for section: SettingsSection) -> some View {
         switch section {
+        case .claudeCode:    ClaudeCodeSettingsHost(preferences: preferences) // Fork: U11
         case .accounts:      accountsPane
         case .phone:         phonePane
         case .deepseek:      DeepSeekPricingSettingsView(preferences: preferences)

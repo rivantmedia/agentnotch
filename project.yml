@@ -1,6 +1,11 @@
+# Superpowered Codenotch, a fork of Codenotch (github.com/vinzdg/codenotch, MIT).
+# The project, scheme and target keep upstream's name "Codenotch" so the
+# Makefile and upstream merges keep working; the product is renamed below
+# (PRODUCT_NAME / PRODUCT_BUNDLE_IDENTIFIER) so it installs and runs beside the
+# official app. Package.swift mirrors this file for Command Line Tools builds.
 name: Codenotch
 options:
-  bundleIdPrefix: com.vinz
+  bundleIdPrefix: com.paraswtf
   deploymentTarget:
     macOS: "15.0"
   createIntermediateGroups: true
@@ -16,11 +21,14 @@ settings:
     # update. Bump CURRENT_PROJECT_VERSION on every release.
     MARKETING_VERSION: "1.18.0"
     CURRENT_PROJECT_VERSION: "20"
-    # Signed with a stable identity on purpose. The app reads Claude Code's
-    # OAuth token out of the login keychain, and the keychain's ACL remembers
-    # *which signed binary* was allowed. Ad-hoc or unsigned builds get a new
-    # identity on every rebuild, so "Always Allow" would be forgotten each time
-    # and the prompt would come back after every `make run`.
+    # Signed with a stable identity on purpose: the keychain's ACL for the
+    # app's own items (Ollama, LM Studio, MiniMax keys, custom endpoints)
+    # remembers *which signed binary* was allowed. Ad-hoc or unsigned builds
+    # get a new identity on every rebuild, so "Always Allow" would be
+    # forgotten each time. Fork: this app reads no Claude token (the Claude
+    # rings come from ClaudeControl). DEVELOPMENT_TEAM is still upstream's;
+    # a signed or notarised fork build needs the fork's own team (open item,
+    # design §14 Q5). Day-to-day builds use Scripts/spm-build-app.sh (ad hoc).
     CODE_SIGN_IDENTITY: "Developer ID Application"
     CODE_SIGN_STYLE: Manual
     DEVELOPMENT_TEAM: 6WFPL8B9FB
@@ -42,6 +50,9 @@ packages:
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     from: "2.6.0"
+  # Fork: the Claude Code control layer, kept out of upstream's Sources/.
+  ClaudeControl:
+    path: Packages/ClaudeControl
 
 targets:
   Codenotch:
@@ -55,12 +66,40 @@ targets:
           # copy any unrecognised file into the app bundle's Resources, and a
           # developer README has no business shipping to users.
           - "Vendor/**/README.md"
+    # Fork: the notices the licences ask to travel with the binary, the same
+    # files Scripts/spm-build-app.sh copies: Codenotch's MIT licence, the
+    # vendored zstd's, ClaudeControl's Apache-2.0 LICENSE and NOTICE (derived
+    # from Superpowered Vibe Notch and Vibe Notch), and swift-markdown's and
+    # swift-cmark's (linked statically into it).
+    postBuildScripts:
+      - name: Copy licence notices
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          R="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH"
+          cp "$SRCROOT/LICENSE" "$R/Codenotch-LICENSE.txt"
+          cp "$SRCROOT/Sources/Vendor/zstd/LICENSE" "$R/zstd-LICENSE.txt"
+          cp "$SRCROOT/Packages/ClaudeControl/LICENSE" "$R/ClaudeControl-LICENSE.txt"
+          cp "$SRCROOT/Packages/ClaudeControl/NOTICE" "$R/ClaudeControl-NOTICE.txt"
+          C=""
+          # DerivedData's SourcePackages: the part of BUILD_DIR before /Build/ is the
+          # DerivedData folder for plain builds and for `xcodebuild archive`
+          # (…/ArchiveIntermediates/<scheme>/BuildProductsPath) alike (CS-6).
+          for candidate in "${BUILD_DIR%%/Build/*}/SourcePackages/checkouts" "$BUILD_DIR/../../SourcePackages/checkouts" "$SRCROOT/.build/checkouts"; do
+            if [ -f "$candidate/swift-markdown/LICENSE.txt" ]; then C="$candidate"; break; fi
+          done
+          if [ -z "$C" ]; then echo "error: swift-markdown checkout not found for its licence"; exit 1; fi
+          cp "$C/swift-markdown/LICENSE.txt" "$R/swift-markdown-LICENSE.txt"
+          cp "$C/swift-markdown/NOTICE.txt" "$R/swift-markdown-NOTICE.txt"
+          cp "$C/swift-cmark/COPYING" "$R/swift-cmark-COPYING.txt"
     dependencies:
       - package: Sparkle
       - package: SwiftNIO
         product: NIOHTTP1
       - package: SwiftNIO
         product: NIOPosix
+      - package: ClaudeControl
+        product: ClaudeControl
     info:
       path: Sources/Info.plist
       properties:
@@ -68,8 +107,8 @@ targets:
         # notch is ambient, but the *app* still has to be findable: without a
         # Dock tile there is nothing to click to open it, nothing in Cmd-Tab,
         # and no obvious way to reach settings or quit.
-        CFBundleName: Codenotch
-        CFBundleDisplayName: Codenotch
+        CFBundleName: Superpowered Codenotch
+        CFBundleDisplayName: Superpowered Codenotch
         CFBundleDevelopmentRegion: en
         CFBundleLocalizations:
           - en
@@ -91,30 +130,24 @@ targets:
         # build settings keeps one place to bump.
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
-        NSLocalNetworkUsageDescription: "Codenotch answers your phone on this network so it can show your usage."
+        NSLocalNetworkUsageDescription: "Superpowered Codenotch answers your phone on this network so it can show your usage."
+        # Fork: Claude Code sessions are focused and answered in their terminal
+        # tab through Apple Events (Terminal, iTerm2).
+        NSAppleEventsUsageDescription: "Superpowered Codenotch selects the terminal tab a Claude session runs in and types your replies into it."
         # --- Sparkle -------------------------------------------------------
-        # Beside the download itself, on hivinz.com. It used to point at a
-        # GitHub Pages URL for a repo that was never created, so every check
-        # got a 404 and Sparkle reported "an error occurred in retrieving
-        # update information" — correctly, since there was nothing there.
-        #
-        # Must stay reachable for as long as any copy is installed: the feed is
-        # the only route by which a shipped build can ever be replaced.
-        SUFeedURL: https://hivinz.com/appcast.xml
-        # The public half of the EdDSA key in the login keychain. Sparkle
-        # refuses any update not signed by its private half, so a hijacked feed
-        # or a swapped download cannot install code. Losing the private key
-        # means no existing install can ever be updated again — back it up.
-        SUPublicEDKey: rmUfT5r49nR+3HdkbR5/YYLghfnAi6L49eOk3sIegSk=
-        # Set explicitly so Sparkle never asks on first launch. Left unset, it
-        # shows a "check for updates automatically?" prompt, which is exactly
-        # the permission this is meant to avoid.
-        SUEnableAutomaticChecks: true
-        SUAutomaticallyUpdate: true
-        SUScheduledCheckInterval: 86400
+        # Fork: no feed, no public key, no automatic checks. Upstream's feed
+        # (hivinz.com) and EdDSA key would silently replace this build with the
+        # official Codenotch; `Updater` is also inert (`Fork.updatesEnabled`).
+        SUEnableAutomaticChecks: false
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.vinz.codenotch
+        # Fork: our own bundle id (and so our own defaults domain, login item
+        # and notification settings), and a product name that cannot be
+        # mistaken for the official app. The module stays `Codenotch` so the
+        # tests' `@testable import Codenotch` and upstream merges keep working.
+        PRODUCT_BUNDLE_IDENTIFIER: com.paraswtf.superpowered-codenotch
+        PRODUCT_NAME: "Superpowered Codenotch"
+        PRODUCT_MODULE_NAME: Codenotch
         GENERATE_INFOPLIST_FILE: "NO"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_EMIT_LOC_STRINGS: "YES"
@@ -136,8 +169,11 @@ targets:
       - target: Codenotch
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.vinz.codenotch.tests
+        PRODUCT_BUNDLE_IDENTIFIER: com.paraswtf.superpowered-codenotch.tests
         GENERATE_INFOPLIST_FILE: "YES"
+        # Spelled out because the host's product name is no longer the target name.
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Superpowered Codenotch.app/Contents/MacOS/Superpowered Codenotch"
+        BUNDLE_LOADER: "$(TEST_HOST)"
 
 schemes:
   Codenotch:

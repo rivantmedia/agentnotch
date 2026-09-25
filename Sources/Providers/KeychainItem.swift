@@ -42,6 +42,9 @@ enum KeychainItem {
     /// `kSecAttrModificationDate` is a timestamp, not a version counter — and
     /// where they would, either duplicate is an equally good answer.
     static func newest(service: String, account: String? = nil) -> Match? {
+        // Fork: a sealed launch lists nothing (and `read` goes through here).
+        guard !Fork.isSealed else { return nil } // Fork: a sealed launch lists nothing
+        let service = Fork.keychainService(service) // Fork: our own items, never the official app's
         var query: [CFString: Any] = [
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: service,
@@ -124,6 +127,8 @@ enum KeychainItem {
     /// Stores a string under a service+account, creating or updating the item.
     /// For items this app owns, no prompt is involved on either write or read.
     static func store(service: String, account: String, value: String) -> Bool {
+        guard !Fork.isSealed else { return false } // Fork: a sealed launch writes nothing
+        let service = Fork.keychainService(service) // Fork: our own items, never the official app's
         let data = Data(value.utf8)
         let query: [CFString: Any] = [
             kSecClass: kSecClassGenericPassword,
@@ -147,6 +152,8 @@ enum KeychainItem {
     /// Deletes the item under a service+account, if one exists.
     @discardableResult
     static func delete(service: String, account: String) -> Bool {
+        guard !Fork.isSealed else { return false } // Fork: a sealed launch writes nothing
+        let service = Fork.keychainService(service) // Fork: our own items, never the official app's
         let query: [CFString: Any] = [
             kSecClass: kSecClassGenericPassword,
             kSecAttrService: service,

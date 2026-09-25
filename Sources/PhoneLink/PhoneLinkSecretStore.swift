@@ -7,7 +7,8 @@ protocol PhoneLinkSecretStore: AnyObject {
 }
 
 final class PhoneLinkKeychainSecretStore: PhoneLinkSecretStore {
-    static let service = "com.codenotch.phonelink.device"
+    /// Fork: upstream's is "com.codenotch.phonelink.device".
+    static let service = Fork.phoneLinkKeychainService // Fork: never the official app's device secrets
 
     func read(deviceId: String) -> Data? {
         guard let value = KeychainItem.read(service: Self.service, account: deviceId) else {

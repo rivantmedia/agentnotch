@@ -220,6 +220,7 @@ private struct ActivityArc: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.codenotchReduceTransparency) private var reduceTransparency
+    @Environment(\.activitySuccessSettles) private var settles // Fork: U7a
     @State private var pulsing = false
 
     /// How much of the circle the moving arc covers.
@@ -233,7 +234,8 @@ private struct ActivityArc: View {
         Group {
             switch summary.state {
             case .working: spinner
-            case .waiting, .success: pulse
+            case .waiting: pulse // Fork: U7a
+            case .success: if settles { steady } else { pulse } // Fork: U7a, steady once a Claude review settles
             case .idle:    EmptyView()
             }
         }
@@ -261,6 +263,10 @@ private struct ActivityArc: View {
             turns: !reduceMotion
         )
     }
+
+    private var steady: some View { // Fork: U7a
+        Circle().inset(by: inset).stroke(summary.color, lineWidth: NotchLayout.activityStroke).opacity(0.85) // Fork: U7a
+    } // Fork: U7a
 
     private var pulse: some View {
         Circle()
@@ -311,6 +317,7 @@ struct ProviderCell: View {
                 weeklyRing: weeklyRing,
                 bandOverride: snapshot.bandOverride
             )
+            .modifier(ClaudeRingDecoration(providerID: snapshot.id)) // Fork: U7b
             if showsReading {
             Text(readingText)
                 .font(Typography.percent)
@@ -330,6 +337,7 @@ struct ProviderCell: View {
         .frame(height: NotchLayout.cellExtent)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityText)
+        .modifier(ClaudeRingAccessibility(providerID: snapshot.id)) // Fork: U7c
     }
 
     /// Everything the cell says, as one sentence for VoiceOver and the tests.

@@ -78,6 +78,7 @@ struct NotchRootView: View {
                             .opacity(model.isExpanded ? 1 : 0)
                             .animation(motion(orbMotion), value: model.isExpanded)
                 }
+                ClaudeRestingMarks(model: model, place: place) // Fork: U8a
 
                 if let resetEvent = model.activeResetAlert,
                    model.isExpanded,
@@ -100,13 +101,13 @@ struct NotchRootView: View {
                         y: model.edge.outward.y * Design.px(24)
                     )))
                 } else if let snapshot = model.hoveredSnapshot, let index = model.hoveredIndex,
-                   model.isExpanded {
+                   model.isExpanded, !model.suppressesTooltips { // Fork: U8b
                     TooltipCard(
                         snapshot: snapshot,
                         activity: model.activity(for: snapshot),
                         now: model.now,
                         direction: model.edge.tooltipDirection,
-                        sessionCap: model.sessionCap,
+                        sessionCap: model.sessionCap(for: snapshot), // Fork: GUX-1
                         resetTimeFormat: model.resetTimeFormat,
                         deepSeekPricingEnabled: model.deepSeekPricingEnabled,
                         deepSeekPricingSchedule: model.deepSeekPricingSchedule,
@@ -142,6 +143,7 @@ struct NotchRootView: View {
         .environment(\.usageWatchLimit, model.watchLimit)
         .environment(\.usageCriticalLimit, model.criticalLimit)
         .environment(\.colorTransitionStyle, model.colorTransitionStyle)
+        .environment(\.claudeCellContext, .init(edge: model.edge, compact: false)) // Fork: U8c
     }
 
     /// Opening and closing are not mirror images. Appearing, the arc waits its
@@ -341,6 +343,7 @@ struct NotchRootView: View {
             weeklyRing: model.weeklyRing,
             showsReading: model.showsCellReading
         )
+            .environment(\.claudeCellContext, .init(edge: model.edge, compact: true)) // Fork: U8d
             .frame(width: NotchLayout.cellAlong(for: model.edge) * model.splitCellScale)
             .scaleEffect(model.splitCellScale)
             .opacity(model.isExpanded ? 1 : 0)
@@ -480,7 +483,7 @@ struct NotchRootView: View {
                 moneyWindowCount: snapshot.windows.filter { $0.money != nil }.count,
                 usageDetailGroupCount: snapshot.usageDetail?.visibleGroups.count ?? 0,
                 sessionCount: snapshot.localModel == nil ? (model.activity(for: snapshot.id)?.sessions.count ?? 0) : 0,
-                sessionCap: model.sessionCap,
+                sessionCap: model.sessionCap(for: snapshot), // Fork: GUX-1
                 statusMessage: snapshot.statusMessage,
                 blockMessage: snapshot.block?.summary(now: model.now),
                 hasTokenUsage: snapshot.tokenUsage != nil,
@@ -513,7 +516,7 @@ struct NotchRootView: View {
                 moneyWindowCount: snapshot.windows.filter { $0.money != nil }.count,
                 usageDetailGroupCount: snapshot.usageDetail?.visibleGroups.count ?? 0,
                 sessionCount: snapshot.localModel == nil ? (model.activity(for: snapshot.id)?.sessions.count ?? 0) : 0,
-                sessionCap: model.sessionCap,
+                sessionCap: model.sessionCap(for: snapshot), // Fork: GUX-1
                 statusMessage: snapshot.statusMessage,
                 blockMessage: snapshot.block?.summary(now: model.now),
                 hasTokenUsage: snapshot.tokenUsage != nil,

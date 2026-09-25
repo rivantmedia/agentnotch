@@ -1,4 +1,9 @@
 import Foundation
+// Fork: Xcode reaches the vendored decoder through Codenotch-Bridging-Header.h; the
+// SwiftPM build (Package.swift, Command Line Tools only) has it as a C module.
+#if SWIFT_PACKAGE
+import CodenotchZstd
+#endif
 
 /// Claude's own limits, read out of Claude Desktop's HTTP cache.
 ///

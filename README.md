@@ -1,9 +1,323 @@
+# Superpowered Codenotch
+
+> [!NOTE]
+> **Superpowered Codenotch** is a fork of [Codenotch](https://github.com/vinzdg/codenotch)
+> by Vinz, used under the MIT License (see [LICENSE](LICENSE), kept as-is), with the
+> Claude Code session control of Superpowered Vibe Notch ported into it. This first part
+> of the README, down to the line that says so, is the fork's. Everything after that line
+> is upstream's README (unchanged, apart from the fork's paragraph under License) and
+> describes Codenotch itself: its download, update and "Claude from the OAuth token in the
+> keychain" notes do not apply to this fork.
+
+## What's different from Codenotch
+
+- **Every Claude account is a ring.** One ring per signed-in account (its `accountUuid`),
+  however many config folders it lives in: `~/.claude`, `~/.claude-<name>` folders you sign
+  in to (or add in Settings) and, with the VS Code extension
+  [Claude Parallel Profiles](#claude-parallel-profiles), its account stores and every VS Code
+  window's working copy. The ring shows the 5-hour session limit inside, the weekly limit
+  around it. It is named as you name the account in Settings. Accounts come and go without
+  a restart. Hover a ring for its limit windows (Current session, All models, each model)
+  and its sessions.
+- **Every Claude Code session at a glance.** A yellow badge on a ring counts the sessions
+  that need you (a permission, a question, a plan to approve). A green badge counts the
+  finished ones waiting for your review. A white arc turns while one is working. A turn that
+  stopped on a rate limit or an error shows red, as failed, and can be dismissed. Folded,
+  the notch shows the same as a yellow bar, a green dot and a white dot (except beside a
+  camera notch, where it stays open while a session needs you).
+- **Act from the notch.** Click a Claude ring for the sessions panel. There you can allow,
+  always allow or deny a permission, answer a question, approve a plan or keep planning,
+  read the conversation and type a reply, and jump to the session's exact terminal tab.
+- **No login token, ever.** Claude usage comes from Claude Code itself (asked for its own
+  usage), from the live status line, and from Claude Desktop's on-disk cache if you allow it.
+  This app reads no keychain item or credential file of Claude's.
+- **Installs beside the official app.** It has its own bundle id
+  (`com.paraswtf.superpowered-codenotch`), preferences, log subsystem, keychain items and
+  `~/Library/Application Support/Superpowered Codenotch`. It never updates itself: Sparkle
+  is off, so an upstream build can't replace it. Codenotch's other providers (Codex, Cursor,
+  Ollama, …) work as upstream describes.
+- **Builds without Xcode**, with the Command Line Tools only.
+
+## Build and run (Command Line Tools only)
+
+You need macOS 15 or later and the Command Line Tools (`xcode-select --install`). They must
+include a macOS 26 SDK: `/Library/Developer/CommandLineTools/SDKs/MacOSX26.*.sdk`. The scripts
+pick that SDK themselves. With only the macOS 27 SDK the build fails, because SwiftUI's
+`@State` macro plugin for it ships with Xcode. The first build fetches the Swift packages,
+so it needs the network.
+
+```sh
+Scripts/spm-build-app.sh --release      # builds build/Superpowered Codenotch.app (ad-hoc signed)
+ditto "build/Superpowered Codenotch.app" "/Applications/Superpowered Codenotch.app"
+open "/Applications/Superpowered Codenotch.app"
+```
+
+- Without `--release` you get a debug build in the same place.
+- `SIGN_IDENTITY="Apple Development: …" Scripts/spm-build-app.sh --release` signs with a
+  stable identity. That keeps keychain "Always Allow" grants for the other providers
+  across rebuilds (an ad-hoc signature is new on every build).
+- To update: quit the app, pull, build again and `ditto` again.
+- `Scripts/spm-test.sh` runs the Swift Testing suites (the `ClaudeControl` package, then the
+  app's `Tests/ForkSPM`). Upstream's XCTest suite needs Xcode (`make test`).
+- `Scripts/spm-run-sealed.sh` opens a sealed copy for a few seconds, with sample data and
+  nothing real touched: a safe first look (see [Development](#development)).
+- With Xcode installed, upstream's xcodegen project and `make build` / `make test` still work.
+
+## First use
+
+1. **Quit Superpowered Vibe Notch** if you use it. Both apps would keep rewriting the same
+   `settings.json`, so this one won't turn on while it runs. Settings offers
+   **Quit Superpowered Vibe Notch**.
+2. **Open the app.** The notch appears on the right edge of the screen. To move it to
+   another edge, use Settings › Appearance. To slide it along the edge, hold ⌥ and drag.
+   The first launch opens Settings on **Claude Code**. Later, open Settings from the orb
+   under the notch (a gear on hover) or from the menu bar item (**Settings…**).
+3. **Check the accounts** in Settings › Claude Code › Accounts. There is one row per
+   signed-in account, with where it runs and, with Claude Parallel Profiles, its stores
+   (**Show folders** lists each folder and its hooks).
+   - `~/.claude` is always found.
+   - A `~/.claude-<name>` (or `~/.claude_<name>`) folder is added when it is signed in or
+     has a running session. Look-alike folders, such as a backup copy or one with no login,
+     are only suggested (**Add** / **Dismiss**).
+   - **Add existing folder…** takes any other `CLAUDE_CONFIG_DIR`.
+   - **New account…** creates `~/.claude-<name>` and copies its sign-in command. Run that
+     command, then `/login`. With Claude Parallel Profiles it first explains that accounts
+     are added by signing in inside a VS Code window (the extension saves them, and that
+     window switches to the new account and reloads); the folder is the terminal-only
+     alternative, and stays yours to run in even after the extension adopts it.
+   - An account that runs only in VS Code windows has no **Copy launch command**: a window's
+     working copy belongs to that window. Settings says how to use it instead.
+   - Switch **Track sessions and hooks** off for any account this app should leave alone.
+     **Ring in notch** only shows or hides the ring.
+4. **Turn on Claude Code control.** The card at the top of the pane (also shown in the
+   sessions panel) lists every `settings.json` it will edit: those of the folders Claude
+   Code runs in. With Claude Parallel Profiles that is `~/.claude` and one per VS Code
+   workspace (a workspace's folder stays after its window closes; ones opened later are set
+   up automatically); its account stores never get hooks.
+   - Click **Turn on**. If Superpowered Vibe Notch's hooks are present, the button says
+     **Take over and turn on**: it removes those hooks and first puts back the status line
+     they wrapped. It also cleans what that app wrote into Claude Parallel Profiles' stores
+     and `~/.claude-shared` (its entries, its scripts, and the `settings.json` files it
+     created there with their backups), listed on the card, and nothing else there.
+   - **Not now** writes nothing. Sessions still show, from Claude Code's own session files,
+     but you get no approvals from the notch and no "done" alerts. You can turn it on later
+     with **Turn on…** under *Hooks and status line*.
+5. **Restart Claude Code sessions that were already running.** Claude Code picks up a
+   session's hooks when it starts, so an older session may need a restart before its prompts
+   reach the notch. New sessions work at once.
+6. **Allow the macOS prompts** as they appear:
+   - *Notifications*, on the first banner.
+   - *Automation* for iTerm2 or Terminal, the first time you jump to a tab or send a reply
+     (System Settings › Privacy & Security › Automation).
+   - If a keychain prompt ever asks for Claude Code's credentials on this app's behalf,
+     deny it: this app never needs them.
+
+### Upgrading from an earlier build of this fork
+
+- **Replace the old copy, don't keep both.** Launching the new build quits the older
+  instance (same bundle id), but an old `build/Superpowered Codenotch.app` launched again
+  later would quit the new one and put its own rules back. Quit the old app, then replace or
+  delete every old copy (`/Applications`, the fork's `build/`) before opening the new one.
+  Until then, set *Check usage every* to **Off** in the old build: before this version the
+  usage check could run inside Claude Parallel Profiles' account stores.
+- **Your earlier yes carries over.** No consent card appears. On the first launch the hooks
+  go into `~/.claude` and every VS Code workspace's folder, and a one-time notice ("Claude
+  Code control now covers your VS Code workspaces") names them, with **OK** and
+  **Turn off**.
+- **Stores are cleaned by themselves.** Hooks an earlier build installed into the stores
+  and `~/.claude-shared` come out on the first pass, and (after your yes) Superpowered Vibe
+  Notch's leftovers there go too: its scripts, and a `settings.json` that ends up `{}` when
+  no backup beside it holds anything of yours, together with those backups.
+
+## Everyday use
+
+- **Rings.** The inner ring is the current 5-hour session and the outer ring is the weekly
+  limit. Hover a ring for the limit rows and its sessions. Clicking a session there opens the
+  panel when it needs you and its terminal otherwise (Settings › *Clicking a session in the
+  hover card*).
+- **The sessions panel.** Click a Claude ring, or set a shortcut (⌃⌥Space or ⌥⌘J) in
+  Settings › *Panel shortcut*. macOS also uses ⌃⌥Space to switch input sources, so pick
+  ⌥⌘J if you type in more than one language.
+  - Sessions are grouped under *Needs you*, *Ready for review*, *Working* and *Idle*. Chips
+    filter by account.
+  - Each row carries its actions: **Allow / Always / Deny**, a question's options (or
+    **Other…**), **Review plan / Approve**, **Show terminal**. Click a row for the
+    conversation and a reply box.
+  - The panel opens by itself when a session needs you, unless you are already in its
+    terminal or a full-screen app is in front. Settings › *Open the sessions panel* sets this
+    to Never, Needs you, or Needs you or done.
+- **Keys in the panel.**
+
+  | Key | Action |
+  |---|---|
+  | ↑ ↓ | select |
+  | ⏎ | open |
+  | ⌘⏎ | allow, approve, or mark reviewed |
+  | ⌥⌘⏎ | always allow |
+  | ⌘⌫ | deny |
+  | 1–4 | pick an option |
+  | ⌘J | jump to the terminal |
+  | ⌘R | mark reviewed |
+  | ⌘⇧R | mark all reviewed |
+  | Esc | back, then close |
+
+  A bare ⏎ never approves anything.
+- **Replies** are typed into the session's terminal for tmux, iTerm2 and Terminal.app. They
+  go in only while Claude Code's own prompt is waiting, never into one of its dialogs.
+  Dialogs are answered in the panel or in the terminal. For other terminals, use
+  **Show terminal**.
+- **Jump to the terminal:**
+  - iTerm2, Terminal.app and tmux: selects the exact tab or pane.
+  - Ghostty: selects the tab with the session's folder. cmux: selects its surface.
+  - VS Code, Cursor, Windsurf and VSCodium: brings up the window with the session's
+    workspace.
+  - Anything else: brings the terminal app to the front.
+- **Usage** is checked every 5 minutes, and only when nothing fresher has arrived. In
+  Settings › *Usage* you can choose Off, 5, 10, 15 or 30 minutes, use **Refresh now**, and
+  see each account's last reading.
+
+## Privacy: what it reads, writes and runs
+
+- **Never:**
+  - a Claude login token, keychain item or credential file (`.credentials.json`,
+    `sessions/*.key`);
+  - a network request of its own for Claude.
+- **Reads:**
+  - each config folder's `.claude.json` (Claude Parallel Profiles' stores included): only
+    the signed-in identity and Claude Code's cached usage figures; the rest of the file is
+    skipped over, never parsed;
+  - for a session in a shared `sessions/` folder, its process's `CLAUDE_CONFIG_DIR` from the
+    kernel (same user only; nothing else of the environment is kept), to tell which account
+    runs it;
+  - its `sessions/` registry and the transcripts under `projects/`, for titles, tasks,
+    context and the conversation;
+  - with **Also read Claude Desktop's cached usage** on (the default), the cached `/usage`
+    response Claude Desktop keeps for the same organization.
+- **Runs `claude`** only for three things:
+  - to find it: `command -v claude` in your login shell, once, when it isn't in a usual place;
+  - to check its version: `claude --version`;
+  - to check usage: `claude -p` in stream-JSON mode, with hooks off, no session saved and an
+    empty working folder. It asks only for `get_usage` (what `/usage` shows) and makes no
+    model request. Claude Code may update its own files while it runs. It runs once per
+    account, in a folder Claude Code runs in as that account (with Claude Parallel Profiles,
+    one of its VS Code workspaces' folders, `~/.claude` only when it has none), never in a
+    Claude Parallel Profiles store; an account no window runs isn't checked. Who the folder is
+    signed in as is checked right before and after; an answer from a folder that changed
+    hands meanwhile is thrown away.
+
+  The usage check runs from the first launch, before you turn on control. Set *Check usage
+  every* to **Off** to never run it. Readings then come only from the live status line and
+  Claude Code's cache.
+- **Writes, only after you turn it on:**
+  - hook entries and a status line wrapper in the `settings.json` of each folder a tracked
+    account runs in (never a Claude Parallel Profiles store or `~/.claude-shared`);
+  - in stores and `~/.claude-shared`, only to take out its own or Superpowered Vibe Notch's
+    leftovers, with a backup kept until that cleanup is finished;
+  - two scripts in `<config folder>/hooks/`: `superpowered-codenotch-hook.py` and
+    `superpowered-codenotch-statusline.py`. They run with the developer tools' `python3` and
+    talk only to this app's local socket.
+  - Before every change it saves a backup, `settings.json.superpowered-codenotch-<time>.bak`,
+    and keeps the five newest. The file as it was before the first change is kept as
+    `settings.json.superpowered-codenotch.original.bak`.
+  - Nothing is written to a `settings.json` that fails to parse.
+- **Its own state** lives in `~/Library/Application Support/Superpowered Codenotch/Claude/`:
+  accounts, the review queue, usage state and the hook socket.
+- **Turning it off.** Switch off *Hooks in tracked accounts* in Settings › Claude Code. That
+  takes the hooks and scripts out of every account and restores each status line exactly.
+  Untracking or forgetting an account does the same for that account; with Claude Parallel
+  Profiles, `~/.claude` keeps them while another account is tracked (the extension copies
+  whichever account you last used into it), and an untracked account's sessions there are
+  hidden, their permission prompts left to the terminal.
+- **Removing the app.** Turn the hooks off first, then quit. Delete the app and
+  `~/Library/Application Support/Superpowered Codenotch`, then run
+  `defaults delete com.paraswtf.superpowered-codenotch`.
+
+### Claude Parallel Profiles
+
+**Compatibility.** Works alongside the VS Code extension
+[Claude Parallel Profiles](https://github.com/rivantmedia/claude-parallel-profiles)
+(checked against its 1.4.1 layout), with nothing to set up. The app recognises it by
+`~/.claude-windows/.manifest.json` or a store's `.parallel-accounts-store` marker. Without
+them, or after the extension is uninstalled, folders are treated as plain `CLAUDE_CONFIG_DIR`
+folders. The app never writes the manifest, a marker, a `.claude.json`, a credential or the
+shared history. It never runs `claude` in a store and never reads Claude Code's Keychain
+items, so the extension's switching, mirroring into `~/.claude` and uninstall work as before.
+
+The VS Code extension Claude Parallel Profiles keeps each account in a store it creates
+(`~/.claude-<name>`, marked `.parallel-accounts-store` and listed under `created` in
+`~/.claude-windows/.manifest.json`), runs every VS Code window on a working copy
+(`~/.claude-windows/<id>`), mirrors the last-used account into `~/.claude`, and links one
+shared history (`~/.claude-shared`) into all of them. A `~/.claude-<name>` profile of your
+own that it adopted (listed under `stores` only) stays a folder you run Claude Code in: it
+keeps its hooks and usage check. This app follows that layout:
+
+- **One ring per account.** Folders are grouped by who is signed in, so two accounts are two
+  rings however many stores and windows there are. `~/.claude-shared` is never an account.
+  When the extension mirrors another account into `~/.claude`, new terminal sessions there
+  go to that account's ring; a session already running stays with the account it started
+  as (and its live rate limits count for that account). One the app can't place is shown on
+  the current ring, and its rate limits are left out.
+- **Hooks where Claude Code runs:** `~/.claude` and every VS Code workspace's folder. A
+  workspace opened later gets them within seconds. Stores are read (so an account with no
+  open window still has its ring and usage) but never hooked or used for the usage check,
+  and written only to take leftovers out.
+- **Sessions:** the shared `sessions/` folder is read once, and each session goes to the
+  account its process runs as.
+- **Names, switches, order, muted alerts and the menu-bar choice** you gave the rings of
+  earlier versions (one per folder: `claude`, `claude-paras`, …) move to the account's ring
+  once; rings like `claude-shared` disappear. `~/.claude`'s old ring goes to the account its
+  own `accountUuid` names, not to whichever account the extension mirrored in last.
+- To see what the app makes of your folders without running it:
+  `swift run --package-path Packages/ClaudeControl spcn-inspect-accounts` (read-only).
+- **Logs:** `log stream --predicate 'subsystem == "com.paraswtf.superpowered-codenotch"' --level debug`.
+
+## Development
+
+- **Sealed mode.** `SPCN_SAFE_MODE=1` (or `CODENOTCH_DEMO=1`) starts the app sealed: fixture
+  data, and no keychain, session, network or subprocess access. It fails closed: any value
+  except empty, `0`, `false`, `no` or `off` seals the run. `Scripts/spm-run-sealed.sh`
+  builds a separate sealed bundle (`….sealed` bundle id), runs it for at most 10 seconds and
+  reports what it touched:
+  - `--edge right|left|top|bottom` sets the edge;
+  - `--open-panel sessions` opens the panel and checks where it sits;
+  - `--panel-self-test` drives the panel's keys and clicks;
+  - `--snapshot-claude <dir>` renders the notch and panel sheets to PNGs.
+- **Snapshots.** `Scripts/spm-snapshots.sh <dir>` renders the panel, chat and settings sheets
+  of `Packages/ClaudeControl` from fixtures.
+- **Development switches** (`1`, `true` or `yes`): `--no-install` / `SPCN_NO_INSTALL`,
+  `SPCN_NO_NOTIFICATIONS`, `SPCN_USAGE_PROBE`, `--dump-state` / `SPCN_DUMP_STATE` and
+  `--dev-console` / `SPCN_DEV_CONSOLE`. Path switches: `SPCN_SUPPORT_DIR`, `SPCN_SOCKET`
+  and `SPCN_EXTRA_CONFIG_DIRS` (`:`-separated). See `Engine/Core/DevFlags.swift`. The
+  installed hook scripts follow `SPCN_SOCKET` only when `SPCN_DEV=1` is set too.
+- **Sealed-only switches** (ignored in a live run): `SPCN_OPEN_PANEL_ON_LAUNCH=<route>`,
+  `SPCN_PANEL_CLOSE_AFTER=<seconds>`, `SPCN_PANEL_SELF_TEST=1`,
+  `SPCN_SEALED_SWITCH_OFF=<ring id>`, `SPCN_SEALED_CAPTURE=<dir>` (timeline PNGs) and
+  `SPCN_SNAPSHOT_CLAUDE=<dir>` (render, then exit). See `Scripts/spm-run-sealed.sh` and
+  `Sources/ClaudeBridge/ClaudeSealedDemo.swift`.
+- **Simulated sessions.** `Packages/ClaudeControl/DevTools/simulate-sessions.py` drives a
+  running build with fake Claude Code sessions over a private socket (`SPCN_SOCKET`,
+  `SPCN_SUPPORT_DIR`, `SPCN_EXTRA_CONFIG_DIRS`; see its header). It never touches a real
+  Claude config.
+- **Checks.**
+  - `Scripts/check-seams.sh`: every edit to upstream's files is a listed, tagged seam.
+  - `Scripts/verify-token-free.sh`: no Claude path can read a token.
+
+  Both compare against `upstream/main` (`git remote add upstream
+  https://github.com/vinzdg/codenotch`) or `UPSTREAM_REF=<commit>`.
+  `Packages/ClaudeControl/Scripts/embed-scripts.sh --check` confirms the embedded hook
+  scripts match the `.py` files.
+- **Licences.** See [License](#license) at the end: Codenotch is MIT; `Packages/ClaudeControl` is Apache-2.0, derived from Superpowered Vibe Notch and Vibe Notch.
+
+*The rest of this README is upstream Codenotch's.*
+
+---
+
 <div align="center">
 
 ![Codenotch](docs/design/codenotch-banner.png)
 
 [![CI](https://github.com/vinzdg/codenotch/actions/workflows/ci.yml/badge.svg)](https://github.com/vinzdg/codenotch/actions/workflows/ci.yml)
-![Platform](https://img.shields.io/badge/platform-macOS%2026%2B-black)
+![Platform](https://img.shields.io/badge/platform-macOS%2015%2B-black)
 ![Swift](https://img.shields.io/badge/swift-5-orange)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -405,3 +719,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 ## License
 
 [MIT](LICENSE) © 2026 Vinz
+
+**Superpowered Codenotch** is a fork of Codenotch (MIT, © 2026 Vinz).
+`Packages/ClaudeControl` is Apache-2.0, derived from Superpowered Vibe Notch and
+Vibe Notch (© 2025 Farouq Aldori); see its [LICENSE](Packages/ClaudeControl/LICENSE)
+and [NOTICE](Packages/ClaudeControl/NOTICE). It links swift-markdown (Apache-2.0)
+and swift-cmark (BSD-2-Clause). The app bundle carries every one of these licences
+and notices in `Contents/Resources`.

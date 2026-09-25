@@ -1076,7 +1076,9 @@ final class Preferences: ObservableObject {
     /// update, and wiping data on every Sparkle update would be catastrophic.
     /// It has to be something the user asks for.
     static func eraseAllData() {
-        let bundleID = Bundle.main.bundleIdentifier ?? "com.vinz.codenotch"
+        // Fork: only ever this app's own domain, never upstream's com.vinz.codenotch.
+        let bundleID = Bundle.main.bundleIdentifier.flatMap { Fork.ownsBundleIdentifier($0) ? $0 : nil } // Fork: own domain only
+            ?? Fork.bundleID
         UserDefaults.standard.removePersistentDomain(forName: bundleID)
         UserDefaults.standard.synchronize()
 

@@ -52,7 +52,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Only strictly older instances are asked to go, which is what keeps two
     /// simultaneous launches from each terminating the other and leaving none.
     private static func retireOlderInstances() {
-        guard let identifier = Bundle.main.bundleIdentifier else { return }
+        // Fork: only ever our own bundle id, never the official Codenotch's.
+        guard let identifier = Bundle.main.bundleIdentifier,
+              Fork.ownsBundleIdentifier(identifier) else { return } // Fork: own bundle id only
         let mine = ProcessInfo.processInfo.processIdentifier
         let launched = NSRunningApplication.current.launchDate ?? Date()
         for other in NSRunningApplication.runningApplications(withBundleIdentifier: identifier)
@@ -76,9 +78,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// any `~/.claude-<slug>` — found once at launch. Each gets a usage
     /// provider and a session monitor of its own, keyed by the same id, so a
     /// work login's sessions spin the work ring and nobody else's.
-    private let claudeProfiles = ClaudeProfile.discover()
-    private let codexProfiles = CodexProfile.discover()
-    private let antigravityProfiles = AntigravityProfile.discover()
+    /// Fork: none. Claude rings and sessions come from ClaudeBridge, which reads no token.
+    private let claudeProfiles: [ClaudeProfile] = [] // Fork: U1, token-free Claude (ClaudeBridge)
+    private let codexProfiles = Fork.isSealed ? [] : CodexProfile.discover() // Fork: sealed reads no Codex login
+    private let antigravityProfiles = Fork.isSealed ? [] : AntigravityProfile.discover() // Fork: sealed reads no Antigravity login
     /// Held as concrete providers, not just handed to the store: the token
     /// refresher needs to ask one of them how long its token has left, and the
     /// protocol has no business carrying that.
@@ -98,7 +101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Before Preferences reads anything, or the first launch flag and
         // every choice would be read from an empty domain.
-        Preferences.migrateFromPreviousName()
+        Fork.prepareDefaults() // Fork: U2, registered defaults (weekly ring outside), no migration
         let preferences = Preferences()
         self.preferences = preferences
 
@@ -112,7 +115,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // `CODENOTCH_DEMO=1` puts the design frame's three providers on screen
         // with its numbers, for screenshots and for eyeballing the layout.
-        if ProcessInfo.processInfo.environment["CODENOTCH_DEMO"] == "1" {
+        // Fork: sealed (`Fork.isSealed`, also `SPCN_SAFE_MODE=1`) — no provider,
+        // updater, phone link, token refresher or session monitor is created.
+        if Fork.isSealed { // Fork: sealed, fixtures only
             fleet.setSnapshots(Fixtures.snapshots())
         } else {
             // DeepSeek's Platform usage page is a browser-session provider:
@@ -161,7 +166,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let customProviders: [UsageProvider] = preferences.customEndpoints.filter(\.isEnabled).map { endpoint in
                 CustomEndpointProvider(endpoint: endpoint)
             }
-            let allProviders: [UsageProvider] = claudeProviders
+            let allProviders: [UsageProvider] = ClaudeBridge.shared.launchUsageProviders() + claudeProviders // Fork: U3
                 + [CursorLocalProvider()]
                 + codexProfiles.map { CodexLocalProvider(profile: $0) }
                 + antigravityProfiles.map { AntigravityProvider(profile: $0) }
@@ -290,7 +295,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             } else {
                 let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-                dir = appSupport.appendingPathComponent("Codenotch/phone-link", isDirectory: true)
+                dir = appSupport.appendingPathComponent("\(Fork.applicationSupportFolder)/phone-link", isDirectory: true) // Fork: own folder
             }
             let phoneSecretStore: PhoneLinkSecretStore = NSClassFromString("XCTestCase") != nil
                 ? InMemoryPhoneLinkSecretStore()
@@ -749,7 +754,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // What each agent is doing right now, so the notch can say whether it is
         // still working without you switching to it.
-        var monitors: [String: any AgentActivityMonitor] = [
+        var monitors: [String: any AgentActivityMonitor] = Fork.isSealed ? [:] : [ // Fork: sealed starts no monitor
             "cursor": CursorActivityMonitor(),
             "grok": GrokActivityMonitor(),
             "gemini-api": GeminiAPIActivityMonitor(),
@@ -868,6 +873,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         store?.isBusy = { [weak self, weak activity] in
             (activity?.isBusy ?? false) || (self?.lmstudioMetrics?.isBusy ?? false)
         }
+        ClaudeBridge.shared.attach(fleet: fleet, store: store, preferences: preferences) // Fork: U4, wraps callbacks; before any controller exists
 
         // Applied last, right before the panel goes up: every one of these
         // calls a `NotchFleet.apply(...)` that can trigger `reconcile()` on
@@ -936,7 +942,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// you were most recently in.
     @MainActor
     private func announceCompletions(sessions: [String: [AgentSession]]) {
-        let events = completions.absorb(sessions)
+        let events = completions.absorb(sessions).filter { !ClaudeBridge.ownsProvider($0.providerID) } // Fork: U5, Claude announces its own
         guard let event = events.first, let preferences, let fleet = notchFleet else { return }
         Log.usage.info("session \(event.session.name, privacy: .public) \(String(describing: event.reason), privacy: .public)")
 

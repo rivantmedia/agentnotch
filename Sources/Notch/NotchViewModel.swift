@@ -91,6 +91,7 @@ final class NotchViewModel: ObservableObject {
     /// Clicked open, so it stays open until clicked shut again. A gesture,
     /// not a setting: it lasts as long as this session of looking at it.
     @Published var isPinned = false
+    @Published var suppressesTooltips = false // Fork: U9, set while the Claude sessions panel is open
 
     /// The standing choice from Settings — "Always show".
     ///
@@ -961,7 +962,7 @@ final class NotchViewModel: ObservableObject {
         // present; assuming four quota windows for every local model overflows laptops.
         let slack = NotchLayout.slack(for: edge,
             maxCardHeight: snapshots.isEmpty ? NotchLayout.maxCardHeight(sessionCap: 0)
-                : contentCardHeight(sessionCap: 0),
+                : contentCardHeight { _ in 0 }, // Fork: GUX-1, per-card caps
             notchScale: sizeScale)
         let packed = NotchLayout.shapeLength(cellCount: cellCount, edge: edge,
                                              flare: flare, spacing: 0)
@@ -1033,34 +1034,78 @@ final class NotchViewModel: ObservableObject {
                                            hasResetCredits: hasResetCredits)
     }
 
-    private func contentCardHeight(sessionCap: Int) -> CGFloat {
+    // Fork: GUX-1 begin. Every card's session cap is solved for that card
+    // (its own windows, groups, plan, token usage and reset credits) rather
+    // than for a worst-case four-window card: on a side edge each extra ring
+    // takes room from the budget, and budgeting every card as the tallest
+    // one left a two-window Claude card listing no sessions at all beside
+    // half a screen of room. The drawn card, the hover region and the panel
+    // size all read the same number (`sessionCap(for:)`).
+    private func contentCardHeight(sessionCap: (ProviderSnapshot) -> Int) -> CGFloat {
         snapshots.map { snapshot in
-            NotchLayout.cardHeight(windowCount: snapshot.windows.count,
-                groupCount: Set(snapshot.windows.compactMap(\.group)).count,
-                moneyWindowCount: snapshot.windows.filter { $0.money != nil }.count,
-                usageDetailGroupCount: snapshot.usageDetail?.visibleGroups.count ?? 0,
-                sessionCount: snapshot.localModel == nil ? sessionCap + 1 : 0,
-                sessionCap: sessionCap,
-                statusMessage: snapshot.statusMessage,
-                blockMessage: snapshot.block?.summary(now: now),
-                hasTokenUsage: snapshot.tokenUsage != nil,
-                hasPlan: snapshot.plan != nil,
-                hasResetCredits: snapshot.hasAvailableResetCredits,
-                localModelName: snapshot.localModel?.name,
-                showsLocalPerformance: snapshot.showsLocalPerformance,
-                localLedgerRows: snapshot.localLedgerRowCount,
-                compactRowCount: snapshot.compactRowCount,
-                showsDeepSeekPricing: deepSeekPricingEnabled)
+            let cap = sessionCap(snapshot)
+            return cardHeight(of: snapshot, sessionCount: snapshot.localModel == nil ? cap + 1 : 0, sessionCap: cap)
         }.max() ?? 0
     }
 
-    func maxCardHeight(cellCount: Int) -> CGFloat {
-        let cap = sessionCap(cellCount: cellCount)
-        return snapshots.isEmpty
-            ? NotchLayout.maxCardHeight(sessionCap: cap, hasTokenUsage: hasTokenUsage, hasPlan: hasPlan,
-                                        hasResetCredits: hasResetCredits)
-            : contentCardHeight(sessionCap: cap)
+    private func cardHeight(of snapshot: ProviderSnapshot, sessionCount: Int, sessionCap: Int) -> CGFloat {
+        NotchLayout.cardHeight(windowCount: snapshot.windows.count,
+            groupCount: Set(snapshot.windows.compactMap(\.group)).count,
+            moneyWindowCount: snapshot.windows.filter { $0.money != nil }.count,
+            usageDetailGroupCount: snapshot.usageDetail?.visibleGroups.count ?? 0,
+            sessionCount: sessionCount,
+            sessionCap: sessionCap,
+            statusMessage: snapshot.statusMessage,
+            blockMessage: snapshot.block?.summary(now: now),
+            hasTokenUsage: snapshot.tokenUsage != nil,
+            hasPlan: snapshot.plan != nil,
+            hasResetCredits: snapshot.hasAvailableResetCredits,
+            localModelName: snapshot.localModel?.name,
+            showsLocalPerformance: snapshot.showsLocalPerformance,
+            localLedgerRows: snapshot.localLedgerRowCount,
+            compactRowCount: snapshot.compactRowCount,
+            showsDeepSeekPricing: deepSeekPricingEnabled)
     }
+
+    /// How many sessions `snapshot`'s card lists before it summarises the rest.
+    func sessionCap(for snapshot: ProviderSnapshot) -> Int {
+        sessionCap(for: snapshot, cellCount: snapshots.count)
+    }
+
+    func sessionCap(for snapshot: ProviderSnapshot, cellCount: Int) -> Int {
+        guard screenSize != .zero else { return NotchLayout.defaultSessionCap }
+        return sessionCap(for: snapshot, budget: cardBudget(cellCount: cellCount))
+    }
+
+    /// Walked up like `NotchLayout.sessionsFitting`, and costed the same way
+    /// (as though something were still hidden). The session list is the last
+    /// block of the card and adds to it independently of the rest, so the
+    /// card without sessions is measured once and only the list is re-costed.
+    private func sessionCap(for snapshot: ProviderSnapshot, budget: CGFloat) -> Int {
+        let base = cardHeight(of: snapshot, sessionCount: 0, sessionCap: 0)
+        let bare = NotchLayout.cardHeight(windowCount: 1)
+        var fits = 0
+        for n in 1...NotchLayout.sessionCeiling {
+            let list = NotchLayout.cardHeight(windowCount: 1, sessionCount: n + 1, sessionCap: n) - bare
+            guard base + list <= budget else { break }
+            fits = n
+        }
+        return fits
+    }
+
+    func maxCardHeight(cellCount: Int) -> CGFloat {
+        guard !snapshots.isEmpty else {
+            let cap = sessionCap(cellCount: cellCount)
+            return NotchLayout.maxCardHeight(sessionCap: cap, hasTokenUsage: hasTokenUsage, hasPlan: hasPlan,
+                                             hasResetCredits: hasResetCredits)
+        }
+        guard screenSize != .zero else {
+            return contentCardHeight { _ in NotchLayout.defaultSessionCap }
+        }
+        let budget = cardBudget(cellCount: cellCount)
+        return contentCardHeight { self.sessionCap(for: $0, budget: budget) }
+    }
+    // Fork: GUX-1 end.
 
     /// How tall the tallest card may be before the panel runs off the screen.
     ///

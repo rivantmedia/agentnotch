@@ -13,6 +13,11 @@ import Sparkle
 /// the app has to be writable by the user installing the update (true for a
 /// normal drag to /Applications, false if it was copied there with `sudo`), and
 /// the replacement is applied on relaunch rather than mid-flight.
+///
+/// Fork: inert while `Fork.updatesEnabled` is false. The Sparkle controller is
+/// never created, so no feed is fetched and nothing is installed — upstream's
+/// feed would replace this build with the official Codenotch. The Info.plist
+/// carries no feed URL or key either.
 @MainActor
 final class Updater: NSObject, ObservableObject, SPUUpdaterDelegate {
     /// What the last check came to, in words the settings sheet can show.
@@ -53,8 +58,9 @@ final class Updater: NSObject, ObservableObject, SPUUpdaterDelegate {
     /// Mirrors the preference, so switching it off really does stop the checks
     /// rather than only hiding them.
     var automatic: Bool {
-        get { controller.updater.automaticallyChecksForUpdates }
+        get { Fork.updatesEnabled && controller.updater.automaticallyChecksForUpdates } // Fork: updates off
         set {
+            guard Fork.updatesEnabled else { return } // Fork: updates off
             controller.updater.automaticallyChecksForUpdates = newValue
             controller.updater.automaticallyDownloadsUpdates = newValue
         }
@@ -64,16 +70,23 @@ final class Updater: NSObject, ObservableObject, SPUUpdaterDelegate {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
     }
 
-    var lastChecked: Date? { controller.updater.lastUpdateCheckDate }
+    var lastChecked: Date? { Fork.updatesEnabled ? controller.updater.lastUpdateCheckDate : nil } // Fork: updates off
 
     /// Starts the scheduled checks. Deliberately not in `init`: the controller
     /// is lazy so that `self` exists before it is handed over as the delegate.
-    func start() { _ = controller }
+    func start() {
+        guard Fork.updatesEnabled else { return } // Fork: updates off
+        _ = controller
+    }
 
     /// The manual path, for someone who does not want to wait for the schedule.
     /// This one *does* show UI — it was asked for, so silence would read as a
     /// broken button.
     func checkNow() {
+        guard Fork.updatesEnabled else { // Fork: updates off
+            outcome = .failed(L10n.t("Updates are off in Superpowered Codenotch. Pull the latest source and rebuild to update."))
+            return
+        }
         outcome = .checking
         controller.updater.checkForUpdates()
         // Never left on "Checking…". Sparkle reports every ending it knows
