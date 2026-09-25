@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>Superpowered Codenotch</string>
+	<string>Agent Notch</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -29,7 +29,7 @@
 		<string>tr</string>
 	</array>
 	<key>CFBundleName</key>
-	<string>Superpowered Codenotch</string>
+	<string>Agent Notch</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -39,9 +39,9 @@
 	<key>LSMinimumSystemVersion</key>
 	<string>15.0</string>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>Superpowered Codenotch selects the terminal tab a Claude session runs in and types your replies into it.</string>
+	<string>Agent Notch selects the terminal tab a Claude session runs in and types your replies into it.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Superpowered Codenotch answers your phone on this network so it can show your usage.</string>
+	<string>Agent Notch answers your phone on this network so it can show your usage.</string>
 	<key>SUEnableAutomaticChecks</key>
 	<false/>
 </dict>

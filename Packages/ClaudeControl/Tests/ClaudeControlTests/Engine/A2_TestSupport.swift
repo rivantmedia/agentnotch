@@ -15,7 +15,7 @@ extension TestPaths {
     nonisolated static func temporaryPath(_ label: String) -> String {
         // /var → /private/var, so paths compare equal to what the code resolves.
         let temporary = URL(fileURLWithPath: NSTemporaryDirectory()).resolvingSymlinksInPath().path
-        return (temporary as NSString).appendingPathComponent("spcn-\(label)-\(UUID().uuidString.prefix(8))")
+        return (temporary as NSString).appendingPathComponent("agentnotch-\(label)-\(UUID().uuidString.prefix(8))")
     }
 }
 
@@ -26,13 +26,13 @@ nonisolated enum ScriptPaths {
     static let scripts = TestPaths.scripts
 
     /// A socket path baked into scripts the tests install; they always
-    /// override it with SPCN_SOCKET.
+    /// override it with AGENTNOTCH_SOCKET.
     static let unusedSocket = TestPaths.unusedSocket
 }
 
 /// A UserDefaults domain of its own for one test, removed afterwards.
 final class TestDefaults {
-    let name = "spcn-tests-\(UUID().uuidString)"
+    let name = "agentnotch-tests-\(UUID().uuidString)"
     let defaults: UserDefaults
 
     init() {

@@ -24,7 +24,7 @@ nonisolated let realisticSettings = """
       ]}
     ],
     "Stop": [{"hooks": [{"type": "command", "command": "afplay /System/Library/Sounds/Glass.aiff"}]}],
-    "TeammateIdle": [{"hooks": [{"type": "command", "command": "python3 '/old/path/hooks/superpowered-codenotch-hook.py'"}]}]
+    "TeammateIdle": [{"hooks": [{"type": "command", "command": "python3 '/old/path/hooks/agentnotch-hook.py'"}]}]
   },
   "statusLine": {"type": "command", "command": "~/.claude/statusline.sh", "padding": 2, "refreshInterval": 5}
 }
@@ -57,8 +57,8 @@ nonisolated enum JSONTest {
 
 struct HookInstallerPlanTests {
     let home = "/Users/me"
-    var command: String { HookCommands.command(runningScript: "/Users/me/.claude-work/hooks/superpowered-codenotch-hook.py", python: "/usr/bin/python3") }
-    var statusCommand: String { HookCommands.command(runningScript: "/Users/me/.claude-work/hooks/superpowered-codenotch-statusline.py", python: "/usr/bin/python3") }
+    var command: String { HookCommands.command(runningScript: "/Users/me/.claude-work/hooks/agentnotch-hook.py", python: "/usr/bin/python3") }
+    var statusCommand: String { HookCommands.command(runningScript: "/Users/me/.claude-work/hooks/agentnotch-statusline.py", python: "/usr/bin/python3") }
     let latest = ClaudeCodeVersion(major: 2, minor: 1, patch: 280)
 
     private func install(_ data: Data?, statusLine: HookInstaller.StatusLineIntent = .leave, version: ClaudeCodeVersion? = nil,
@@ -180,7 +180,7 @@ struct HookInstallerPlanTests {
     /// Commands written in an earlier form (`python3 '<script>'`) are
     /// replaced by the fail-open one, not kept beside it.
     @Test func olderCommandFormsAreReplaced() throws {
-        let old = "python3 '/Users/me/.claude-work/hooks/superpowered-codenotch-hook.py'"
+        let old = "python3 '/Users/me/.claude-work/hooks/agentnotch-hook.py'"
         let settings = #"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"\#(old)"}]}]}}"#
         let json = try JSONTest.written(install(Data(settings.utf8)))
         #expect(JSONTest.commands(in: json, event: "Stop") == [command])
@@ -323,7 +323,7 @@ struct HookInstallerPlanTests {
 
     @Test func rewrapKeepsTheEntryAndUpdatesTheCommand() throws {
         let previous = try JSONTest.object(#"{"type":"command","command":"starship prompt","padding":3}"#)
-        let settings = Data(#"{"statusLine":{"type":"command","command":"python '/x/hooks/superpowered-codenotch-statusline.py'","padding":3}}"#.utf8)
+        let settings = Data(#"{"statusLine":{"type":"command","command":"python '/x/hooks/agentnotch-statusline.py'","padding":3}}"#.utf8)
         let plan = install(settings, statusLine: .wrap(command: statusCommand), saved: previous)
         let json = try JSONTest.written(plan)
         #expect(json["statusLine"]?["command"]?.stringValue == statusCommand)
@@ -338,7 +338,7 @@ struct HookInstallerPlanTests {
     }
 
     @Test func rewrapNeverChainsToItself() throws {
-        let ours = try JSONTest.object(#"{"type":"command","command":"python3 '/x/hooks/superpowered-codenotch-statusline.py'"}"#)
+        let ours = try JSONTest.object(#"{"type":"command","command":"python3 '/x/hooks/agentnotch-statusline.py'"}"#)
         let settings = Data(OrderedJSON.object(["statusLine": ours]).serialized().utf8)
         let plan = install(settings, statusLine: .wrap(command: statusCommand), saved: ours)
         #expect(plan.previousStatusLine == nil)
@@ -418,7 +418,7 @@ struct HookInstallerPlanTests {
 
     /// Ours wrapping Vibe Island's (silent) status line: ours stops chaining to it.
     @Test func vibeIslandRemovalDropsItFromOurChain() throws {
-        let settings = Data(#"{"statusLine":{"type":"command","command":"python3 '/x/hooks/superpowered-codenotch-statusline.py'"}}"#.utf8)
+        let settings = Data(#"{"statusLine":{"type":"command","command":"python3 '/x/hooks/agentnotch-statusline.py'"}}"#.utf8)
         let saved = try JSONTest.object(#"{"type":"command","command":"$HOME/.vibe-island/bin/vibe-island-statusline"}"#)
         let plan = HookInstaller.planLegacyRemoval(existingData: settings, kinds: [.vibeIsland], savedPreviousStatusLine: saved, home: home)
         #expect(plan.settings == .alreadyCurrent)
@@ -431,8 +431,8 @@ struct HookInstallerPlanTests {
 /// The installer changes only the values it owns, in the file's own layout.
 struct SettingsFidelityTests {
     let home = "/Users/me"
-    var command: String { HookCommands.command(runningScript: "/Users/me/.claude/hooks/superpowered-codenotch-hook.py", python: "python3") }
-    var statusCommand: String { HookCommands.command(runningScript: "/Users/me/.claude/hooks/superpowered-codenotch-statusline.py", python: "python3") }
+    var command: String { HookCommands.command(runningScript: "/Users/me/.claude/hooks/agentnotch-hook.py", python: "python3") }
+    var statusCommand: String { HookCommands.command(runningScript: "/Users/me/.claude/hooks/agentnotch-statusline.py", python: "python3") }
 
     /// As Claude Code writes it: `JSON.stringify(value, null, 2)`, unsorted
     /// keys, numbers and escapes as the user typed them.
@@ -841,7 +841,7 @@ nonisolated struct HookInstallerFileTests {
             try? Data(#"{"model":"opus","permissions":{"allow":["Bash(ls)"]}}"#.utf8)
                 .write(to: URL(fileURLWithPath: settingsPath), options: .atomic)
         }) { context in
-            HookInstaller.planInstall(existingData: context.data, hookCommand: "python3 '/x/hooks/superpowered-codenotch-hook.py'",
+            HookInstaller.planInstall(existingData: context.data, hookCommand: "python3 '/x/hooks/agentnotch-hook.py'",
                                       version: nil, statusLine: .leave, savedPreviousStatusLine: nil)
         }
         #expect(outcome == .installed)
@@ -862,7 +862,7 @@ struct InstallerGuardTests {
                      realHome + "/.config/claude", realHome + "/.config/claude-alt"] {
             #expect(HookInstaller.isProtectedBeforeBootstrap(configDir: path), "\(path)")
         }
-        for path in [NSTemporaryDirectory() + "spcn-x/.claude", "/tmp/x/.claude", realHome + "/Documents/.claude-copy"] {
+        for path in [NSTemporaryDirectory() + "agentnotch-x/.claude", "/tmp/x/.claude", realHome + "/Documents/.claude-copy"] {
             #expect(!HookInstaller.isProtectedBeforeBootstrap(configDir: path), "\(path)")
         }
     }

@@ -144,7 +144,7 @@ struct B_ReviewPass2Tests {
 
     @Test func aLinkToTheHomeFolderIsTheHomeFolder() throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("spcn-b-review-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("agentnotch-b-review-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let home = root.appendingPathComponent("home", isDirectory: true)
         try FileManager.default.createDirectory(at: home.appendingPathComponent("projects"), withIntermediateDirectories: true)

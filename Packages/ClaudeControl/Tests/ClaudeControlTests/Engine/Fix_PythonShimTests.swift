@@ -20,7 +20,7 @@ struct Fix_PythonShimTests {
     }
 
     @Test func anInterpreterOnPathRuns() throws {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("spcn-shim-\(UUID().uuidString)")
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("agentnotch-shim-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let script = dir.appendingPathComponent("hook.py")
@@ -36,7 +36,7 @@ struct Fix_PythonShimTests {
     }
 
     @Test func nothingOnPathExitsQuietly() throws {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("spcn-shim-\(UUID().uuidString)")
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("agentnotch-shim-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let script = dir.appendingPathComponent("hook.py")

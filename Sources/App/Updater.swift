@@ -84,7 +84,7 @@ final class Updater: NSObject, ObservableObject, SPUUpdaterDelegate {
     /// broken button.
     func checkNow() {
         guard Fork.updatesEnabled else { // Fork: updates off
-            outcome = .failed(L10n.t("Updates are off in Superpowered Codenotch. Pull the latest source and rebuild to update."))
+            outcome = .failed(L10n.t("Updates are off in Agent Notch. Pull the latest source and rebuild to update."))
             return
         }
         outcome = .checking

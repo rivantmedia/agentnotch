@@ -7,16 +7,16 @@ struct UsageProbeParsingTests {
 
     @Test func initializeResponse() {
         #expect(UsageProbe.parseLine(line(
-            #"{"type":"control_response","response":{"subtype":"success","request_id":"spcn-init","response":{"account":{"email":"x"}}}}"#
+            #"{"type":"control_response","response":{"subtype":"success","request_id":"agentnotch-init","response":{"account":{"email":"x"}}}}"#
         )) == .initialized(error: nil))
         #expect(UsageProbe.parseLine(line(
-            #"{"type":"control_response","response":{"subtype":"error","request_id":"spcn-init","error":"boom"}}"#
+            #"{"type":"control_response","response":{"subtype":"error","request_id":"agentnotch-init","error":"boom"}}"#
         )) == .initialized(error: "boom"))
     }
 
     @Test func usageResponse() {
         let event = UsageProbe.parseLine(line("""
-        {"type":"control_response","response":{"subtype":"success","request_id":"spcn-usage","response":{"subscription_type":"max","rate_limits_available":true,"rate_limits":{"five_hour":{"utilization":23,"resets_at":"2026-09-24T12:50:00.257626+00:00"},"seven_day":{"utilization":41,"resets_at":"2026-09-29T06:00:00+00:00"},"model_scoped":[]},"behaviors":null}}}
+        {"type":"control_response","response":{"subtype":"success","request_id":"agentnotch-usage","response":{"subscription_type":"max","rate_limits_available":true,"rate_limits":{"five_hour":{"utilization":23,"resets_at":"2026-09-24T12:50:00.257626+00:00"},"seven_day":{"utilization":41,"resets_at":"2026-09-29T06:00:00+00:00"},"model_scoped":[]},"behaviors":null}}}
         """))
         guard case .usage(.usage(let usage)) = event else {
             Issue.record("expected usage, got \(event)")
@@ -28,13 +28,13 @@ struct UsageProbeParsingTests {
 
     @Test func usageErrors() {
         #expect(UsageProbe.parseLine(line(
-            #"{"type":"control_response","response":{"subtype":"error","request_id":"spcn-usage","error":"Not logged in · Please run /login"}}"#
+            #"{"type":"control_response","response":{"subtype":"error","request_id":"agentnotch-usage","error":"Not logged in · Please run /login"}}"#
         )) == .usage(.unavailable("Not signed in to Claude")))
         #expect(UsageProbe.parseLine(line(
-            #"{"type":"control_response","response":{"subtype":"error","request_id":"spcn-usage","error":"Request failed with status 429"}}"#
+            #"{"type":"control_response","response":{"subtype":"error","request_id":"agentnotch-usage","error":"Request failed with status 429"}}"#
         )) == .usage(.rateLimited))
         #expect(UsageProbe.parseLine(line(
-            #"{"type":"control_response","response":{"subtype":"success","request_id":"spcn-usage","response":{"rate_limits_available":false}}}"#
+            #"{"type":"control_response","response":{"subtype":"success","request_id":"agentnotch-usage","response":{"rate_limits_available":false}}}"#
         )) == .usage(.unavailable("Usage limits aren't available for this login")))
     }
 
@@ -80,7 +80,7 @@ struct UsageProbeParsingTests {
 /// timers and pipes must not queue behind other suites' main-actor work.
 nonisolated struct UsageProbeProcessTests {
     private func stubClaude(_ behaviour: String) throws -> (binary: String, dir: URL) {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("spcn-probe-\(UUID().uuidString)")
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("agentnotch-probe-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let script = dir.appendingPathComponent("claude")
         let source = """
@@ -134,7 +134,7 @@ nonisolated struct UsageProbeProcessTests {
 
         let outcome = await UsageProbe.run(
             claudePath: stub.binary,
-            configDirEnv: "/tmp/spcn-probe-tests/.claude-work/",
+            configDirEnv: "/tmp/agentnotch-probe-tests/.claude-work/",
             workingDirectory: stub.dir.appendingPathComponent("cwd"),
             timeout: 15
         )
@@ -148,7 +148,7 @@ nonisolated struct UsageProbeProcessTests {
         #expect(usage.subscriptionType == "pro")
 
         let env = try JSONSerialization.jsonObject(with: Data(contentsOf: stub.dir.appendingPathComponent("env.json"))) as? [String: String]
-        #expect(env == ["CLAUDE_CONFIG_DIR": "/tmp/spcn-probe-tests/.claude-work/"])
+        #expect(env == ["CLAUDE_CONFIG_DIR": "/tmp/agentnotch-probe-tests/.claude-work/"])
         let argv = try JSONSerialization.jsonObject(with: Data(contentsOf: stub.dir.appendingPathComponent("argv.json"))) as? [String]
         #expect(argv == UsageProbe.arguments)
     }
@@ -198,7 +198,7 @@ nonisolated struct UsageProbeProcessTests {
     }
 
     @Test func missingBinaryFails() async {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("spcn-probe-\(UUID().uuidString)")
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("agentnotch-probe-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: dir) }
         let outcome = await UsageProbe.run(
             claudePath: dir.appendingPathComponent("definitely-not-claude").path,
@@ -353,9 +353,9 @@ struct UsageStoreLogicTests {
 }
 
 /// Asks the real Claude Code for the default account's usage. Off unless
-/// `SPCN_LIVE_PROBE=1`: it runs `claude -p` (read-only: no session is saved and
+/// `AGENTNOTCH_LIVE_PROBE=1`: it runs `claude -p` (read-only: no session is saved and
 /// hooks are disabled). Prints only percentages and reset times.
-@Suite(.enabled(if: Foundation.ProcessInfo.processInfo.environment["SPCN_LIVE_PROBE"] == "1"))
+@Suite(.enabled(if: Foundation.ProcessInfo.processInfo.environment["AGENTNOTCH_LIVE_PROBE"] == "1"))
 struct LiveUsageProbeTests {
     @Test func probeTheDefaultAccount() async throws {
         let claude = try #require(
@@ -366,7 +366,7 @@ struct LiveUsageProbeTests {
         let outcome = await UsageProbe.run(
             claudePath: claude,
             configDirEnv: nil,
-            workingDirectory: FileManager.default.temporaryDirectory.appendingPathComponent("spcn-live-probe-cwd")
+            workingDirectory: FileManager.default.temporaryDirectory.appendingPathComponent("agentnotch-live-probe-cwd")
         )
         let seconds = String(format: "%.1f", Date().timeIntervalSince(start))
         guard case .usage(let usage) = outcome else {

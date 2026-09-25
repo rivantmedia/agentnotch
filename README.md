@@ -1,9 +1,10 @@
-# Superpowered Codenotch
+# Agent Notch
 
 > [!NOTE]
-> **Superpowered Codenotch** is a fork of [Codenotch](https://github.com/vinzdg/codenotch)
-> by Vinz, used under the MIT License (see [LICENSE](LICENSE), kept as-is), with the
-> Claude Code session control of Superpowered Vibe Notch ported into it. This first part
+> **Agent Notch** (formerly Superpowered Codenotch) is a fork of
+> [Codenotch](https://github.com/vinzdg/codenotch) by Vinz, used under the MIT License (see
+> [LICENSE](LICENSE), kept as-is), with the Claude Code session control of Superpowered Vibe
+> Notch ported into it. This first part
 > of the README, down to the line that says so, is the fork's. Everything after that line
 > is upstream's README (unchanged, apart from the fork's paragraph under License) and
 > describes Codenotch itself: its download, update and "Claude from the OAuth token in the
@@ -32,8 +33,8 @@
   usage), from the live status line, and from Claude Desktop's on-disk cache if you allow it.
   This app reads no keychain item or credential file of Claude's.
 - **Installs beside the official app.** It has its own bundle id
-  (`com.paraswtf.superpowered-codenotch`), preferences, log subsystem, keychain items and
-  `~/Library/Application Support/Superpowered Codenotch`. It never updates itself: Sparkle
+  (`com.rivantmedia.agentnotch`), preferences, log subsystem, keychain items and
+  `~/Library/Application Support/Agent Notch`. It never updates itself: Sparkle
   is off, so an upstream build can't replace it. Codenotch's other providers (Codex, Cursor,
   Ollama, …) work as upstream describes.
 - **Builds without Xcode**, with the Command Line Tools only.
@@ -47,9 +48,9 @@ pick that SDK themselves. With only the macOS 27 SDK the build fails, because Sw
 so it needs the network.
 
 ```sh
-Scripts/spm-build-app.sh --release      # builds build/Superpowered Codenotch.app (ad-hoc signed)
-ditto "build/Superpowered Codenotch.app" "/Applications/Superpowered Codenotch.app"
-open "/Applications/Superpowered Codenotch.app"
+Scripts/spm-build-app.sh --release      # builds build/Agent Notch.app (ad-hoc signed)
+ditto "build/Agent Notch.app" "/Applications/Agent Notch.app"
+open "/Applications/Agent Notch.app"
 ```
 
 - Without `--release` you get a debug build in the same place.
@@ -112,22 +113,29 @@ open "/Applications/Superpowered Codenotch.app"
    - If a keychain prompt ever asks for Claude Code's credentials on this app's behalf,
      deny it: this app never needs them.
 
-### Upgrading from an earlier build of this fork
+### Upgrading
 
-- **Replace the old copy, don't keep both.** Launching the new build quits the older
-  instance (same bundle id), but an old `build/Superpowered Codenotch.app` launched again
-  later would quit the new one and put its own rules back. Quit the old app, then replace or
-  delete every old copy (`/Applications`, the fork's `build/`) before opening the new one.
-  Until then, set *Check usage every* to **Off** in the old build: before this version the
-  usage check could run inside Claude Parallel Profiles' account stores.
-- **Your earlier yes carries over.** No consent card appears. On the first launch the hooks
-  go into `~/.claude` and every VS Code workspace's folder, and a one-time notice ("Claude
-  Code control now covers your VS Code workspaces") names them, with **OK** and
-  **Turn off**.
-- **Stores are cleaned by themselves.** Hooks an earlier build installed into the stores
-  and `~/.claude-shared` come out on the first pass, and (after your yes) Superpowered Vibe
-  Notch's leftovers there go too: its scripts, and a `settings.json` that ends up `{}` when
-  no backup beside it holds anything of yours, together with those backups.
+- **Replace the old copy, don't keep both.** Launching a new build quits the older
+  instance (same bundle id), but an old `build/Agent Notch.app` launched again later would
+  quit the new one and put its own rules back. Quit the old app, then replace or delete every
+  old copy (`/Applications`, the fork's `build/`) before opening the new one.
+
+### Coming from Superpowered Codenotch
+
+Agent Notch is the same app under a new name, with a new bundle id
+(`com.rivantmedia.agentnotch`), so macOS treats it as a different app.
+
+- **Quit Superpowered Codenotch and delete it first.** Both would rewrite the same
+  `settings.json` files. Leave its hooks where they are: they keep failing open while the app
+  is gone.
+- **Turn on again.** Its yes, preferences, account names, ring choices and review queue lived
+  under the old bundle id and `~/Library/Application Support/Superpowered Codenotch`, so the
+  consent card appears again. **Turn on** replaces the old hook entries and status line wrapper
+  in place (the status line they wrapped is kept) and deletes the old scripts from each
+  `hooks/` folder once nothing runs them. Its `settings.json.superpowered-codenotch-*.bak`
+  backups are left alone; they are still read if a saved status line is ever lost.
+- **Tidy up afterwards** if you like: `~/Library/Application Support/Superpowered Codenotch`
+  and `defaults delete com.paraswtf.superpowered-codenotch`.
 
 ## Everyday use
 
@@ -213,14 +221,14 @@ open "/Applications/Superpowered Codenotch.app"
     account runs in (never a Claude Parallel Profiles store or `~/.claude-shared`);
   - in stores and `~/.claude-shared`, only to take out its own or Superpowered Vibe Notch's
     leftovers, with a backup kept until that cleanup is finished;
-  - two scripts in `<config folder>/hooks/`: `superpowered-codenotch-hook.py` and
-    `superpowered-codenotch-statusline.py`. They run with the developer tools' `python3` and
+  - two scripts in `<config folder>/hooks/`: `agentnotch-hook.py` and
+    `agentnotch-statusline.py`. They run with the developer tools' `python3` and
     talk only to this app's local socket.
-  - Before every change it saves a backup, `settings.json.superpowered-codenotch-<time>.bak`,
+  - Before every change it saves a backup, `settings.json.agentnotch-<time>.bak`,
     and keeps the five newest. The file as it was before the first change is kept as
-    `settings.json.superpowered-codenotch.original.bak`.
+    `settings.json.agentnotch.original.bak`.
   - Nothing is written to a `settings.json` that fails to parse.
-- **Its own state** lives in `~/Library/Application Support/Superpowered Codenotch/Claude/`:
+- **Its own state** lives in `~/Library/Application Support/Agent Notch/Claude/`:
   accounts, the review queue, usage state and the hook socket.
 - **Turning it off.** Switch off *Hooks in tracked accounts* in Settings › Claude Code. That
   takes the hooks and scripts out of every account and restores each status line exactly.
@@ -229,8 +237,8 @@ open "/Applications/Superpowered Codenotch.app"
   whichever account you last used into it), and an untracked account's sessions there are
   hidden, their permission prompts left to the terminal.
 - **Removing the app.** Turn the hooks off first, then quit. Delete the app and
-  `~/Library/Application Support/Superpowered Codenotch`, then run
-  `defaults delete com.paraswtf.superpowered-codenotch`.
+  `~/Library/Application Support/Agent Notch`, then run
+  `defaults delete com.rivantmedia.agentnotch`.
 
 ### Claude Parallel Profiles
 
@@ -268,12 +276,12 @@ keeps its hooks and usage check. This app follows that layout:
   once; rings like `claude-shared` disappear. `~/.claude`'s old ring goes to the account its
   own `accountUuid` names, not to whichever account the extension mirrored in last.
 - To see what the app makes of your folders without running it:
-  `swift run --package-path Packages/ClaudeControl spcn-inspect-accounts` (read-only).
-- **Logs:** `log stream --predicate 'subsystem == "com.paraswtf.superpowered-codenotch"' --level debug`.
+  `swift run --package-path Packages/ClaudeControl agentnotch-inspect-accounts` (read-only).
+- **Logs:** `log stream --predicate 'subsystem == "com.rivantmedia.agentnotch"' --level debug`.
 
 ## Development
 
-- **Sealed mode.** `SPCN_SAFE_MODE=1` (or `CODENOTCH_DEMO=1`) starts the app sealed: fixture
+- **Sealed mode.** `AGENTNOTCH_SAFE_MODE=1` (or `CODENOTCH_DEMO=1`) starts the app sealed: fixture
   data, and no keychain, session, network or subprocess access. It fails closed: any value
   except empty, `0`, `false`, `no` or `off` seals the run. `Scripts/spm-run-sealed.sh`
   builds a separate sealed bundle (`….sealed` bundle id), runs it for at most 10 seconds and
@@ -284,19 +292,19 @@ keeps its hooks and usage check. This app follows that layout:
   - `--snapshot-claude <dir>` renders the notch and panel sheets to PNGs.
 - **Snapshots.** `Scripts/spm-snapshots.sh <dir>` renders the panel, chat and settings sheets
   of `Packages/ClaudeControl` from fixtures.
-- **Development switches** (`1`, `true` or `yes`): `--no-install` / `SPCN_NO_INSTALL`,
-  `SPCN_NO_NOTIFICATIONS`, `SPCN_USAGE_PROBE`, `--dump-state` / `SPCN_DUMP_STATE` and
-  `--dev-console` / `SPCN_DEV_CONSOLE`. Path switches: `SPCN_SUPPORT_DIR`, `SPCN_SOCKET`
-  and `SPCN_EXTRA_CONFIG_DIRS` (`:`-separated). See `Engine/Core/DevFlags.swift`. The
-  installed hook scripts follow `SPCN_SOCKET` only when `SPCN_DEV=1` is set too.
-- **Sealed-only switches** (ignored in a live run): `SPCN_OPEN_PANEL_ON_LAUNCH=<route>`,
-  `SPCN_PANEL_CLOSE_AFTER=<seconds>`, `SPCN_PANEL_SELF_TEST=1`,
-  `SPCN_SEALED_SWITCH_OFF=<ring id>`, `SPCN_SEALED_CAPTURE=<dir>` (timeline PNGs) and
-  `SPCN_SNAPSHOT_CLAUDE=<dir>` (render, then exit). See `Scripts/spm-run-sealed.sh` and
+- **Development switches** (`1`, `true` or `yes`): `--no-install` / `AGENTNOTCH_NO_INSTALL`,
+  `AGENTNOTCH_NO_NOTIFICATIONS`, `AGENTNOTCH_USAGE_PROBE`, `--dump-state` / `AGENTNOTCH_DUMP_STATE` and
+  `--dev-console` / `AGENTNOTCH_DEV_CONSOLE`. Path switches: `AGENTNOTCH_SUPPORT_DIR`, `AGENTNOTCH_SOCKET`
+  and `AGENTNOTCH_EXTRA_CONFIG_DIRS` (`:`-separated). See `Engine/Core/DevFlags.swift`. The
+  installed hook scripts follow `AGENTNOTCH_SOCKET` only when `AGENTNOTCH_DEV=1` is set too.
+- **Sealed-only switches** (ignored in a live run): `AGENTNOTCH_OPEN_PANEL_ON_LAUNCH=<route>`,
+  `AGENTNOTCH_PANEL_CLOSE_AFTER=<seconds>`, `AGENTNOTCH_PANEL_SELF_TEST=1`,
+  `AGENTNOTCH_SEALED_SWITCH_OFF=<ring id>`, `AGENTNOTCH_SEALED_CAPTURE=<dir>` (timeline PNGs) and
+  `AGENTNOTCH_SNAPSHOT_CLAUDE=<dir>` (render, then exit). See `Scripts/spm-run-sealed.sh` and
   `Sources/ClaudeBridge/ClaudeSealedDemo.swift`.
 - **Simulated sessions.** `Packages/ClaudeControl/DevTools/simulate-sessions.py` drives a
-  running build with fake Claude Code sessions over a private socket (`SPCN_SOCKET`,
-  `SPCN_SUPPORT_DIR`, `SPCN_EXTRA_CONFIG_DIRS`; see its header). It never touches a real
+  running build with fake Claude Code sessions over a private socket (`AGENTNOTCH_SOCKET`,
+  `AGENTNOTCH_SUPPORT_DIR`, `AGENTNOTCH_EXTRA_CONFIG_DIRS`; see its header). It never touches a real
   Claude config.
 - **Checks.**
   - `Scripts/check-seams.sh`: every edit to upstream's files is a listed, tagged seam.
@@ -720,7 +728,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 [MIT](LICENSE) © 2026 Vinz
 
-**Superpowered Codenotch** is a fork of Codenotch (MIT, © 2026 Vinz).
+**Agent Notch** (formerly Superpowered Codenotch) is a fork of Codenotch (MIT, © 2026 Vinz).
 `Packages/ClaudeControl` is Apache-2.0, derived from Superpowered Vibe Notch and
 Vibe Notch (© 2025 Farouq Aldori); see its [LICENSE](Packages/ClaudeControl/LICENSE)
 and [NOTICE](Packages/ClaudeControl/NOTICE). It links swift-markdown (Apache-2.0)

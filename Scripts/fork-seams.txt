@@ -1,4 +1,4 @@
-# Superpowered Codenotch's edits to upstream Codenotch files (design §3).
+# Agent Notch's edits to upstream Codenotch files (design §3).
 #
 # Scripts/check-seams.sh reads this file. After a merge from upstream, any
 # SEAM line it reports missing has to be re-applied by hand, in the same
@@ -99,14 +99,14 @@ SEAM	ISO	Sources/Settings/Preferences.swift	Bundle.main.bundleIdentifier.flatMap
 SEAM	ISO	Sources/Providers/ClaudeDesktopUsageCache.swift	import CodenotchZstd
 # Makefile: the running copy is quit by bundle id, never `pkill -x Codenotch`
 # (which would quit the official app); `make appcast` refuses to run.
-SEAM	ISO	Makefile	BUNDLE_ID   := com.paraswtf.superpowered-codenotch
+SEAM	ISO	Makefile	BUNDLE_ID   := com.rivantmedia.agentnotch
 SEAM	ISO	Makefile	QUIT_RUNNING = osascript -e 'if application id "$(BUNDLE_ID)" is running then tell application id "$(BUNDLE_ID)" to quit' >/dev/null 2>&1 || true
 SEAM	ISO	Makefile	$(QUIT_RUNNING)	2
-SEAM	ISO	Makefile	@echo "appcast: Sparkle updates are disabled in Superpowered Codenotch" && exit 1
+SEAM	ISO	Makefile	@echo "appcast: Sparkle updates are disabled in Agent Notch" && exit 1
 FORBID	ISO	Makefile	pkill -x Codenotch
 FORBID	ISO	Makefile	release: notarize verify-release appcast
 # project.yml / Info.plist: our own bundle id, no Sparkle feed or key.
-SEAM	ISO	project.yml	PRODUCT_BUNDLE_IDENTIFIER: com.paraswtf.superpowered-codenotch
+SEAM	ISO	project.yml	PRODUCT_BUNDLE_IDENTIFIER: com.rivantmedia.agentnotch
 FORBID	ISO	project.yml	PRODUCT_BUNDLE_IDENTIFIER: com.vinz
 FORBID	ISO	project.yml	SUFeedURL
 FORBID	ISO	project.yml	SUPublicEDKey
@@ -120,7 +120,7 @@ FORBID	ISO	Sources/Info.plist	SUPublicEDKey
 SEAM	MBL	Sources/App/StatusItemSummary.swift	? ClaudeBridge.menuBarLabel(providerID: snapshot.id) ?? ClaudeProfile.slug(fromProviderID: snapshot.id) ?? CodexProfile.slug(fromProviderID: snapshot.id) // Fork: MBL
 
 # --- U12: project.yml, Sources/Info.plist ------------------------------------
-SEAM	U12	project.yml	NSAppleEventsUsageDescription: "Superpowered Codenotch selects the terminal tab a Claude session runs in and types your replies into it."
+SEAM	U12	project.yml	NSAppleEventsUsageDescription: "Agent Notch selects the terminal tab a Claude session runs in and types your replies into it."
 SEAM	U12	Sources/Info.plist	<key>NSAppleEventsUsageDescription</key>
 
 # --- LIC: project.yml (integration) -------------------------------------------

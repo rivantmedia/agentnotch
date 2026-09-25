@@ -345,7 +345,7 @@ enum UIFixtures {
         var model = SettingsPaneModel()
         model.hookConsent = true
         model.hooksEnabled = true
-        model.socketPath = "~/Library/Application Support/Superpowered Codenotch/Claude/hook.sock"
+        model.socketPath = "~/Library/Application Support/Agent Notch/Claude/hook.sock"
         model.claudeCodeVersion = "2.1.97"
         model.now = now
         let readings = readings()
@@ -372,7 +372,7 @@ enum UIFixtures {
         ]
         model.hooksChangedNotice = HooksChangedNotice.text(
             changedAccountIds: [AccountPaths.normalize(SampleLayout.workWindow)], accounts: accounts(),
-            backups: [AccountPaths.normalize(SampleLayout.workWindow): AccountPaths.normalize(SampleLayout.workWindow) + "/settings.json.superpowered-codenotch-20260925-091500-123.bak"],
+            backups: [AccountPaths.normalize(SampleLayout.workWindow): AccountPaths.normalize(SampleLayout.workWindow) + "/settings.json.agentnotch-20260925-091500-123.bak"],
             windowNames: windowNames, home: home)
         model.claudeBinaryPath = "~/.local/bin/claude"
         return model

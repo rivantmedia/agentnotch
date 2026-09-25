@@ -42,8 +42,8 @@ nonisolated enum UsageProbe {
 
     // MARK: - Command Line
 
-    static let initializeRequestId = "spcn-init"
-    static let usageRequestId = "spcn-usage"
+    static let initializeRequestId = "agentnotch-init"
+    static let usageRequestId = "agentnotch-usage"
 
     static let arguments: [String] = [
         "-p",

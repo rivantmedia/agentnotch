@@ -9,16 +9,16 @@
 //
 //  | Switch                                   | Effect                                                   |
 //  |------------------------------------------|----------------------------------------------------------|
-//  | `SPCN_SAFE_MODE=1` / `CODENOTCH_DEMO=1`  | sealed: fixtures only (see `SealedMode`; fails closed:   |
+//  | `AGENTNOTCH_SAFE_MODE=1` / `CODENOTCH_DEMO=1`  | sealed: fixtures only (see `SealedMode`; fails closed:   |
 //  |                                          | any value but empty, 0, false, no or off seals the run)  |
-//  | `--no-install` / `SPCN_NO_INSTALL`       | never write a settings.json or hooks folder              |
-//  | `SPCN_NO_NOTIFICATIONS`                  | never post a notification or ask for permission          |
-//  | `SPCN_SUPPORT_DIR=<path>`                | the engine's folder (accounts, review queue, socket)     |
-//  | `SPCN_SOCKET=<path>`                     | the hook socket (the scripts only with `SPCN_DEV=1` too) |
-//  | `SPCN_EXTRA_CONFIG_DIRS=<a>:<b>`         | more Claude config folders to track                      |
-//  | `SPCN_USAGE_PROBE`                       | usage probes on schedule even with `--no-install`        |
-//  | `--dump-state` / `SPCN_DUMP_STATE`       | print a line per session on every change                 |
-//  | `--dev-console` / `SPCN_DEV_CONSOLE`     | drive sessions from stdin                                |
+//  | `--no-install` / `AGENTNOTCH_NO_INSTALL`       | never write a settings.json or hooks folder              |
+//  | `AGENTNOTCH_NO_NOTIFICATIONS`                  | never post a notification or ask for permission          |
+//  | `AGENTNOTCH_SUPPORT_DIR=<path>`                | the engine's folder (accounts, review queue, socket)     |
+//  | `AGENTNOTCH_SOCKET=<path>`                     | the hook socket (the scripts only with `AGENTNOTCH_DEV=1` too) |
+//  | `AGENTNOTCH_EXTRA_CONFIG_DIRS=<a>:<b>`         | more Claude config folders to track                      |
+//  | `AGENTNOTCH_USAGE_PROBE`                       | usage probes on schedule even with `--no-install`        |
+//  | `--dump-state` / `AGENTNOTCH_DUMP_STATE`       | print a line per session on every change                 |
+//  | `--dev-console` / `AGENTNOTCH_DEV_CONSOLE`     | drive sessions from stdin                                |
 //
 //  Safe to query from any actor or thread.
 //
@@ -80,7 +80,7 @@ nonisolated enum DevFlags {
     /// Sealed development mode: fixtures only, nothing real is read or written.
     static var isSealed: Bool { AppIdentity.isSealed }
 
-    /// `SPCN_EXTRA_CONFIG_DIRS`, normalized: folders to track as accounts and
+    /// `AGENTNOTCH_EXTRA_CONFIG_DIRS`, normalized: folders to track as accounts and
     /// to scan for sessions, beside the ones discovered in the home folder.
     static var extraConfigDirs: [String] {
         AppIdentity.configuration.extraConfigDirs.map(AccountPaths.normalize)
@@ -88,14 +88,14 @@ nonisolated enum DevFlags {
 
     // MARK: - Debugging aids
 
-    /// `SPCN_USAGE_PROBE`: keep scheduled usage probes on in a `--no-install` run.
-    static let usageProbeOnDevRun: Bool = truthy(Foundation.ProcessInfo.processInfo.environment["SPCN_USAGE_PROBE"])
+    /// `AGENTNOTCH_USAGE_PROBE`: keep scheduled usage probes on in a `--no-install` run.
+    static let usageProbeOnDevRun: Bool = truthy(Foundation.ProcessInfo.processInfo.environment["AGENTNOTCH_USAGE_PROBE"])
 
-    /// `--dump-state` / `SPCN_DUMP_STATE`: print a one-line summary per session on change.
-    static let dumpState: Bool = flag("--dump-state", env: "SPCN_DUMP_STATE")
+    /// `--dump-state` / `AGENTNOTCH_DUMP_STATE`: print a one-line summary per session on change.
+    static let dumpState: Bool = flag("--dump-state", env: "AGENTNOTCH_DUMP_STATE")
 
-    /// `--dev-console` / `SPCN_DEV_CONSOLE`: read session commands from stdin.
-    static let devConsole: Bool = flag("--dev-console", env: "SPCN_DEV_CONSOLE")
+    /// `--dev-console` / `AGENTNOTCH_DEV_CONSOLE`: read session commands from stdin.
+    static let devConsole: Bool = flag("--dev-console", env: "AGENTNOTCH_DEV_CONSOLE")
 
     // MARK: - Logging
 
@@ -110,16 +110,16 @@ nonisolated enum DevFlags {
             return
         }
         if installsDisabled {
-            logger.notice("Hook installation disabled (--no-install / SPCN_NO_INSTALL=1): settings.json and hooks dirs will not be touched")
-            print("[\(AppIdentity.displayName)] Hook installation disabled (--no-install / SPCN_NO_INSTALL=1)")
+            logger.notice("Hook installation disabled (--no-install / AGENTNOTCH_NO_INSTALL=1): settings.json and hooks dirs will not be touched")
+            print("[\(AppIdentity.displayName)] Hook installation disabled (--no-install / AGENTNOTCH_NO_INSTALL=1)")
         }
         if notificationsDisabled {
-            logger.notice("Notifications disabled (SPCN_NO_NOTIFICATIONS=1)")
+            logger.notice("Notifications disabled (AGENTNOTCH_NO_NOTIFICATIONS=1)")
         }
         if !extraConfigDirs.isEmpty {
-            logger.notice("Extra config folders (SPCN_EXTRA_CONFIG_DIRS): \(extraConfigDirs.joined(separator: ", "), privacy: .public)")
+            logger.notice("Extra config folders (AGENTNOTCH_EXTRA_CONFIG_DIRS): \(extraConfigDirs.joined(separator: ", "), privacy: .public)")
         }
-        if usageProbeOnDevRun { logger.notice("Scheduled usage probes forced on (SPCN_USAGE_PROBE)") }
+        if usageProbeOnDevRun { logger.notice("Scheduled usage probes forced on (AGENTNOTCH_USAGE_PROBE)") }
         if dumpState { logger.notice("State dump on (--dump-state)") }
         if devConsole { logger.notice("Dev console on (--dev-console)") }
     }

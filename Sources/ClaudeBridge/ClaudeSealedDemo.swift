@@ -3,7 +3,7 @@ import AppKit
 import Combine
 import Foundation
 
-/// Sealed runs (`SPCN_SAFE_MODE=1`, `CODENOTCH_DEMO=1`): ClaudeControl's
+/// Sealed runs (`AGENTNOTCH_SAFE_MODE=1`, `CODENOTCH_DEMO=1`): ClaudeControl's
 /// fixture accounts, sessions and usage on the rings, beside upstream's
 /// non-Claude fixtures, going through the same store, sync, feed and
 /// reactions a live run uses. Nothing real is read and nothing is written
@@ -18,12 +18,12 @@ import Foundation
 /// one peek); at 6 s one stops for a permission prompt.
 ///
 /// Development switches, sealed only:
-/// - `SPCN_SEALED_SWITCH_OFF=<ring id>` switches that ring off at 7.5 s
+/// - `AGENTNOTCH_SEALED_SWITCH_OFF=<ring id>` switches that ring off at 7.5 s
 ///   (the sealed bundle's own domain only), to watch it and its sessions go.
-/// - `SPCN_SEALED_CAPTURE=<dir>` renders every notch, folded and open, at
+/// - `AGENTNOTCH_SEALED_CAPTURE=<dir>` renders every notch, folded and open, at
 ///   points along the timeline (see `ClaudeNotchSnapshots.capture`).
 ///
-/// The run's log (stderr, `build/sealed/run.log`) gets one `[spcn-sealed]`
+/// The run's log (stderr, `build/sealed/run.log`) gets one `[agentnotch-sealed]`
 /// line per step and per change in what the rings show.
 ///
 /// Fork-only file. Owned by WP-C.
@@ -36,13 +36,13 @@ enum ClaudeSealedDemo {
     /// One line on stderr, stamped with the time since launch.
     static let trace: (String) -> Void = { line in
         let elapsed = max(0, Date().timeIntervalSince(launchedAt))
-        let stamped = String(format: "[spcn-sealed] +%.1fs ", elapsed) + line
+        let stamped = String(format: "[agentnotch-sealed] +%.1fs ", elapsed) + line
         FileHandle.standardError.write(Data((stamped + "\n").utf8))
         Log.usage.notice("\(stamped, privacy: .public)")
     }
 
     /// Whether this run owns its preferences domain: the sealed bundle
-    /// (`…superpowered-codenotch.sealed`), not a demo run of the real app,
+    /// (`…agentnotch.sealed`), not a demo run of the real app,
     /// whose preferences are the user's.
     static var ownsPreferencesDomain: Bool {
         Bundle.main.bundleIdentifier?.hasSuffix(".sealed") ?? false
@@ -141,7 +141,7 @@ enum ClaudeSealedDemo {
             }
         }
 
-        if let ring = environment["SPCN_SEALED_SWITCH_OFF"], !ring.isEmpty {
+        if let ring = environment["AGENTNOTCH_SEALED_SWITCH_OFF"], !ring.isEmpty {
             DispatchQueue.main.asyncAfter(deadline: .now() + 7.5) { [weak preferences, weak store] in
                 MainActor.assumeIsolated {
                     guard let preferences else { return }
@@ -158,7 +158,7 @@ enum ClaudeSealedDemo {
             }
         }
 
-        if let directory = environment["SPCN_SEALED_CAPTURE"], !directory.isEmpty {
+        if let directory = environment["AGENTNOTCH_SEALED_CAPTURE"], !directory.isEmpty {
             ClaudeNotchSnapshots.scheduleCaptures(into: URL(fileURLWithPath: directory, isDirectory: true),
                                                   fleet: fleet, trace: trace)
         }

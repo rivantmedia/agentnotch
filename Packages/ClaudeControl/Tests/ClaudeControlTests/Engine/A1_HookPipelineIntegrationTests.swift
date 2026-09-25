@@ -19,8 +19,8 @@ final class A1_HookPipelineIntegrationTests {
     private let transcript: String
 
     init() throws {
-        account = try TemporaryAccount(prefix: "spcn-a1-hook")
-        socketPath = "/tmp/spcn-a1h-\(getpid())-\(UInt32.random(in: 0...UInt32.max)).sock"
+        account = try TemporaryAccount(prefix: "agentnotch-a1-hook")
+        socketPath = "/tmp/agentnotch-a1h-\(getpid())-\(UInt32.random(in: 0...UInt32.max)).sock"
         scriptPath = account.root.appendingPathComponent("hooks/\(ClaudeControlConfiguration.defaultHookScriptName)").path
         try FileManager.default.createDirectory(atPath: (scriptPath as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
         // Exactly what the installer writes into <configDir>/hooks/.
@@ -50,7 +50,7 @@ final class A1_HookPipelineIntegrationTests {
     }
 
     /// Runs the installed script with Claude Code's hook environment. The
-    /// socket path baked into the script is used (no SPCN_SOCKET).
+    /// socket path baked into the script is used (no AGENTNOTCH_SOCKET).
     private func runHook(_ payload: [String: Any]) throws -> (Process, Pipe) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")

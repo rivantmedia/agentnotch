@@ -159,7 +159,7 @@ struct TerminalScriptTests {
 
     private static func compiles(_ script: String) throws -> Bool {
         let file = FileManager.default.temporaryDirectory
-            .appendingPathComponent("spcn-script-\(UUID().uuidString).applescript")
+            .appendingPathComponent("agentnotch-script-\(UUID().uuidString).applescript")
         try script.write(to: file, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: file) }
         let process = Process()

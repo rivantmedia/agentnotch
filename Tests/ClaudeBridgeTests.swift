@@ -511,18 +511,18 @@ final class ClaudeBridgeTests: XCTestCase {
     /// environment variable only in a sealed run, so a live app started from
     /// a shell that still exports it starts normally instead of quitting.
     func testSnapshotRequestsAreReadFromTheFlagAndOnlySealedFromTheEnvironment() {
-        let dir = "/tmp/spcn-snapshots"
+        let dir = "/tmp/agentnotch-snapshots"
         XCTAssertEqual(ClaudeNotchSnapshots.requestedDirectory(arguments: ["app", "--snapshot-claude", dir],
                                                                environment: [:], sealed: false)?.path, dir)
         XCTAssertEqual(ClaudeNotchSnapshots.requestedDirectory(arguments: ["app", "--snapshot-claude=\(dir)"],
                                                                environment: [:], sealed: true)?.path, dir)
         XCTAssertNil(ClaudeNotchSnapshots.requestedDirectory(arguments: ["app", "--snapshot-claude"],
                                                              environment: [:], sealed: true))
-        let exported = ["SPCN_SNAPSHOT_CLAUDE": dir]
+        let exported = ["AGENTNOTCH_SNAPSHOT_CLAUDE": dir]
         XCTAssertEqual(ClaudeNotchSnapshots.requestedDirectory(arguments: ["app"], environment: exported,
                                                                sealed: true)?.path, dir)
         XCTAssertNil(ClaudeNotchSnapshots.requestedDirectory(arguments: ["app"], environment: exported, sealed: false))
-        XCTAssertNil(ClaudeNotchSnapshots.requestedDirectory(arguments: ["app"], environment: ["SPCN_SNAPSHOT_CLAUDE": ""],
+        XCTAssertNil(ClaudeNotchSnapshots.requestedDirectory(arguments: ["app"], environment: ["AGENTNOTCH_SNAPSHOT_CLAUDE": ""],
                                                              sealed: true))
     }
 

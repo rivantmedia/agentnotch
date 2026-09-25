@@ -115,7 +115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // `CODENOTCH_DEMO=1` puts the design frame's three providers on screen
         // with its numbers, for screenshots and for eyeballing the layout.
-        // Fork: sealed (`Fork.isSealed`, also `SPCN_SAFE_MODE=1`) — no provider,
+        // Fork: sealed (`Fork.isSealed`, also `AGENTNOTCH_SAFE_MODE=1`) — no provider,
         // updater, phone link, token refresher or session monitor is created.
         if Fork.isSealed { // Fork: sealed, fixtures only
             fleet.setSnapshots(Fixtures.snapshots())

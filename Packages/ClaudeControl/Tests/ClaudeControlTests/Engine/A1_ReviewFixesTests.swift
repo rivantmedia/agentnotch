@@ -13,7 +13,7 @@ struct A1_ReviewFixesTests {
     private let transcript: String
 
     init() throws {
-        account = try TemporaryAccount(prefix: "spcn-a1-review")
+        account = try TemporaryAccount(prefix: "agentnotch-a1-review")
         transcript = account.transcript("s1")
     }
 
@@ -99,7 +99,7 @@ struct A1_ReviewFixesTests {
 
     @MainActor
     @Test func aMonitorStoppedAndStartedAgainStillListens() async throws {
-        let socketPath = "/tmp/spcn-a1r-\(getpid())-\(UInt32.random(in: 0...UInt32.max)).sock"
+        let socketPath = "/tmp/agentnotch-a1r-\(getpid())-\(UInt32.random(in: 0...UInt32.max)).sock"
         let store = makeStore()
         let monitor = ClaudeSessionMonitor(store: store, server: HookSocketServer(socketPath: socketPath))
         monitor.startSessionPipeline()

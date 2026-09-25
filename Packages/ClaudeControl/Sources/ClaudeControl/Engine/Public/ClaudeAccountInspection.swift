@@ -4,7 +4,7 @@
 //
 //  What the app would make of a home folder's Claude Code folders, printed
 //  for a person: `swift run --package-path Packages/ClaudeControl
-//  spcn-inspect-accounts [--home <dir>]`. The same discovery,
+//  agentnotch-inspect-accounts [--home <dir>]`. The same discovery,
 //  classification and grouping the app runs, against a home folder,
 //  strictly read-only:
 //

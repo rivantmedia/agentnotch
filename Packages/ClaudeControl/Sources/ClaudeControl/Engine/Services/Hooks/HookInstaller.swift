@@ -56,7 +56,7 @@ nonisolated enum HookInstallOutcome: Equatable, Sendable {
     case writeFailed(String)
     /// The account's config dir does not exist (yet).
     case configDirMissing
-    /// Installation is disabled for this run (`--no-install` / `SPCN_NO_INSTALL=1`),
+    /// Installation is disabled for this run (`--no-install` / `AGENTNOTCH_NO_INSTALL=1`),
     /// or the folder is the real one of the user running tests. Nothing was
     /// read or written.
     case disabled
@@ -157,7 +157,7 @@ nonisolated enum HookInstaller {
 
     /// Where the previous `statusLine` object is kept while ours wraps it.
     /// Lives next to the wrapper script, which reads it to chain the command.
-    static let previousStatusLineFileName = "superpowered-codenotch-statusline.previous.json"
+    static let previousStatusLineFileName = "agentnotch-statusline.previous.json"
 
     // MARK: - Configuration
 
@@ -350,6 +350,9 @@ nonisolated enum HookInstaller {
             try? fm.removeItem(at: statusLineScriptURL(configDir: configDir))
             try? fm.removeItem(at: previousStatusLineURL(configDir: configDir))
         }
+        if outcome == .installed || outcome == .alreadyCurrent {
+            removeFormerNameFiles(configDir: configDir)
+        }
 
         switch outcome {
         case .installed:
@@ -385,6 +388,7 @@ nonisolated enum HookInstaller {
             try? fm.removeItem(at: hookScriptURL(configDir: configDir))
             try? fm.removeItem(at: statusLineScriptURL(configDir: configDir))
             try? fm.removeItem(at: previousStatusLineURL(configDir: configDir))
+            removeFormerNameFiles(configDir: configDir)
             // The folder our scripts went into, when nothing else is in it.
             let hooks = hooksDir(configDir: configDir)
             if (try? fm.destinationOfSymbolicLink(atPath: hooks.path)) == nil,
@@ -394,6 +398,45 @@ nonisolated enum HookInstaller {
             logger.info("Uninstalled hooks from \(configDir, privacy: .public)")
         }
         return outcome
+    }
+
+    /// Delete what the app wrote into this folder's hooks dir under its former
+    /// name (`AppIdentity.formerHookScriptName`, …) once this folder's
+    /// settings.json no longer runs any of it: the install that replaced
+    /// those entries has saved the status line they chained to under the new
+    /// name. A copy of this settings.json in another folder that still runs
+    /// them fails open (the command checks for its script) until that
+    /// folder's own install replaces the entry. Left alone while the file
+    /// can't be read.
+    static func removeFormerNameFiles(configDir: String, home: String = AccountPaths.homeDirectory) {
+        let fm = FileManager.default
+        let hooks = hooksDir(configDir: configDir)
+        let scripts = [AppIdentity.formerHookScriptName, AppIdentity.formerStatusLineScriptName]
+        let files = scripts + [AppIdentity.formerPreviousStatusLineFileName]
+        guard files.contains(where: { fm.fileExists(atPath: hooks.appendingPathComponent($0).path) }) else { return }
+
+        let settingsURL = settingsFile(configDir: configDir)
+        if fm.fileExists(atPath: settingsURL.path) {
+            guard let data = try? Data(contentsOf: settingsURL), let document = SettingsDocument(data: data) else { return }
+            let json = document.value
+            var commands: [String] = []
+            for member in json["hooks"]?.members ?? [] {
+                for group in member.value.items ?? [] {
+                    for entry in group["hooks"]?.items ?? [] {
+                        if let command = entry["command"]?.stringValue { commands.append(command) }
+                    }
+                }
+            }
+            if let command = json["statusLine"]?["command"]?.stringValue { commands.append(command) }
+            let stillRun = commands.contains { command in
+                scripts.contains { HookCommands.scriptPath(in: command, named: $0, home: home) != nil }
+            }
+            guard !stillRun else { return }
+        }
+        for name in files {
+            try? fm.removeItem(at: hooks.appendingPathComponent(name))
+        }
+        logger.info("Removed the former name's scripts from \(configDir, privacy: .public)")
     }
 
     /// Remove another notch app's hooks from one account, restoring the
@@ -487,6 +530,7 @@ nonisolated enum HookInstaller {
     private static func statusLineScriptPath(_ statusLine: OrderedJSON?, configDir: String, home: String) -> String {
         let command = statusLine?["command"]?.stringValue ?? ""
         return HookCommands.scriptPath(in: command, named: AppIdentity.statusLineScriptName, home: home)
+            ?? HookCommands.scriptPath(in: command, named: AppIdentity.formerStatusLineScriptName, home: home)
             ?? statusLineScriptURL(configDir: configDir).path
     }
 
@@ -497,6 +541,13 @@ nonisolated enum HookInstaller {
     static func savedStatusLineURL(existing: OrderedJSON?, configDir: String, home: String) -> URL {
         let own = previousStatusLineURL(configDir: configDir)
         guard let statusLine = existing?["statusLine"], isOurStatusLine(statusLine, home: home) else { return own }
+        let command = statusLine["command"]?.stringValue ?? ""
+        // The wrapper under the app's former name saved it under that name.
+        if HookCommands.scriptPath(in: command, named: AppIdentity.statusLineScriptName, home: home) == nil,
+           let former = HookCommands.scriptPath(in: command, named: AppIdentity.formerStatusLineScriptName, home: home) {
+            return URL(fileURLWithPath: former).deletingLastPathComponent()
+                .appendingPathComponent(AppIdentity.formerPreviousStatusLineFileName)
+        }
         let script = statusLineScriptPath(statusLine, configDir: configDir, home: home)
         return URL(fileURLWithPath: script).deletingLastPathComponent().appendingPathComponent(previousStatusLineFileName)
     }
@@ -840,9 +891,12 @@ nonisolated enum HookInstaller {
         return restored
     }
 
+    /// Whether the status line is our wrapper, under this name or the former
+    /// one (see `AppIdentity.formerStatusLineScriptName`).
     static func isOurStatusLine(_ value: OrderedJSON?, home: String = AccountPaths.homeDirectory) -> Bool {
         guard let command = value?["command"]?.stringValue else { return false }
         return HookCommands.runs(command, script: AppIdentity.statusLineScriptName, home: home)
+            || HookCommands.runs(command, script: AppIdentity.formerStatusLineScriptName, home: home)
     }
 
     static func isLegacyStatusLine(_ value: OrderedJSON?, kind: LegacyHookKind, home: String = AccountPaths.homeDirectory) -> Bool {
@@ -933,9 +987,11 @@ nonisolated enum HookInstaller {
 
     /// Whether a hook command runs this app's script (exactly: see
     /// `HookCommands.scriptPath`). Other apps' entries never match, so they
-    /// can keep their hooks in the same settings.json.
+    /// can keep their hooks in the same settings.json. The script under the
+    /// app's former name is ours too, so its entries are replaced, not stacked.
     static func isOurHook(_ command: String, home: String = AccountPaths.homeDirectory) -> Bool {
         HookCommands.runs(command, script: AppIdentity.hookScriptName, home: home)
+            || HookCommands.runs(command, script: AppIdentity.formerHookScriptName, home: home)
     }
 
     /// Whether a hook command is one of another notch app's.
@@ -1090,7 +1146,7 @@ nonisolated enum HookInstaller {
 
         func backupStatusLine() -> OrderedJSON? {
             HookInstaller.newestStatusLine(inBackupsBeside: HookInstaller.settingsFile(configDir: configDir),
-                                           prefixes: [HookInstaller.backupPrefix, HookInstaller.originalBackupName], home: home)
+                                           prefixes: HookInstaller.ownBackupPrefixes, home: home)
         }
 
         func vibeNotchPreviousStatusLine() -> OrderedJSON? {
@@ -1307,7 +1363,7 @@ nonisolated enum HookInstaller {
     /// rename is atomic) with `permissions`.
     private static func stage(_ data: Data, besides target: URL, permissions: Int) throws -> URL {
         let staged = target.deletingLastPathComponent()
-            .appendingPathComponent(".\(target.lastPathComponent).spcn-\(UUID().uuidString.prefix(8)).tmp")
+            .appendingPathComponent(".\(target.lastPathComponent).agentnotch-\(UUID().uuidString.prefix(8)).tmp")
         let descriptor = open(staged.path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, mode_t(permissions & 0o777))
         guard descriptor >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
@@ -1338,10 +1394,15 @@ nonisolated enum HookInstaller {
 
     // MARK: - Backups
 
-    static let backupPrefix = "settings.json.superpowered-codenotch-"
+    static let backupPrefix = "settings.json.agentnotch-"
     static let backupSuffix = ".bak"
     /// The copy made before this app first changed the file; never pruned.
-    static let originalBackupName = "settings.json.superpowered-codenotch.original.bak"
+    static let originalBackupName = "settings.json.agentnotch.original.bak"
+    /// Every backup of ours to look through for a lost saved status line, in
+    /// the order they are trusted: this name's timestamped ones, the former
+    /// name's, then the originals (see `newestStatusLine`).
+    static let ownBackupPrefixes = [backupPrefix, AppIdentity.formerBackupPrefix,
+                                    originalBackupName, AppIdentity.formerOriginalBackupName]
 
     /// How many of our own timestamped backups to keep beside each settings.json.
     static let maxBackups = 5
@@ -1415,7 +1476,9 @@ nonisolated enum HookInstaller {
     /// status line then; an older backup's may be one they removed since).
     /// For restoring when the saved copy is gone. `isWrapper` says which
     /// status lines are the wrapper in question (default: ours or Superpowered
-    /// Vibe Notch's).
+    /// Vibe Notch's). Backups are ranked by the first of `prefixes` they
+    /// match, newest first within one prefix: timestamps only compare within
+    /// one app's names.
     static func newestStatusLine(
         inBackupsBeside settingsURL: URL,
         prefixes: [String],
@@ -1424,13 +1487,14 @@ nonisolated enum HookInstaller {
     ) -> OrderedJSON? {
         let isWrapper = isWrapper ?? { isAnyWrapper($0, home: home) }
         let directory = settingsURL.deletingLastPathComponent()
+        func rank(_ name: String) -> Int? {
+            prefixes.firstIndex { name.hasPrefix($0) }
+        }
         let names = ((try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? [])
-            .filter { name in prefixes.contains { name.hasPrefix($0) } && name.hasSuffix(backupSuffix) }
-            // Timestamped ones newest first, then the original.
+            .filter { name in rank(name) != nil && name.hasSuffix(backupSuffix) }
             .sorted { lhs, rhs in
-                let lhsOriginal = lhs == originalBackupName
-                let rhsOriginal = rhs == originalBackupName
-                if lhsOriginal != rhsOriginal { return rhsOriginal }
+                let lhsRank = rank(lhs) ?? .max, rhsRank = rank(rhs) ?? .max
+                if lhsRank != rhsRank { return lhsRank < rhsRank }
                 return lhs > rhs
             }
         for name in names {

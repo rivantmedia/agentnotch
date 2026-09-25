@@ -36,7 +36,7 @@ final class RegistryDirsBridge {
     /// Dirs to scan: every tracked folder Claude Code runs in (never a
     /// Claude Parallel Profiles store: nothing runs there). The scanner
     /// always adds ~/.claude and the configuration's extra dirs
-    /// (`SPCN_EXTRA_CONFIG_DIRS`), and reads a shared sessions folder once.
+    /// (`AGENTNOTCH_EXTRA_CONFIG_DIRS`), and reads a shared sessions folder once.
     nonisolated static func configDirs(for accounts: [ClaudeAccount]) -> Set<String> {
         Set(accounts.filter { !$0.isHidden && $0.kind == .run }.map { AccountPaths.normalize($0.configDir) })
     }

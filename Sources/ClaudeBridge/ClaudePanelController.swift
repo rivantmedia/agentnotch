@@ -99,7 +99,7 @@ final class ClaudePanelController {
     /// Wire the panel to the notch and the engine (WP-C, from
     /// `ClaudeBridge.attach`, before any notch exists). Also starts the hold
     /// (`ClaudeNotchHold`), the settings navigation (`ClaudeSettingsNavigation`)
-    /// and the hot key, and in sealed runs the `SPCN_OPEN_PANEL_ON_LAUNCH`
+    /// and the hot key, and in sealed runs the `AGENTNOTCH_OPEN_PANEL_ON_LAUNCH`
     /// development hook.
     func configure(fleet: NotchFleet, preferences: Preferences, hub: ClaudeControlHub) {
         self.fleet = fleet
@@ -700,24 +700,24 @@ final class ClaudePanelController {
     private func trace(_ message: String) {
         Log.sessions.info("claude panel: \(message, privacy: .public)")
         if Fork.isSealed {
-            FileHandle.standardError.write(Data("[spcn-panel] \(message)\n".utf8))
+            FileHandle.standardError.write(Data("[agentnotch-panel] \(message)\n".utf8))
         }
     }
 
     // MARK: - Sealed launch hook
 
-    /// Sealed runs only: `SPCN_OPEN_PANEL_ON_LAUNCH=sessions|sessions:<ring>|
+    /// Sealed runs only: `AGENTNOTCH_OPEN_PANEL_ON_LAUNCH=sessions|sessions:<ring>|
     /// session:<id>|setup`, optionally prefixed `auto:` to open the way an
     /// auto-open does, opens the panel once the notches are up; with
-    /// `SPCN_PANEL_CLOSE_AFTER=<seconds>` it is closed again after that long,
+    /// `AGENTNOTCH_PANEL_CLOSE_AFTER=<seconds>` it is closed again after that long,
     /// to show the notch's pin and hover cards coming back. With
-    /// `SPCN_PANEL_SELF_TEST=1` it is driven through `runSelfTest` instead.
+    /// `AGENTNOTCH_PANEL_SELF_TEST=1` it is driven through `runSelfTest` instead.
     private func runLaunchHook() {
         let environment = ProcessInfo.processInfo.environment
-        guard let value = environment["SPCN_OPEN_PANEL_ON_LAUNCH"],
+        guard let value = environment["AGENTNOTCH_OPEN_PANEL_ON_LAUNCH"],
               let request = ClaudePanelPolicy.launchRequest(value) else { return }
-        let closeAfter = environment["SPCN_PANEL_CLOSE_AFTER"].flatMap(TimeInterval.init)
-        let selfTest = environment["SPCN_PANEL_SELF_TEST"] == "1"
+        let closeAfter = environment["AGENTNOTCH_PANEL_CLOSE_AFTER"].flatMap(TimeInterval.init)
+        let selfTest = environment["AGENTNOTCH_PANEL_SELF_TEST"] == "1"
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.launchHookDelay) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }
@@ -728,7 +728,7 @@ final class ClaudePanelController {
                 } else if let closeAfter {
                     DispatchQueue.main.asyncAfter(deadline: .now() + closeAfter) {
                         MainActor.assumeIsolated {
-                            self.close(because: "SPCN_PANEL_CLOSE_AFTER")
+                            self.close(because: "AGENTNOTCH_PANEL_CLOSE_AFTER")
                             self.isScriptedRun = false
                         }
                     }
@@ -741,7 +741,7 @@ final class ClaudePanelController {
 // MARK: - Sealed self-test
 
 extension ClaudePanelController {
-    /// Sealed runs only (`SPCN_PANEL_SELF_TEST=1`, after the launch hook
+    /// Sealed runs only (`AGENTNOTCH_PANEL_SELF_TEST=1`, after the launch hook
     /// opened the panel on a session's chat): the panel's behaviour driven
     /// in-process, the way the user's keys and clicks reach it, each step
     /// logged `self-test <step>: ok|FAIL (...)`. Nothing leaves the process:

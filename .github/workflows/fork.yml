@@ -1,6 +1,6 @@
 name: Fork
 
-# Superpowered Codenotch's own checks. Upstream's workflows (ci.yml,
+# Agent Notch's own checks. Upstream's workflows (ci.yml,
 # package.yml, windows*.yml) only run in vinzdg/codenotch; this one runs
 # everywhere else. It answers three questions:
 # - do upstream's tests still pass with the fork's seams in (make test-ci, which
@@ -14,7 +14,7 @@ name: Fork
 
 on:
   push:
-    branches: [superpowered, main]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 

@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 """
-Superpowered Codenotch hook (protocol v2)
+Agent Notch hook (protocol v2)
 Derived from Superpowered Vibe Notch's superpowered-notch-hook.py (Apache-2.0).
 
 Installed into every Claude Code account's <configDir>/hooks/ and registered
 for the session lifecycle events in that account's settings.json.
 
-- Forwards a compact JSON summary of each hook event to Superpowered
-  Codenotch.app over a Unix socket (fire and forget; the script half-closes
+- Forwards a compact JSON summary of each hook event to Agent Notch.app
+  over a Unix socket (fire and forget; the script half-closes
   its side so the app can read until EOF).
 - For PermissionRequest it waits for the user's decision from the app and
   prints Claude Code's PermissionRequest hook output.
 
 The app writes its socket path into SOCKET_PATH below when it installs this
-file (normally ~/Library/Application Support/Superpowered Codenotch/Claude/
+file (normally ~/Library/Application Support/Agent Notch/Claude/
 hook.sock), so it never collides with Superpowered Vibe Notch's or upstream
 Vibe Notch's.
-SPCN_SOCKET overrides the path, only with SPCN_DEV=1 too (development and
+AGENTNOTCH_SOCKET overrides the path, only with AGENTNOTCH_DEV=1 too (development and
 tests): a leftover export in a shell never redirects a real session.
 
 The script must never break Claude Code: it has no dependencies, runs on
@@ -32,7 +32,7 @@ import socket
 import stat
 import sys
 
-SOCKET_PATH = (os.environ.get("SPCN_SOCKET") if os.environ.get("SPCN_DEV") == "1" else None) or "__SPCN_SOCKET_PATH__"
+SOCKET_PATH = (os.environ.get("AGENTNOTCH_SOCKET") if os.environ.get("AGENTNOTCH_DEV") == "1" else None) or "__AGENTNOTCH_SOCKET_PATH__"
 
 CONNECT_TIMEOUT_SECONDS = 1.0
 # Matches the 86400 s timeout the installer registers for PermissionRequest.
@@ -46,7 +46,7 @@ MAX_LAST_ASSISTANT_MESSAGE = 1500
 MAX_PROMPT = 300
 MAX_TEXT = 2000
 
-DEFAULT_DENY_MESSAGE = "Denied by user via Superpowered Codenotch"
+DEFAULT_DENY_MESSAGE = "Denied by user via Agent Notch"
 
 # The whole message the app reads is at most this big: a tool input whose
 # strings are already clamped can still be huge (an array of hundreds of

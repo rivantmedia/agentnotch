@@ -12,7 +12,7 @@ struct SessionStoreFlowTests {
     private let reviewFile: URL
 
     init() throws {
-        account = try TemporaryAccount(prefix: "spcn-store")
+        account = try TemporaryAccount(prefix: "agentnotch-store")
         directory = account.root
         transcript = account.transcript("s1")
         reviewFile = account.reviewFile

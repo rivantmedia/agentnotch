@@ -33,7 +33,7 @@ public nonisolated struct ClaudeControlConfiguration {
     public var notificationsAllowed: Bool
     /// Claude Code may be launched to ask for usage (`get_usage`).
     public var probesAllowed: Bool
-    /// Extra config folders to treat as accounts (`SPCN_EXTRA_CONFIG_DIRS`).
+    /// Extra config folders to treat as accounts (`AGENTNOTCH_EXTRA_CONFIG_DIRS`).
     public var extraConfigDirs: [String]
     /// Selects a session's terminal tab in apps the engine cannot script
     /// itself (Ghostty, cmux, …). Returns whether it did.
@@ -77,8 +77,8 @@ public nonisolated struct ClaudeControlConfiguration {
 
     // MARK: - Names
 
-    public static let defaultHookScriptName = "superpowered-codenotch-hook.py"
-    public static let defaultStatusLineScriptName = "superpowered-codenotch-statusline.py"
+    public static let defaultHookScriptName = "agentnotch-hook.py"
+    public static let defaultStatusLineScriptName = "agentnotch-statusline.py"
     /// Sub-folder of the host's Application Support folder the engine owns.
     public static let engineFolderName = "Claude"
     /// Longest socket path `sockaddr_un` takes (104 bytes with the terminator).
@@ -87,16 +87,16 @@ public nonisolated struct ClaudeControlConfiguration {
     // MARK: - Factories
 
     /// The real app. Environment (all optional; see `DevFlags` for the full list):
-    /// - `SPCN_SUPPORT_DIR`: the engine's folder, instead of
+    /// - `AGENTNOTCH_SUPPORT_DIR`: the engine's folder, instead of
     ///   `~/Library/Application Support/<supportFolderName>/Claude`
-    /// - `SPCN_SOCKET`: the socket path, used as given
-    /// - `SPCN_NO_INSTALL` or `--no-install`: never write hooks
-    /// - `SPCN_NO_NOTIFICATIONS`: never post a notification
-    /// - `SPCN_EXTRA_CONFIG_DIRS`: more config folders, `:`-separated
+    /// - `AGENTNOTCH_SOCKET`: the socket path, used as given
+    /// - `AGENTNOTCH_NO_INSTALL` or `--no-install`: never write hooks
+    /// - `AGENTNOTCH_NO_NOTIFICATIONS`: never post a notification
+    /// - `AGENTNOTCH_EXTRA_CONFIG_DIRS`: more config folders, `:`-separated
     ///
     /// Boolean switches are on for `1`, `true` or `yes` (`DevFlags.truthy`).
-    /// Without `SPCN_SOCKET` the socket is `<support>/hook.sock`, or
-    /// `/tmp/spcn-<uid>/hook.sock` when that path is too long for a Unix socket.
+    /// Without `AGENTNOTCH_SOCKET` the socket is `<support>/hook.sock`, or
+    /// `/tmp/agentnotch-<uid>/hook.sock` when that path is too long for a Unix socket.
     public static func live(
         appDisplayName: String,
         bundleIdentifier: String,
@@ -106,7 +106,7 @@ public nonisolated struct ClaudeControlConfiguration {
     ) -> Self {
         let home = environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? NSHomeDirectory()
         let support: URL
-        if let override = environment["SPCN_SUPPORT_DIR"], !override.isEmpty {
+        if let override = environment["AGENTNOTCH_SUPPORT_DIR"], !override.isEmpty {
             support = URL(fileURLWithPath: DevFlags.expandTilde(override, home: home), isDirectory: true)
         } else {
             support = URL(fileURLWithPath: home, isDirectory: true)
@@ -115,7 +115,7 @@ public nonisolated struct ClaudeControlConfiguration {
                 .appendingPathComponent(engineFolderName, isDirectory: true)
         }
         let socket: String
-        if let override = environment["SPCN_SOCKET"], !override.isEmpty {
+        if let override = environment["AGENTNOTCH_SOCKET"], !override.isEmpty {
             socket = DevFlags.expandTilde(override, home: home)
         } else {
             socket = socketPath(in: support, userID: getuid())
@@ -128,10 +128,10 @@ public nonisolated struct ClaudeControlConfiguration {
             socketPath: socket,
             homeDirectory: home,
             defaults: .standard,
-            installsAllowed: !(arguments.contains("--no-install") || DevFlags.truthy(environment["SPCN_NO_INSTALL"])),
-            notificationsAllowed: !DevFlags.truthy(environment["SPCN_NO_NOTIFICATIONS"]),
+            installsAllowed: !(arguments.contains("--no-install") || DevFlags.truthy(environment["AGENTNOTCH_NO_INSTALL"])),
+            notificationsAllowed: !DevFlags.truthy(environment["AGENTNOTCH_NO_NOTIFICATIONS"]),
             probesAllowed: true,
-            extraConfigDirs: DevFlags.pathList(environment["SPCN_EXTRA_CONFIG_DIRS"], home: home)
+            extraConfigDirs: DevFlags.pathList(environment["AGENTNOTCH_EXTRA_CONFIG_DIRS"], home: home)
         )
     }
 
@@ -140,7 +140,7 @@ public nonisolated struct ClaudeControlConfiguration {
     /// directory and are never the user's.
     public static func sealed(appDisplayName: String, bundleIdentifier: String) -> Self {
         let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-            .appendingPathComponent("spcn-sealed-\(getuid())", isDirectory: true)
+            .appendingPathComponent("agentnotch-sealed-\(getuid())", isDirectory: true)
         let support = root.appendingPathComponent(engineFolderName, isDirectory: true)
         return Self(
             mode: .sealed,
@@ -158,8 +158,8 @@ public nonisolated struct ClaudeControlConfiguration {
 
     /// What the engine uses before `bootstrap` (tests, the snapshots tool):
     /// the real home, so pure path helpers behave as they will in the app, but
-    /// a support folder under the temporary directory. `SPCN_SUPPORT_DIR`,
-    /// `SPCN_SOCKET` and `SPCN_NO_INSTALL` apply as in `live`.
+    /// a support folder under the temporary directory. `AGENTNOTCH_SUPPORT_DIR`,
+    /// `AGENTNOTCH_SOCKET` and `AGENTNOTCH_NO_INSTALL` apply as in `live`.
     ///
     /// The real home is read, never changed, and `claude` never runs: each
     /// side effect that could reach it refuses while `AppIdentity` is not
@@ -173,14 +173,14 @@ public nonisolated struct ClaudeControlConfiguration {
         environment: [String: String] = Foundation.ProcessInfo.processInfo.environment
     ) -> Self {
         var environment = environment
-        if (environment["SPCN_SUPPORT_DIR"] ?? "").isEmpty {
-            environment["SPCN_SUPPORT_DIR"] = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        if (environment["AGENTNOTCH_SUPPORT_DIR"] ?? "").isEmpty {
+            environment["AGENTNOTCH_SUPPORT_DIR"] = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
                 .appendingPathComponent("ClaudeControl-\(getuid())", isDirectory: true).path
         }
         var configuration = live(
             appDisplayName: "ClaudeControl",
-            bundleIdentifier: "com.paraswtf.superpowered-codenotch",
-            supportFolderName: "Superpowered Codenotch",
+            bundleIdentifier: "com.rivantmedia.agentnotch",
+            supportFolderName: "Agent Notch",
             environment: environment,
             arguments: CommandLine.arguments
         )
@@ -192,10 +192,10 @@ public nonisolated struct ClaudeControlConfiguration {
 
     /// Where the socket falls back to when the preferred path is too long.
     static func fallbackSocketPath(userID: uid_t) -> String {
-        "/tmp/spcn-\(userID)/hook.sock"
+        "/tmp/agentnotch-\(userID)/hook.sock"
     }
 
-    /// `<support>/hook.sock`, or `/tmp/spcn-<uid>/hook.sock` when that would
+    /// `<support>/hook.sock`, or `/tmp/agentnotch-<uid>/hook.sock` when that would
     /// be longer than a Unix socket path may be (`sockaddr_un` holds 104
     /// bytes with the terminator). The socket server prepares the folder
     /// before binding (`HookSocketDirectory`: the shared fallback must be a

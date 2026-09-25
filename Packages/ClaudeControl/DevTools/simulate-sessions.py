@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Drive a running Superpowered Codenotch with fake Claude Code sessions.
+Drive a running Agent Notch with fake Claude Code sessions.
 Ported from Superpowered Vibe Notch's scripts/dev/simulate-sessions.py.
 
 Talks to the app's socket exactly like the real integration does:
 - hook events are piped through the real hook script
-  (Packages/ClaudeControl/Scripts/superpowered-codenotch-hook.py) with the
+  (Packages/ClaudeControl/Scripts/agentnotch-hook.py) with the
   environment Claude Code gives hooks (CLAUDE_PID, CLAUDE_CONFIG_DIR, ...),
 - status line updates are sent in the status line wrapper's message format.
 
@@ -25,14 +25,14 @@ starts the app: run it yourself against a private socket and support folder.
 
 Typical dev loop (the root is printed at start):
 
-    SPCN_SOCKET=/tmp/spcn-dev.sock SPCN_SUPPORT_DIR=/tmp/spcn-dev-support \\
-    SPCN_NO_INSTALL=1 SPCN_NO_NOTIFICATIONS=1 \\
-    SPCN_EXTRA_CONFIG_DIRS=<root>/.claude:<root>/.claude-work \\
-      "<Superpowered Codenotch.app>/Contents/MacOS/<executable>" --dump-state --dev-console
-    SPCN_SOCKET=/tmp/spcn-dev.sock Packages/ClaudeControl/DevTools/simulate-sessions.py \\
+    AGENTNOTCH_SOCKET=/tmp/agentnotch-dev.sock AGENTNOTCH_SUPPORT_DIR=/tmp/agentnotch-dev-support \\
+    AGENTNOTCH_NO_INSTALL=1 AGENTNOTCH_NO_NOTIFICATIONS=1 \\
+    AGENTNOTCH_EXTRA_CONFIG_DIRS=<root>/.claude:<root>/.claude-work \\
+      "<Agent Notch.app>/Contents/MacOS/<executable>" --dump-state --dev-console
+    AGENTNOTCH_SOCKET=/tmp/agentnotch-dev.sock Packages/ClaudeControl/DevTools/simulate-sessions.py \\
       --root <root> --scenario all
 
-(--root lets the app be started first with the matching SPCN_EXTRA_CONFIG_DIRS;
+(--root lets the app be started first with the matching AGENTNOTCH_EXTRA_CONFIG_DIRS;
 without it the simulator makes one and prints the line to use.)
 
 Scenarios: permission, question, tasks, review, ratelimit, statusline,
@@ -56,21 +56,21 @@ import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_HOOK = os.path.join(HERE, "..", "Scripts", "superpowered-codenotch-hook.py")
+DEFAULT_HOOK = os.path.join(HERE, "..", "Scripts", "agentnotch-hook.py")
 MAX_SOCKET_PATH_BYTES = 103
 
 
 def default_socket():
-    """The app's socket: SPCN_SOCKET, else <support>/hook.sock, else the /tmp
+    """The app's socket: AGENTNOTCH_SOCKET, else <support>/hook.sock, else the /tmp
     fallback when that path is too long for a Unix socket (as the app does)."""
-    if os.environ.get("SPCN_SOCKET"):
-        return os.environ["SPCN_SOCKET"]
-    support = os.environ.get("SPCN_SUPPORT_DIR") or os.path.expanduser(
-        "~/Library/Application Support/Superpowered Codenotch/Claude"
+    if os.environ.get("AGENTNOTCH_SOCKET"):
+        return os.environ["AGENTNOTCH_SOCKET"]
+    support = os.environ.get("AGENTNOTCH_SUPPORT_DIR") or os.path.expanduser(
+        "~/Library/Application Support/Agent Notch/Claude"
     )
     path = os.path.join(support, "hook.sock")
     if len(path.encode("utf-8")) > MAX_SOCKET_PATH_BYTES:
-        path = "/tmp/spcn-%d/hook.sock" % os.getuid()
+        path = "/tmp/agentnotch-%d/hook.sock" % os.getuid()
     return path
 
 
@@ -210,8 +210,8 @@ class FakeSession:
     def hook_env(self):
         env = dict(os.environ)
         env.update({
-            "SPCN_SOCKET": ARGS.socket,
-            "SPCN_DEV": "1",
+            "AGENTNOTCH_SOCKET": ARGS.socket,
+            "AGENTNOTCH_DEV": "1",
             "CLAUDE_PID": str(self.pid),
             "CLAUDE_CONFIG_DIR": self.config_dir,
             "CLAUDE_CODE_SESSION_ATTENDED": "1",
@@ -562,7 +562,7 @@ def scenario_registry(run_id):
     bg.write_registry("busy", kind="bg")
     say("EXPECT", "%s is NOT tracked (kind=bg)" % bg.short)
     say("HINT", "the registry is polled every 3 s. The app must know the account: run after another "
-        "work-account scenario, or launch it with SPCN_EXTRA_CONFIG_DIRS=%s" % ":".join(ACCOUNTS.values()))
+        "work-account scenario, or launch it with AGENTNOTCH_EXTRA_CONFIG_DIRS=%s" % ":".join(ACCOUNTS.values()))
     return [s, bg]
 
 
@@ -649,7 +649,7 @@ def main():
     parser.add_argument("--scenario", action="append",
                         help="scenario to run (repeatable or comma separated): %s, all"
                              % ", ".join(SCENARIOS + EXTRA_SCENARIOS))
-    parser.add_argument("--socket", default=default_socket(), help="app socket (default: $SPCN_SOCKET, else the app's)")
+    parser.add_argument("--socket", default=default_socket(), help="app socket (default: $AGENTNOTCH_SOCKET, else the app's)")
     parser.add_argument("--hook", default=os.path.normpath(DEFAULT_HOOK), help="hook script to run")
     parser.add_argument("--root", help="folder for the fake accounts (default: a new temporary one)")
     parser.add_argument("--keep-root", action="store_true", help="don't delete the fake accounts at the end")
@@ -674,12 +674,12 @@ def main():
     if unknown:
         parser.error("unknown scenario(s): %s" % ", ".join(unknown))
     if not os.path.exists(ARGS.socket):
-        parser.error("socket %s doesn't exist: is the app running with this SPCN_SOCKET?" % ARGS.socket)
+        parser.error("socket %s doesn't exist: is the app running with this AGENTNOTCH_SOCKET?" % ARGS.socket)
     if not os.path.exists(ARGS.hook):
         parser.error("hook script not found: %s" % ARGS.hook)
 
     made_root = ARGS.root is None
-    root = ARGS.root or tempfile.mkdtemp(prefix="spcn-fake-")
+    root = ARGS.root or tempfile.mkdtemp(prefix="agentnotch-fake-")
     root = os.path.abspath(root)
     ACCOUNTS["personal"] = os.path.join(root, ".claude")
     ACCOUNTS["work"] = os.path.join(root, ".claude-work")
@@ -692,7 +692,7 @@ def main():
 
     run_id = "%04x" % random.getrandbits(16)
     say("run", "run %s · socket %s" % (run_id, ARGS.socket))
-    say("run", "fake accounts: SPCN_EXTRA_CONFIG_DIRS=%s" % ":".join(ACCOUNTS.values()))
+    say("run", "fake accounts: AGENTNOTCH_EXTRA_CONFIG_DIRS=%s" % ":".join(ACCOUNTS.values()))
 
     made = []
     try:

@@ -1,8 +1,8 @@
 //
 //  main.swift
-//  spcn-inspect-accounts
+//  agentnotch-inspect-accounts
 //
-//  Prints what Superpowered Codenotch makes of this Mac's Claude Code
+//  Prints what Agent Notch makes of this Mac's Claude Code
 //  folders: the accounts (one per signed-in identity) with the folders
 //  Claude Code runs in and their Claude Parallel Profiles stores, the
 //  infrastructure it ignores, where hooks would be installed, and what the
@@ -11,7 +11,7 @@
 //  store marker's existence, and `oauthAccount` plus two fields of
 //  `cachedUsageUtilization` from each `.claude.json`.
 //
-//      swift run --package-path Packages/ClaudeControl spcn-inspect-accounts [--home <dir>]
+//      swift run --package-path Packages/ClaudeControl agentnotch-inspect-accounts [--home <dir>]
 //
 
 import ClaudeControl

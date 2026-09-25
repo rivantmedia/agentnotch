@@ -79,7 +79,7 @@ struct Integration_FailureBannerTests {
         let content = SessionNotificationContent.failed(session: failedSession("overloaded"),
                                                         reason: .error("Overloaded"), accountLabel: "Work")
         #expect(content.kind == .failed)
-        #expect(content.identifier == "spcn.failed.s1")
+        #expect(content.identifier == "agentnotch.failed.s1")
         #expect(content.title == "Refactor the parser stopped")
         #expect(!content.title.contains("needs you"))
         #expect(content.subtitle == "Work")
@@ -102,7 +102,7 @@ struct Integration_FailureBannerTests {
         let parsed = Content.parse(identifier: Content.identifier(kind: .failed, sessionId: "a.b"))
         #expect(parsed?.kind == .failed)
         #expect(parsed?.sessionId == "a.b")
-        #expect(NotificationRouting.response(identifier: "spcn.failed.a.b", actionIdentifier: NotificationService.openAction)
+        #expect(NotificationRouting.response(identifier: "agentnotch.failed.a.b", actionIdentifier: NotificationService.openAction)
             == .openSession("a.b"))
     }
 

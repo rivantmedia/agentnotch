@@ -8,7 +8,7 @@ import Testing
 /// account rings, with Codenotch's choices moved over and the rest gone.
 @MainActor
 @Suite(.serialized) struct RingMigratorTests {
-    private let suite = "spcn-ring-migrator-\(UUID().uuidString)"
+    private let suite = "agentnotch-ring-migrator-\(UUID().uuidString)"
 
     private func account(_ ring: String, former: [String]) -> ClaudeAccountSummary {
         var summary = ClaudeAccountSummary(id: ring, ringID: ring, configDir: "/h", label: ring, isDefault: false,

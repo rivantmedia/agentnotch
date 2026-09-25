@@ -24,19 +24,19 @@
 #                             least 9 seconds.
 #   --snapshot-claude <dir>   render the fork's notch and panel sheets to PNGs
 #                             in <dir> and exit (no window is shown); also
-#                             SPCN_SNAPSHOT_CLAUDE=<dir> in the environment
+#                             AGENTNOTCH_SNAPSHOT_CLAUDE=<dir> in the environment
 #
 # Safe beside a real setup, including the official Codenotch:
-# - a separate bundle, "build/sealed/Superpowered Codenotch Sealed.app", with
-#   bundle id com.paraswtf.superpowered-codenotch.sealed, so its preferences,
+# - a separate bundle, "build/sealed/Agent Notch Sealed.app", with
+#   bundle id com.rivantmedia.agentnotch.sealed, so its preferences,
 #   single-instance check and login item are its own (never com.vinz.codenotch,
 #   never the real fork's id);
-# - SPCN_SAFE_MODE=1: fixture rings only; no keychain, session/transcript
+# - AGENTNOTCH_SAFE_MODE=1: fixture rings only; no keychain, session/transcript
 #   reads, provider network calls or subprocesses (see Fork.isSealed);
 # - only the pid this script started is ever signalled, and the sealed
 #   preferences domain is deleted afterwards.
 # Other agents may launch the same sealed bundle id; hold the machine-wide
-# lock (mkdir /tmp/spcn-sealed-run.lock) around a run.
+# lock (mkdir /tmp/agentnotch-sealed-run.lock) around a run.
 #
 # The report lists inet sockets (expect none), files it holds open under
 # .claude/.codex or a keychain (expect none), and its on-screen windows. With
@@ -48,8 +48,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SEALED_ID="com.paraswtf.superpowered-codenotch.sealed"
-NAME="Superpowered Codenotch Sealed"
+SEALED_ID="com.rivantmedia.agentnotch.sealed"
+NAME="Agent Notch Sealed"
 OUT="$ROOT/build/sealed"
 
 SECONDS_ALIVE=8
@@ -71,11 +71,11 @@ while [[ $# -gt 0 ]]; do
     esac
     shift
 done
-# SPCN_SNAPSHOT_CLAUDE=<dir> in the environment is the same as
+# AGENTNOTCH_SNAPSHOT_CLAUDE=<dir> in the environment is the same as
 # --snapshot-claude <dir> (the app reads it in a sealed run and exits when
 # done, which a timed run would report as a failure).
-if [[ -z "$SNAPSHOT_DIR" && -n "${SPCN_SNAPSHOT_CLAUDE:-}" ]]; then
-    SNAPSHOT_DIR="$SPCN_SNAPSHOT_CLAUDE"
+if [[ -z "$SNAPSHOT_DIR" && -n "${AGENTNOTCH_SNAPSHOT_CLAUDE:-}" ]]; then
+    SNAPSHOT_DIR="$AGENTNOTCH_SNAPSHOT_CLAUDE"
 fi
 case "$EDGE" in ""|right|left|top|bottom) ;; *) echo "--edge must be right, left, top or bottom" >&2; exit 2 ;; esac
 # A sealed run lasts 10 seconds at most (the rule every agent and script
@@ -111,7 +111,7 @@ if [[ -n "$SNAPSHOT_DIR" ]]; then
     [[ "$SNAPSHOT_DIR" = /* ]] || SNAPSHOT_DIR="$PWD/$SNAPSHOT_DIR"
     trap forget_sealed_domain EXIT
     status=0
-    SPCN_SAFE_MODE=1 CODENOTCH_DEMO=1 "$EXE" --snapshot-claude "$SNAPSHOT_DIR" > "$LOG" 2>&1 &
+    AGENTNOTCH_SAFE_MODE=1 CODENOTCH_DEMO=1 "$EXE" --snapshot-claude "$SNAPSHOT_DIR" > "$LOG" 2>&1 &
     PID=$!
     # Within the same 10 seconds as any sealed run.
     for ((t = 0; t < 10; t++)); do kill -0 "$PID" 2>/dev/null || break; sleep 1; done
@@ -122,7 +122,7 @@ if [[ -n "$SNAPSHOT_DIR" ]]; then
     else
         wait "$PID" || status=$?
     fi
-    grep -v '^\[spcn-' "$LOG" || true
+    grep -v '^\[agentnotch-' "$LOG" || true
     [[ $status -eq 0 ]] || { echo "snapshot run failed (status $status); log: $LOG" >&2; exit 1; }
     exit 0
 fi
@@ -163,15 +163,15 @@ windows_json() { [[ -x "$PROBE" ]] && "$PROBE" "$1" 2>/dev/null; }
 forget_sealed_domain
 [[ -n "$EDGE" ]] && defaults write "$SEALED_ID" notchEdge -string "$EDGE"
 
-ENV=(SPCN_SAFE_MODE=1 CODENOTCH_DEMO=1)
+ENV=(AGENTNOTCH_SAFE_MODE=1 CODENOTCH_DEMO=1)
 SAMPLE_AT=$SECONDS_ALIVE
 if [[ $SELF_TEST -eq 1 ]]; then
     # Opens ~2 s after launch; the steps take ~5 s more and check themselves.
-    ENV+=(SPCN_OPEN_PANEL_ON_LAUNCH="$OPEN_PANEL" SPCN_PANEL_SELF_TEST=1)
+    ENV+=(AGENTNOTCH_OPEN_PANEL_ON_LAUNCH="$OPEN_PANEL" AGENTNOTCH_PANEL_SELF_TEST=1)
 elif [[ -n "$OPEN_PANEL" ]]; then
     # Opens ~2 s after launch; sampled with it open; closed before the end.
     SAMPLE_AT=$((SECONDS_ALIVE - 3))
-    ENV+=(SPCN_OPEN_PANEL_ON_LAUNCH="$OPEN_PANEL" SPCN_PANEL_CLOSE_AFTER=$((SECONDS_ALIVE - 4)))
+    ENV+=(AGENTNOTCH_OPEN_PANEL_ON_LAUNCH="$OPEN_PANEL" AGENTNOTCH_PANEL_CLOSE_AFTER=$((SECONDS_ALIVE - 4)))
 fi
 
 env "${ENV[@]}" "$EXE" >> "$LOG" 2>&1 &
@@ -226,15 +226,15 @@ fi
 
 if [[ $SELF_TEST -eq 1 && $alive -eq 1 ]]; then
     echo "panel log:"
-    report "$(grep '^\[spcn-panel\]' "$LOG" || true)"
+    report "$(grep '^\[agentnotch-panel\]' "$LOG" || true)"
     echo "panel self-test:"
-    steps=$(grep -c '^\[spcn-panel\] self-test ' "$LOG" || true)
-    failed=$(grep -c '^\[spcn-panel\] self-test .*: FAIL' "$LOG" || true)
+    steps=$(grep -c '^\[agentnotch-panel\] self-test ' "$LOG" || true)
+    failed=$(grep -c '^\[agentnotch-panel\] self-test .*: FAIL' "$LOG" || true)
     echo "  $steps steps, $failed failed"
     [[ "$steps" -ge 13 && "$failed" -eq 0 ]] || failures=$((failures + 1))
 elif [[ -n "$OPEN_PANEL" && $alive -eq 1 ]]; then
     echo "panel log:"
-    report "$(grep '^\[spcn-panel\]' "$LOG" || true)"
+    report "$(grep '^\[agentnotch-panel\]' "$LOG" || true)"
     echo "panel checks:"
     python3 - "${SNAPSHOT:-}" "${EDGE:-right}" "$LOG" <<'PY' || failures=$((failures + 1))
 import json, re, sys
@@ -252,7 +252,7 @@ def check(ok, what):
 windows = [w for w in snapshot.get("windows", []) if w["onscreen"] and w["w"] > 1 and w["h"] > 1]
 notches = [w for w in windows if w["layer"] == 25]
 panels = [w for w in windows if w["layer"] == 26]
-floating = re.search(r"\[spcn-panel\] open .* floating ", log) is not None
+floating = re.search(r"\[agentnotch-panel\] open .* floating ", log) is not None
 check(len(panels) == 1, f"one panel window on screen while open ({len(panels)})")
 if panels and floating:
     print("  (the panel floats: no notch or ring to hang off; adjacency not checked)")
@@ -292,8 +292,8 @@ if panels and notches and not floating:
     check(visible is not None and contains(visible, px0, py0, px1, py1),
           f"panel inside the visible frame {visible}")
 
-opened = re.search(r"\[spcn-panel\] open .*", log)
-closed = re.search(r"\[spcn-panel\] close .*", log)
+opened = re.search(r"\[agentnotch-panel\] open .*", log)
+closed = re.search(r"\[agentnotch-panel\] close .*", log)
 check(opened is not None, "the panel opened")
 if opened:
     line = opened.group(0)
@@ -312,7 +312,7 @@ if opened:
         print(f"  info key={key.group(1) if key else '?'}")
     before = re.search(r"frontmostBefore=(\S+)", line)
     after = re.search(r" frontmost=(\S+)", line)
-    ours = "com.paraswtf.superpowered-codenotch.sealed"
+    ours = "com.rivantmedia.agentnotch.sealed"
     if before and before.group(1) == ours:
         print("  info the app was already frontmost when the panel opened")
     else:

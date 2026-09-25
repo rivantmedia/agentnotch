@@ -9,7 +9,7 @@ import Testing
 /// the migration (PP-C8).
 @MainActor
 @Suite(.serialized) struct PPFixBridgeTests {
-    private let suite = "spcn-ppfix-bridge-\(UUID().uuidString)"
+    private let suite = "agentnotch-ppfix-bridge-\(UUID().uuidString)"
 
     @Test func theMenuBarNamesAnAccountRingNotItsHash() {
         #expect(ClaudeBridge.shortMenuBarLabel("Claude Rivant") == "Rivant")

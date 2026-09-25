@@ -8,7 +8,7 @@
 //    are clearly in use: ~/.claude, and a ~/.claude-* or ~/.claude_* folder
 //    that is signed in (`.claude.json` with `oauthAccount`) or has a live
 //    session (a `sessions/<pid>.json` whose process runs), unless its name
-//    says it is a backup; `SPCN_EXTRA_CONFIG_DIRS`;
+//    says it is a backup; `AGENTNOTCH_EXTRA_CONFIG_DIRS`;
 //  - hook and status line events (`AppEventBus.accountSightings`), which
 //    also carry the raw CLAUDE_CONFIG_DIR a session runs with;
 //  - the user (add an existing folder, create a new one, or accept a
@@ -215,7 +215,7 @@ final class AccountRegistry: ObservableObject {
     /// - Parameters:
     ///   - home: the home folder to discover in (injectable for tests).
     ///   - storeURL: where accounts.json lives (injectable for tests).
-    ///   - extraConfigDirs: `SPCN_EXTRA_CONFIG_DIRS`, added like discovered accounts.
+    ///   - extraConfigDirs: `AGENTNOTCH_EXTRA_CONFIG_DIRS`, added like discovered accounts.
     init(
         home: String = AccountPaths.homeDirectory,
         storeURL: URL? = nil,

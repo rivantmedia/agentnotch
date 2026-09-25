@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Build "Superpowered Codenotch.app" with only the Command Line Tools (no Xcode).
+# Build "Agent Notch.app" with only the Command Line Tools (no Xcode).
 #
-#   Scripts/spm-build-app.sh                 # debug build -> build/Superpowered Codenotch.app
+#   Scripts/spm-build-app.sh                 # debug build -> build/Agent Notch.app
 #   Scripts/spm-build-app.sh --release       # optimized build
 #   Scripts/spm-build-app.sh --skip-build    # re-assemble the bundle from the last build
-#   Scripts/spm-build-app.sh --bundle-id com.paraswtf.superpowered-codenotch.dev \
-#                            --name "Superpowered Codenotch Dev" --out build/dev
+#   Scripts/spm-build-app.sh --bundle-id com.rivantmedia.agentnotch.dev \
+#                            --name "Agent Notch Dev" --out build/dev
 #
 # Environment:
 #   SDKROOT        SDK to build against. Defaults to the newest MacOSX26.x SDK of
@@ -20,18 +20,18 @@
 #   Assets.xcassets       -> loose images + AppIcon.icns via iconutil (no actool)
 #
 # The bundle id must stay one that `Fork.ownsBundleIdentifier` accepts
-# (com.paraswtf.superpowered-codenotch or a suffix of it); the official
+# (com.rivantmedia.agentnotch or a suffix of it); the official
 # Codenotch (com.vinz.codenotch) is refused.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-BASE_ID="com.paraswtf.superpowered-codenotch"
+BASE_ID="com.rivantmedia.agentnotch"
 CONFIG=debug
 SKIP_BUILD=0
 BUNDLE_ID="$BASE_ID"
-NAME="Superpowered Codenotch"
+NAME="Agent Notch"
 OUT="$ROOT/build"
 
 while [[ $# -gt 0 ]]; do

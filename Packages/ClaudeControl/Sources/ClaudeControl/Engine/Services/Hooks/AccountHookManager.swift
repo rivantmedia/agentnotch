@@ -123,7 +123,7 @@ final class AccountHookManager: ObservableObject {
 
     // MARK: - State
 
-    /// Installs are disabled for this run (`--no-install` / `SPCN_NO_INSTALL=1`).
+    /// Installs are disabled for this run (`--no-install` / `AGENTNOTCH_NO_INSTALL=1`).
     var installsDisabled: Bool { environment.installsDisabled() }
 
     /// The user wants hooks installed (consented, and the Hooks switch is on).

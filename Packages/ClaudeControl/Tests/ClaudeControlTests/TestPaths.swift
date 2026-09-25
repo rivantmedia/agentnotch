@@ -12,6 +12,6 @@ nonisolated enum TestPaths {
     static let scripts = packageRoot.appendingPathComponent("Scripts", isDirectory: true)
 
     /// A socket path baked into scripts the tests install; they always
-    /// override it with SPCN_SOCKET.
-    static let unusedSocket = "/tmp/spcn-tests-unused.sock"
+    /// override it with AGENTNOTCH_SOCKET.
+    static let unusedSocket = "/tmp/agentnotch-tests-unused.sock"
 }

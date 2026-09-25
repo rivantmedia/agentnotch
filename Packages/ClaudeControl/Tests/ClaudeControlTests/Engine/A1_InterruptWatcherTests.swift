@@ -11,7 +11,7 @@ final class A1_InterruptWatcherTests {
     private let account: TemporaryAccount
 
     init() throws {
-        account = try TemporaryAccount(prefix: "spcn-a1-interrupt")
+        account = try TemporaryAccount(prefix: "agentnotch-a1-interrupt")
     }
 
     private static func line(_ json: [String: Any]) throws -> Data {

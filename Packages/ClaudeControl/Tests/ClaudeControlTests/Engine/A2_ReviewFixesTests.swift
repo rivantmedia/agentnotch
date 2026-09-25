@@ -71,7 +71,7 @@ nonisolated struct ReviewedInstallerTests {
         let dir = try makeConfigDir(settings: nil)
         defer { try? FileManager.default.removeItem(atPath: (dir as NSString).deletingLastPathComponent) }
         let settingsURL = URL(fileURLWithPath: dir + "/settings.json")
-        let wrapper = #"{"statusLine":{"type":"command","command":"python3 '\#(dir)/hooks/superpowered-codenotch-statusline.py'"}}"#
+        let wrapper = #"{"statusLine":{"type":"command","command":"python3 '\#(dir)/hooks/agentnotch-statusline.py'"}}"#
         func backup(_ stamp: String, _ text: String) throws {
             try Data(text.utf8).write(to: URL(fileURLWithPath: dir + "/" + HookInstaller.backupPrefix + stamp + HookInstaller.backupSuffix))
         }
@@ -130,7 +130,7 @@ nonisolated struct ReviewedInstallerTests {
 
         let command = try #require(try settings(dir)["statusLine"]?["command"]?.stringValue)
         let result = try TestShell.run(command, stdin: #"{"session_id":"s"}"#,
-                                       environment: ["PATH": "/usr/bin:/bin", "SPCN_DEV": "1", "SPCN_SOCKET": dir + "/missing.sock"])
+                                       environment: ["PATH": "/usr/bin:/bin", "AGENTNOTCH_DEV": "1", "AGENTNOTCH_SOCKET": dir + "/missing.sock"])
         #expect(result.status == 0)
         #expect(result.stdout.isEmpty)
     }
@@ -224,7 +224,7 @@ nonisolated struct SecondReviewInstallerTests {
 
         let command = try #require(try settings(dir)["statusLine"]?["command"]?.stringValue)
         let result = try TestShell.run(command, stdin: #"{"session_id":"s"}"#,
-                                       environment: ["PATH": "/usr/bin:/bin", "SPCN_DEV": "1", "SPCN_SOCKET": dir + "/missing.sock"])
+                                       environment: ["PATH": "/usr/bin:/bin", "AGENTNOTCH_DEV": "1", "AGENTNOTCH_SOCKET": dir + "/missing.sock"])
         #expect(result.stdout == "mine")
 
         // Nothing more to do on the next pass, and no staging files left behind.

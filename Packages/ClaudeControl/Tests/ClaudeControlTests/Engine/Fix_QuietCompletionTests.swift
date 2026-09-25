@@ -9,7 +9,7 @@ struct Fix_QuietCompletionTests {
     private let transcript: String
 
     init() throws {
-        account = try TemporaryAccount(prefix: "spcn-fix-quiet")
+        account = try TemporaryAccount(prefix: "agentnotch-fix-quiet")
         transcript = account.transcript("s1")
     }
 

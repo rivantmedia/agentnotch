@@ -7,7 +7,7 @@ import UserNotifications
 /// (Codenotch's thresholds and limits) and routes only its own.
 struct A3_NotificationPassThroughTests {
     @Test func foreignNotificationsAreNotPresentedOrActedOn() {
-        for identifier in ["codenotch.threshold.claude.80", "limit-reached-openai", "", "spcn", "needs-input.sess-1", "review.sess-1"] {
+        for identifier in ["codenotch.threshold.claude.80", "limit-reached-openai", "", "agentnotch", "needs-input.sess-1", "review.sess-1"] {
             #expect(!NotificationRouting.isOurs(identifier: identifier), "\(identifier)")
             #expect(NotificationRouting.presentationOptions(forIdentifier: identifier) == [], "\(identifier)")
             #expect(NotificationRouting.response(identifier: identifier, actionIdentifier: UNNotificationDefaultActionIdentifier) == nil)
@@ -16,30 +16,30 @@ struct A3_NotificationPassThroughTests {
     }
 
     @Test func oursAreSilentBanners() {
-        let options = NotificationRouting.presentationOptions(forIdentifier: "spcn.needsInput.abc")
+        let options = NotificationRouting.presentationOptions(forIdentifier: "agentnotch.needsInput.abc")
         #expect(options.contains(.banner) && options.contains(.list))
         #expect(!options.contains(.sound) && !options.contains(.badge))
     }
 
     @Test func clicksOnOursRoute() {
         typealias R = NotificationRouting
-        #expect(R.response(identifier: "spcn.needsInput.s-1", actionIdentifier: UNNotificationDefaultActionIdentifier) == .openSession("s-1"))
-        #expect(R.response(identifier: "spcn.review.s-1", actionIdentifier: NotificationService.openAction) == .openSession("s-1"))
-        #expect(R.response(identifier: "spcn.review.s-1", actionIdentifier: NotificationService.markReviewedAction) == .markReviewed("s-1"))
-        #expect(R.response(identifier: "spcn.review.s-1", actionIdentifier: UNNotificationDismissActionIdentifier) == R.Response.none)
-        #expect(R.response(identifier: "spcn.limit.claude-work", actionIdentifier: UNNotificationDefaultActionIdentifier) == .openRing("claude-work"))
-        #expect(R.response(identifier: "spcn.unknown.x", actionIdentifier: UNNotificationDefaultActionIdentifier) == R.Response.none)
+        #expect(R.response(identifier: "agentnotch.needsInput.s-1", actionIdentifier: UNNotificationDefaultActionIdentifier) == .openSession("s-1"))
+        #expect(R.response(identifier: "agentnotch.review.s-1", actionIdentifier: NotificationService.openAction) == .openSession("s-1"))
+        #expect(R.response(identifier: "agentnotch.review.s-1", actionIdentifier: NotificationService.markReviewedAction) == .markReviewed("s-1"))
+        #expect(R.response(identifier: "agentnotch.review.s-1", actionIdentifier: UNNotificationDismissActionIdentifier) == R.Response.none)
+        #expect(R.response(identifier: "agentnotch.limit.claude-work", actionIdentifier: UNNotificationDefaultActionIdentifier) == .openRing("claude-work"))
+        #expect(R.response(identifier: "agentnotch.unknown.x", actionIdentifier: UNNotificationDefaultActionIdentifier) == R.Response.none)
     }
 
     @Test func identifiersFollowTheDesign() throws {
-        #expect(SessionNotificationContent.identifier(kind: .needsInput, sessionId: "a1") == "spcn.needsInput.a1")
-        #expect(SessionNotificationContent.identifier(kind: .readyForReview, sessionId: "a1") == "spcn.review.a1")
-        let parsed = try #require(SessionNotificationContent.parse(identifier: "spcn.review.a1.b2"))
+        #expect(SessionNotificationContent.identifier(kind: .needsInput, sessionId: "a1") == "agentnotch.needsInput.a1")
+        #expect(SessionNotificationContent.identifier(kind: .readyForReview, sessionId: "a1") == "agentnotch.review.a1")
+        let parsed = try #require(SessionNotificationContent.parse(identifier: "agentnotch.review.a1.b2"))
         #expect(parsed.kind == .readyForReview && parsed.sessionId == "a1.b2")
-        #expect(SessionNotificationContent.parse(identifier: "spcn.review.") == nil)
-        #expect(SessionNotificationContent.parse(identifier: "spcn.limit.claude") == nil)
-        #expect(LimitNotificationContent.parse(identifier: "spcn.limit.claude-work") == "claude-work")
-        #expect(LimitNotificationContent.parse(identifier: "spcn.review.x") == nil)
+        #expect(SessionNotificationContent.parse(identifier: "agentnotch.review.") == nil)
+        #expect(SessionNotificationContent.parse(identifier: "agentnotch.limit.claude") == nil)
+        #expect(LimitNotificationContent.parse(identifier: "agentnotch.limit.claude-work") == "claude-work")
+        #expect(LimitNotificationContent.parse(identifier: "agentnotch.review.x") == nil)
         #expect(Set([NotificationService.needsInputCategory, NotificationService.reviewCategory, NotificationService.limitCategory]).count == 3)
     }
 }
@@ -48,7 +48,7 @@ struct A3_NotificationContentTests {
     @Test func oneLimitBannerPerAccount() {
         let many = LimitNotificationContent.make(ringID: "claude-work", accountLabel: "Work",
                                                  sessionTitles: ["A", "B", "C"], limitReset: "resets 14:05")
-        #expect(many.identifier == "spcn.limit.claude-work")
+        #expect(many.identifier == "agentnotch.limit.claude-work")
         #expect(many.title == "Work: 3 sessions hit the limit")
         #expect(many.body == "Rate limited · resets 14:05")
         let one = LimitNotificationContent.make(ringID: "claude", accountLabel: nil,

@@ -8,7 +8,7 @@ import Testing
 @MainActor
 struct Fix_ForgottenAccountTests {
     @Test func aRemovedAccountIsForgottenUntilAddedBack() throws {
-        let home = NSTemporaryDirectory() + "spcn-fix-forget-\(UUID().uuidString)"
+        let home = NSTemporaryDirectory() + "agentnotch-fix-forget-\(UUID().uuidString)"
         defer { try? FileManager.default.removeItem(atPath: home) }
         try FileManager.default.createDirectory(atPath: home + "/.claude-temp", withIntermediateDirectories: true)
         let registry = AccountRegistry(home: home, storeURL: URL(fileURLWithPath: home + "-support/accounts.json"),
@@ -25,7 +25,7 @@ struct Fix_ForgottenAccountTests {
     }
 
     @Test func theStoreDropsAForgottenAccountsSessions() async throws {
-        let temp = try TemporaryAccount(prefix: "spcn-fix-forget-store")
+        let temp = try TemporaryAccount(prefix: "agentnotch-fix-forget-store")
         let store = SessionStore.forTests(
             reviewStore: ReviewStateStore(fileURL: temp.reviewFile, writeDelay: 0, createsFolder: false),
             effects: .none, completionTiming: .immediate)

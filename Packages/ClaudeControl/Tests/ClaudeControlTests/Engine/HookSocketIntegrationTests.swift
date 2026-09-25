@@ -7,13 +7,13 @@ import Testing
 /// the original tool_input) and dead-hook detection.
 @Suite(.serialized)
 struct HookSocketIntegrationTests {
-    /// Packages/ClaudeControl/Scripts/superpowered-codenotch-hook.py.
+    /// Packages/ClaudeControl/Scripts/agentnotch-hook.py.
     private static let hookScript: String =
         TestPaths.scripts.appendingPathComponent(ClaudeControlConfiguration.defaultHookScriptName).path
 
     /// Short path: sun_path holds only 104 bytes.
     private static func socketPath() -> String {
-        "/tmp/spcn-test-\(getpid())-\(UInt32.random(in: 0...UInt32.max)).sock"
+        "/tmp/agentnotch-test-\(getpid())-\(UInt32.random(in: 0...UInt32.max)).sock"
     }
 
     /// Collects messages delivered by the server.
@@ -57,8 +57,8 @@ struct HookSocketIntegrationTests {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["python3", Self.hookScript]
         process.environment = [
-            "SPCN_SOCKET": socket,
-            "SPCN_DEV": "1",
+            "AGENTNOTCH_SOCKET": socket,
+            "AGENTNOTCH_DEV": "1",
             "PATH": "/usr/bin:/bin",
             "CLAUDE_PID": String(getpid()),
             "CLAUDE_CODE_SESSION_ATTENDED": "1",
@@ -90,7 +90,7 @@ struct HookSocketIntegrationTests {
         [
             "hook_event_name": event,
             "session_id": "sess-int",
-            "transcript_path": "/tmp/spcn-int/.claude/projects/-tmp/sess-int.jsonl",
+            "transcript_path": "/tmp/agentnotch-int/.claude/projects/-tmp/sess-int.jsonl",
             "cwd": "/tmp",
             "permission_mode": "default",
         ]

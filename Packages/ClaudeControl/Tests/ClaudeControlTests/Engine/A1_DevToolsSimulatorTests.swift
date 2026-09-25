@@ -13,8 +13,8 @@ final class A1_DevToolsSimulatorTests {
     private let socketPath: String
 
     init() throws {
-        account = try TemporaryAccount(prefix: "spcn-a1-sim")
-        socketPath = "/tmp/spcn-a1s-\(getpid())-\(UInt32.random(in: 0...UInt32.max)).sock"
+        account = try TemporaryAccount(prefix: "agentnotch-a1-sim")
+        socketPath = "/tmp/agentnotch-a1s-\(getpid())-\(UInt32.random(in: 0...UInt32.max)).sock"
     }
 
     private static let simulator = TestPaths.packageRoot.appendingPathComponent("DevTools/simulate-sessions.py").path

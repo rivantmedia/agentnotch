@@ -108,7 +108,7 @@ struct TranscriptTests {
 
     @Test func locatesTranscriptBySlugThenBySearch() throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("spcn-transcripts-\(UUID().uuidString)")
+            .appendingPathComponent("agentnotch-transcripts-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let configDir = root.appendingPathComponent(".claude-work").path
         let cwd = "/Users/me/@org/app"
@@ -134,7 +134,7 @@ struct TranscriptTests {
 
     @Test func subagentTranscriptLookup() throws {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("spcn-subagents-\(UUID().uuidString)")
+            .appendingPathComponent("agentnotch-subagents-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let project = root.appendingPathComponent("projects/-p").path
         let main = (project as NSString).appendingPathComponent("s1.jsonl")
@@ -149,7 +149,7 @@ struct TranscriptTests {
 
     @Test func incrementalParseSkipsPartialLines() async throws {
         let path = FileManager.default.temporaryDirectory
-            .appendingPathComponent("spcn-partial-\(UUID().uuidString).jsonl").path
+            .appendingPathComponent("agentnotch-partial-\(UUID().uuidString).jsonl").path
         defer { try? FileManager.default.removeItem(atPath: path) }
         let first = try JSONSerialization.data(withJSONObject: assistant(id: "m1", input: 1, output: 1))
         let second = try JSONSerialization.data(withJSONObject: assistant(id: "m2", requestId: "r2", input: 2, output: 2))

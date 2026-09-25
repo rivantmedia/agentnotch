@@ -86,7 +86,7 @@ verify-deps:
 		exit 1; \
 	}
 
-# Fork: the app is "Superpowered Codenotch.app". The running copy is quit by
+# Fork: the app is "Agent Notch.app". The running copy is quit by
 # bundle id, never by process name: `pkill -x Codenotch` would also quit the
 # official Codenotch running beside it.
 run: build
@@ -132,9 +132,9 @@ clean:
 RELEASE_DIR := build/release
 # Fork: the bundle's name has a space, so it is quoted wherever it is used and
 # never appears in a make target; DIST_NAME names the archive and disk images.
-APP_NAME    := Superpowered Codenotch
-DIST_NAME   := SuperpoweredCodenotch
-BUNDLE_ID   := com.paraswtf.superpowered-codenotch
+APP_NAME    := Agent Notch
+DIST_NAME   := AgentNotch
+BUNDLE_ID   := com.rivantmedia.agentnotch
 # Asks only if it is running: a bare `tell application id ... to quit` can launch it first.
 QUIT_RUNNING = osascript -e 'if application id "$(BUNDLE_ID)" is running then tell application id "$(BUNDLE_ID)" to quit' >/dev/null 2>&1 || true
 # The label of the stored notarytool credential in the login keychain, not
@@ -216,7 +216,7 @@ DOWNLOAD_PREFIX := https://hivinz.com/
 # an appcast for upstream's hivinz.com feed, so it refuses to run; the recipe
 # below is upstream's, kept for merges.
 appcast:
-	@echo "appcast: Sparkle updates are disabled in Superpowered Codenotch" && exit 1
+	@echo "appcast: Sparkle updates are disabled in Agent Notch" && exit 1
 	@test -n "$(SPARKLE_BIN)" || (echo "Sparkle tools not found — run make build first" && exit 1)
 	mkdir -p $(PAGES_DIR)
 	@# Rebuilt from what is actually in the folder, never merged into the old

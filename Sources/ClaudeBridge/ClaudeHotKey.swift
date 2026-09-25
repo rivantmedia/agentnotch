@@ -14,7 +14,7 @@ import ClaudeControl
 final class ClaudeHotKey {
     static let shared = ClaudeHotKey()
 
-    /// 'SPCN': tells our hot key apart from anyone else's in the handler.
+    /// 'AGENTNOTCH': tells our hot key apart from anyone else's in the handler.
     private static let signature: OSType = 0x5350_434E
 
     private var registered: PanelHotKey = .off

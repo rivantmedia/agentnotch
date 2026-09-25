@@ -1,7 +1,7 @@
 // swift-tools-version:6.2
 //
-// ClaudeControl: the Claude Code session and account layer of Superpowered
-// Codenotch (hooks, sessions, review queue, permissions, chat, token-free usage),
+// ClaudeControl: the Claude Code session and account layer of Agent
+// Notch (hooks, sessions, review queue, permissions, chat, token-free usage),
 // kept out of the upstream Codenotch sources so merges from upstream stay cheap.
 // Ported from Superpowered Vibe Notch; Apache-2.0 (see LICENSE and NOTICE).
 //
@@ -14,7 +14,7 @@
 // - ClaudeControlSnapshots        renders the panel, chat and settings to PNGs
 //                                 from fixtures: `swift run --package-path
 //                                 Packages/ClaudeControl ClaudeControlSnapshots <dir>`
-// - spcn-inspect-accounts         prints, read-only, the accounts the app
+// - agentnotch-inspect-accounts         prints, read-only, the accounts the app
 //                                 finds in a home folder (`--home <dir>`)
 //
 // Unlike the app target (Swift 5, minimal concurrency checking, like upstream)
@@ -46,7 +46,7 @@ let package = Package(
     products: [
         .library(name: "ClaudeControl", targets: ["ClaudeControl"]),
         .executable(name: "ClaudeControlSnapshots", targets: ["ClaudeControlSnapshots"]),
-        .executable(name: "spcn-inspect-accounts", targets: ["spcn-inspect-accounts"]),
+        .executable(name: "agentnotch-inspect-accounts", targets: ["agentnotch-inspect-accounts"]),
     ],
     dependencies: [
         .package(url: "https://github.com/swiftlang/swift-markdown", from: "0.5.0"),
@@ -67,7 +67,7 @@ let package = Package(
         // Read-only: what the app makes of this Mac's Claude folders
         // (accounts, their run folders and stores, install targets).
         .executableTarget(
-            name: "spcn-inspect-accounts",
+            name: "agentnotch-inspect-accounts",
             dependencies: ["ClaudeControl"],
             swiftSettings: isolationSettings
         ),

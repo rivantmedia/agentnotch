@@ -3,8 +3,8 @@
 //  ClaudeIsland
 //
 //  Wire format of the socket protocol (v2): the JSON the hook script
-//  (superpowered-codenotch-hook.py) and the status line wrapper
-//  (superpowered-codenotch-statusline.py) write to the app, and the permission
+//  (agentnotch-hook.py) and the status line wrapper
+//  (agentnotch-statusline.py) write to the app, and the permission
 //  response the app writes back. Decoding is lenient: unknown events, extra
 //  keys and loosely typed values never make a message undecodable, and fields
 //  a newer script adds (`stop_hook_active`, `background_task_types`,

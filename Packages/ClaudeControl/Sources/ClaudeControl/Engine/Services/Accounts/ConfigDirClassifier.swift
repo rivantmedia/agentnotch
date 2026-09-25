@@ -135,7 +135,7 @@ nonisolated struct ConfigDirSnapshot: Equatable, Sendable {
         /// Where `projects` / `sessions` point when they are symbolic links:
         /// resolved, absolute paths.
         var linkTargets: [String] = []
-        /// Known already (the registry, a hook, `SPCN_EXTRA_CONFIG_DIRS`):
+        /// Known already (the registry, a hook, `AGENTNOTCH_EXTRA_CONFIG_DIRS`):
         /// classified, but not subject to discovery's rules.
         var isExplicit = false
 

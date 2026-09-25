@@ -5,15 +5,15 @@
 //  macOS notifications for sessions that need the user or finished work to
 //  review, driven by AttentionTracker's per-session transitions.
 //
-//  - Identifiers are `spcn.needsInput.<session id>` and
-//    `spcn.review.<session id>` (thread = the session), so a newer banner
+//  - Identifiers are `agentnotch.needsInput.<session id>` and
+//    `agentnotch.review.<session id>` (thread = the session), so a newer banner
 //    replaces the older; each is withdrawn once the session no longer needs
 //    input, is reviewed, or goes away.
 //  - Sessions stopped by a usage limit share one banner per account,
-//    `spcn.limit.<ring id>`: "Work: 3 sessions hit the limit · resets 14:05",
+//    `agentnotch.limit.<ring id>`: "Work: 3 sessions hit the limit · resets 14:05",
 //    naming the window that ran out.
 //  - Any other failed turn (overloaded, sign-in, billing, …) gets its own
-//    kind of banner, `spcn.failed.<session id>`: "<title> stopped", with
+//    kind of banner, `agentnotch.failed.<session id>`: "<title> stopped", with
 //    what to do, never "needs you" (there is nothing to answer).
 //  - Quiet completions (a turn waiting on background agents, a /loop or
 //    cron tick) and completions from before launch are never announced.
@@ -69,7 +69,7 @@ nonisolated struct SessionNotificationContent: Equatable, Sendable {
     var identifier: String { Self.identifier(kind: kind, sessionId: sessionId) }
 
     /// Every identifier this app posts starts with this.
-    nonisolated static let identifierPrefix = "spcn."
+    nonisolated static let identifierPrefix = "agentnotch."
 
     nonisolated static func identifier(kind: Kind, sessionId: String) -> String {
         "\(identifierPrefix)\(kind.rawValue).\(sessionId)"
@@ -285,12 +285,12 @@ final class NotificationService: NSObject, ObservableObject {
 
     private static var logger: Logger { EngineLog.logger("Notifications") }
 
-    nonisolated static let needsInputCategory = "spcn.session.needsInput"
-    nonisolated static let reviewCategory = "spcn.session.review"
-    nonisolated static let limitCategory = "spcn.account.limit"
-    nonisolated static let failedCategory = "spcn.session.failed"
-    nonisolated static let openAction = "spcn.open"
-    nonisolated static let markReviewedAction = "spcn.markReviewed"
+    nonisolated static let needsInputCategory = "agentnotch.session.needsInput"
+    nonisolated static let reviewCategory = "agentnotch.session.review"
+    nonisolated static let limitCategory = "agentnotch.account.limit"
+    nonisolated static let failedCategory = "agentnotch.session.failed"
+    nonisolated static let openAction = "agentnotch.open"
+    nonisolated static let markReviewedAction = "agentnotch.markReviewed"
     nonisolated static let sessionIdKey = "sessionId"
 
     /// Transitions arriving within this long are handled together (one
@@ -314,7 +314,7 @@ final class NotificationService: NSObject, ObservableObject {
 
     /// UNUserNotificationCenter only works inside an app bundle (it throws
     /// for a bare `swift run` binary or the test runner). Sealed runs and
-    /// `SPCN_NO_NOTIFICATIONS=1` (see ClaudeControlConfiguration) turn it off.
+    /// `AGENTNOTCH_NO_NOTIFICATIONS=1` (see ClaudeControlConfiguration) turn it off.
     nonisolated static var isAvailable: Bool {
         if DevFlags.notificationsDisabled { return false }
         return Bundle.main.bundleIdentifier != nil && Bundle.main.bundleURL.pathExtension == "app"

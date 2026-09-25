@@ -10,7 +10,7 @@ import Testing
 struct A1_SocketLifecycleTests {
     /// Short paths: sun_path holds only 104 bytes.
     private static func socketPath() -> String {
-        "/tmp/spcn-a1-\(getpid())-\(UInt32.random(in: 0...UInt32.max)).sock"
+        "/tmp/agentnotch-a1-\(getpid())-\(UInt32.random(in: 0...UInt32.max)).sock"
     }
 
     private static func waitUntil(timeout: TimeInterval = 5, _ condition: () -> Bool) async throws -> Bool {
@@ -86,7 +86,7 @@ struct A1_SocketLifecycleTests {
     }
 
     @Test func unlinkChecksTheInode() throws {
-        let path = FileManager.default.temporaryDirectory.appendingPathComponent("spcn-a1-inode-\(UUID().uuidString)").path
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("agentnotch-a1-inode-\(UUID().uuidString)").path
         FileManager.default.createFile(atPath: path, contents: Data("a".utf8))
         defer { try? FileManager.default.removeItem(atPath: path) }
         let original = try #require(FileIdentity(path: path))
@@ -183,10 +183,10 @@ struct A1_SocketLifecycleTests {
     }
 
     @Test func sharedFallbackFolderIsPrivateAndOurs() throws {
-        let base = FileManager.default.temporaryDirectory.appendingPathComponent("spcn-a1-fallback-\(UUID().uuidString)")
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("agentnotch-a1-fallback-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: base) }
-        let shared = base.appendingPathComponent("spcn-\(getuid())").path
+        let shared = base.appendingPathComponent("agentnotch-\(getuid())").path
         let socket = (shared as NSString).appendingPathComponent("hook.sock")
 
         // Missing: created 0700.
@@ -212,7 +212,7 @@ struct A1_SocketLifecycleTests {
     }
 
     @Test func otherParentFoldersAreOnlyCreated() throws {
-        let base = FileManager.default.temporaryDirectory.appendingPathComponent("spcn-a1-support-\(UUID().uuidString)")
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("agentnotch-a1-support-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: base) }
         let socket = base.appendingPathComponent("Claude/hook.sock").path
         #expect(HookSocketDirectory.prepare(forSocketAt: socket, userID: getuid()) == nil)
@@ -227,8 +227,8 @@ struct A1_SocketLifecycleTests {
         let longSupport = "/Users/" + String(repeating: "u", count: 80)
         let configuration = ClaudeControlConfiguration.live(
             appDisplayName: "Test",
-            bundleIdentifier: "test.spcn",
-            supportFolderName: "Superpowered Codenotch",
+            bundleIdentifier: "test.agentnotch",
+            supportFolderName: "Agent Notch",
             environment: ["HOME": longSupport],
             arguments: []
         )
@@ -236,8 +236,8 @@ struct A1_SocketLifecycleTests {
         #expect(configuration.socketPath.utf8.count <= ClaudeControlConfiguration.maxSocketPathBytes)
 
         let overridden = ClaudeControlConfiguration.live(
-            appDisplayName: "Test", bundleIdentifier: "test.spcn", supportFolderName: "X",
-            environment: ["HOME": "/Users/u", "SPCN_SOCKET": "/tmp/custom.sock"], arguments: []
+            appDisplayName: "Test", bundleIdentifier: "test.agentnotch", supportFolderName: "X",
+            environment: ["HOME": "/Users/u", "AGENTNOTCH_SOCKET": "/tmp/custom.sock"], arguments: []
         )
         #expect(overridden.socketPath == "/tmp/custom.sock")
     }

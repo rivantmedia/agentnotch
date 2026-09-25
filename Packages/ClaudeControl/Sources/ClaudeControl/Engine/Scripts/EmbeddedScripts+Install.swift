@@ -11,7 +11,7 @@ import Foundation
 nonisolated enum EmbeddedScripts {
     /// The one token in each script replaced at install time, quotes included,
     /// so only the Python string literal is ever touched.
-    static let socketPlaceholder = "__SPCN_SOCKET_PATH__"
+    static let socketPlaceholder = "__AGENTNOTCH_SOCKET_PATH__"
     static let quotedPlaceholder = "\"" + socketPlaceholder + "\""
 
     /// The hook script for `socketPath`.

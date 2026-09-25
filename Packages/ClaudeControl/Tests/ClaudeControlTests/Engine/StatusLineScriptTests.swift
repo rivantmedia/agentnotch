@@ -106,8 +106,8 @@ nonisolated struct StatusLineScriptTests {
         process.arguments = ["python3", "-S", script.path]
         process.environment = [
             "PATH": "/usr/bin:/bin",
-            "SPCN_SOCKET": socket,
-            "SPCN_DEV": "1",
+            "AGENTNOTCH_SOCKET": socket,
+            "AGENTNOTCH_DEV": "1",
             "CLAUDE_CONFIG_DIR": "/Users/u/.claude-work",
         ]
         let input = Pipe()
@@ -188,8 +188,9 @@ nonisolated struct StatusLineScriptTests {
         #expect(server.message(timeout: 1) == nil)
     }
 
-    /// Nor to Superpowered Vibe Notch's wrapper, which may chain back to ours.
-    @Test(arguments: ["superpowered-codenotch-statusline.py", "superpowered-notch-statusline.py"])
+    /// Nor to ours under the former name, or Superpowered Vibe Notch's
+    /// wrapper, which may chain back to ours.
+    @Test(arguments: ["agentnotch-statusline.py", "superpowered-codenotch-statusline.py", "superpowered-notch-statusline.py"])
     func neverChainsToAWrapper(name: String) throws {
         defer { try? FileManager.default.removeItem(at: dir) }
         try setPrevious("python3 '/x/hooks/\(name)'")
@@ -276,7 +277,7 @@ nonisolated struct StatusLineScriptTests {
 
         let server = try OneShotSocketServer(path: dir.path + "/app.sock")
         let result = try TestShell.run(command, stdin: Self.statusLineJSON,
-                                       environment: ["PATH": "/usr/bin:/bin", "SPCN_DEV": "1", "SPCN_SOCKET": server.path])
+                                       environment: ["PATH": "/usr/bin:/bin", "AGENTNOTCH_DEV": "1", "AGENTNOTCH_SOCKET": server.path])
         #expect(result.stdout == "previous:\(Self.statusLineJSON.utf8.count)\n")
         #expect(result.status == 0)
         let message = try #require(server.message(timeout: 5))

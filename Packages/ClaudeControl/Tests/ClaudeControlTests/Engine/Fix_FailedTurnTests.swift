@@ -11,7 +11,7 @@ struct Fix_FailedTurnTests {
     private let transcript: String
 
     init() throws {
-        account = try TemporaryAccount(prefix: "spcn-fix-failed")
+        account = try TemporaryAccount(prefix: "agentnotch-fix-failed")
         transcript = account.transcript("s1")
     }
 

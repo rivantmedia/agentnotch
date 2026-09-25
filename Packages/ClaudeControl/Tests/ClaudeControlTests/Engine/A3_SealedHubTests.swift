@@ -20,7 +20,7 @@ struct A3_SealedHubTests {
     }
 
     @Test func sealedHubShowsEveryStateAndTouchesNothing() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("spcn-sealed-test-\(UUID().uuidString)")
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentnotch-sealed-test-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         var configuration = ClaudeControlConfiguration.sealed(appDisplayName: "Test", bundleIdentifier: "com.example.sealed-test")
         configuration.supportDirectory = root.appendingPathComponent("Claude", isDirectory: true)
@@ -130,7 +130,7 @@ struct A3_SealedHubTests {
     /// sessions and its reading arrive with no restart, and nothing else
     /// changes.
     @Test func aThirdAccountArrivesLater() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("spcn-sealed-test-\(UUID().uuidString)")
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentnotch-sealed-test-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let configuration = sealedConfiguration(root: root)
 
@@ -175,7 +175,7 @@ struct A3_SealedHubTests {
     /// again: stopping drops the baseline, so the next start takes a new,
     /// silent one.
     @Test func stoppingDropsTheTransitionBaseline() async throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("spcn-sealed-test-\(UUID().uuidString)")
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentnotch-sealed-test-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
         let hub = ClaudeControlHub(configuration: sealedConfiguration(root: root))
         #expect(hub.previousAttention == nil)

@@ -14,7 +14,7 @@ struct SessionCoreRegressionTests {
     private let reviewFile: URL
 
     init() throws {
-        account = try TemporaryAccount(prefix: "spcn-regress")
+        account = try TemporaryAccount(prefix: "agentnotch-regress")
         directory = account.root
         transcript = account.transcript("s1")
         reviewFile = account.reviewFile

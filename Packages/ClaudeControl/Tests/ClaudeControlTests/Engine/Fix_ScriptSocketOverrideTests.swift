@@ -2,11 +2,11 @@ import Foundation
 import Testing
 @testable import ClaudeControl
 
-/// S10: an installed script follows SPCN_SOCKET only with SPCN_DEV=1 too, so
-/// a leftover `export SPCN_SOCKET` never sends a real session elsewhere.
+/// S10: an installed script follows AGENTNOTCH_SOCKET only with AGENTNOTCH_DEV=1 too, so
+/// a leftover `export AGENTNOTCH_SOCKET` never sends a real session elsewhere.
 struct Fix_ScriptSocketOverrideTests {
     private func socketPath(script: String, environment: [String: String]) throws -> String {
-        let file = FileManager.default.temporaryDirectory.appendingPathComponent("spcn-override-\(UUID().uuidString).py")
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("agentnotch-override-\(UUID().uuidString).py")
         try script.write(to: file, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: file) }
         let process = Process()
@@ -26,10 +26,10 @@ struct Fix_ScriptSocketOverrideTests {
     }
 
     @Test func aLeftoverExportIsIgnored() throws {
-        let baked = "/Users/me/Library/Application Support/Superpowered Codenotch/Claude/hook.sock"
+        let baked = "/Users/me/Library/Application Support/Agent Notch/Claude/hook.sock"
         for script in [EmbeddedScripts.hook(socketPath: baked), EmbeddedScripts.statusLine(socketPath: baked)] {
-            #expect(try socketPath(script: script, environment: ["SPCN_SOCKET": "/tmp/elsewhere.sock"]) == baked)
-            #expect(try socketPath(script: script, environment: ["SPCN_SOCKET": "/tmp/dev.sock", "SPCN_DEV": "1"]) == "/tmp/dev.sock")
+            #expect(try socketPath(script: script, environment: ["AGENTNOTCH_SOCKET": "/tmp/elsewhere.sock"]) == baked)
+            #expect(try socketPath(script: script, environment: ["AGENTNOTCH_SOCKET": "/tmp/dev.sock", "AGENTNOTCH_DEV": "1"]) == "/tmp/dev.sock")
             #expect(try socketPath(script: script, environment: [:]) == baked)
         }
     }

@@ -26,7 +26,7 @@ struct SessionNotificationContentTests {
         #expect(content.title == "Refactor the parser needs you")
         #expect(content.subtitle == "work")
         #expect(content.body == "Approve Bash: npm run build")
-        #expect(content.identifier == "spcn.needsInput.sess-1")
+        #expect(content.identifier == "agentnotch.needsInput.sess-1")
         #expect(content.kind.categoryIdentifier == NotificationService.needsInputCategory)
     }
 
@@ -62,7 +62,7 @@ struct SessionNotificationContentTests {
         let content = SessionNotificationContent.readyForReview(session: state, accountLabel: nil)
         #expect(content.title == "Done: Refactor the parser")
         #expect(content.body == "Ready for review · app")
-        #expect(content.identifier == "spcn.review.sess-1")
+        #expect(content.identifier == "agentnotch.review.sess-1")
         #expect(content.kind.categoryIdentifier == NotificationService.reviewCategory)
     }
 

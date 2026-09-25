@@ -2,13 +2,13 @@ import Foundation
 import Testing
 @testable import ClaudeControl
 
-/// `ClaudeControlConfiguration.live` and every `SPCN_*` switch, parsed in
+/// `ClaudeControlConfiguration.live` and every `AGENTNOTCH_*` switch, parsed in
 /// one place with one rule for "on".
 struct ConfigurationTests {
     private func live(_ environment: [String: String], _ arguments: [String] = ["app"]) -> ClaudeControlConfiguration {
-        ClaudeControlConfiguration.live(appDisplayName: "Superpowered Codenotch",
-                                        bundleIdentifier: "com.paraswtf.superpowered-codenotch",
-                                        supportFolderName: "Superpowered Codenotch",
+        ClaudeControlConfiguration.live(appDisplayName: "Agent Notch",
+                                        bundleIdentifier: "com.rivantmedia.agentnotch",
+                                        supportFolderName: "Agent Notch",
                                         environment: environment, arguments: arguments)
     }
 
@@ -16,22 +16,22 @@ struct ConfigurationTests {
         let config = live(["HOME": "/Users/u"])
         #expect(config.mode == .live)
         #expect(config.homeDirectory == "/Users/u")
-        #expect(config.supportDirectory.path == "/Users/u/Library/Application Support/Superpowered Codenotch/Claude")
-        #expect(config.socketPath == "/Users/u/Library/Application Support/Superpowered Codenotch/Claude/hook.sock")
+        #expect(config.supportDirectory.path == "/Users/u/Library/Application Support/Agent Notch/Claude")
+        #expect(config.socketPath == "/Users/u/Library/Application Support/Agent Notch/Claude/hook.sock")
         #expect(config.installsAllowed && config.notificationsAllowed && config.probesAllowed)
         #expect(config.extraConfigDirs.isEmpty)
-        #expect(config.hookScriptName == "superpowered-codenotch-hook.py")
-        #expect(config.statusLineScriptName == "superpowered-codenotch-statusline.py")
+        #expect(config.hookScriptName == "agentnotch-hook.py")
+        #expect(config.statusLineScriptName == "agentnotch-statusline.py")
     }
 
     @Test func environmentOverrides() {
         let config = live([
             "HOME": "/Users/u",
-            "SPCN_SUPPORT_DIR": "~/dev/support",
-            "SPCN_SOCKET": "~/dev/hook.sock",
-            "SPCN_NO_INSTALL": "yes",
-            "SPCN_NO_NOTIFICATIONS": " TRUE ",
-            "SPCN_EXTRA_CONFIG_DIRS": "~/a: /b/c ::",
+            "AGENTNOTCH_SUPPORT_DIR": "~/dev/support",
+            "AGENTNOTCH_SOCKET": "~/dev/hook.sock",
+            "AGENTNOTCH_NO_INSTALL": "yes",
+            "AGENTNOTCH_NO_NOTIFICATIONS": " TRUE ",
+            "AGENTNOTCH_EXTRA_CONFIG_DIRS": "~/a: /b/c ::",
         ])
         #expect(config.supportDirectory.path == "/Users/u/dev/support")
         #expect(config.socketPath == "/Users/u/dev/hook.sock")
@@ -47,19 +47,19 @@ struct ConfigurationTests {
     @Test(arguments: ["1", "true", "TRUE", "yes", " Yes "])
     func truthyValues(value: String) {
         #expect(DevFlags.truthy(value))
-        #expect(!live(["HOME": "/Users/u", "SPCN_NO_INSTALL": value]).installsAllowed)
+        #expect(!live(["HOME": "/Users/u", "AGENTNOTCH_NO_INSTALL": value]).installsAllowed)
     }
 
     @Test(arguments: ["0", "", "false", "no", "on", "2"])
     func falsyValues(value: String) {
         #expect(!DevFlags.truthy(value))
-        #expect(live(["HOME": "/Users/u", "SPCN_NO_INSTALL": value]).installsAllowed)
+        #expect(live(["HOME": "/Users/u", "AGENTNOTCH_NO_INSTALL": value]).installsAllowed)
     }
 
     @Test func flagsReadArgumentsOrEnvironment() {
-        #expect(DevFlags.flag("--dump-state", env: "SPCN_DUMP_STATE", environment: [:], arguments: ["app", "--dump-state"]))
-        #expect(DevFlags.flag("--dump-state", env: "SPCN_DUMP_STATE", environment: ["SPCN_DUMP_STATE": "yes"], arguments: ["app"]))
-        #expect(!DevFlags.flag("--dump-state", env: "SPCN_DUMP_STATE", environment: ["SPCN_DUMP_STATE": "0"], arguments: ["app"]))
+        #expect(DevFlags.flag("--dump-state", env: "AGENTNOTCH_DUMP_STATE", environment: [:], arguments: ["app", "--dump-state"]))
+        #expect(DevFlags.flag("--dump-state", env: "AGENTNOTCH_DUMP_STATE", environment: ["AGENTNOTCH_DUMP_STATE": "yes"], arguments: ["app"]))
+        #expect(!DevFlags.flag("--dump-state", env: "AGENTNOTCH_DUMP_STATE", environment: ["AGENTNOTCH_DUMP_STATE": "0"], arguments: ["app"]))
     }
 
     @Test func pathLists() {
@@ -68,19 +68,19 @@ struct ConfigurationTests {
     }
 
     /// `sockaddr_un` holds 103 bytes of path: a support folder deep enough
-    /// to overflow it moves the socket to `/tmp/spcn-<uid>/hook.sock`.
+    /// to overflow it moves the socket to `/tmp/agentnotch-<uid>/hook.sock`.
     @Test func aSocketPathTooLongFallsBackToTmp() {
         let deep = "/Users/" + String(repeating: "x", count: 60) + "/deep"
         let config = live(["HOME": deep])
         #expect(config.supportDirectory.path.hasPrefix(deep))
-        #expect(config.socketPath == "/tmp/spcn-\(getuid())/hook.sock")
+        #expect(config.socketPath == "/tmp/agentnotch-\(getuid())/hook.sock")
 
         let limit = ClaudeControlConfiguration.maxSocketPathBytes
         let justFits = URL(fileURLWithPath: "/" + String(repeating: "a", count: limit - "/hook.sock".count - 1))
         #expect(ClaudeControlConfiguration.socketPath(in: justFits, userID: 501).utf8.count == limit)
         #expect(ClaudeControlConfiguration.socketPath(in: justFits, userID: 501) == justFits.path + "/hook.sock")
         let oneOver = URL(fileURLWithPath: justFits.path + "b")
-        #expect(ClaudeControlConfiguration.socketPath(in: oneOver, userID: 501) == "/tmp/spcn-501/hook.sock")
+        #expect(ClaudeControlConfiguration.socketPath(in: oneOver, userID: 501) == "/tmp/agentnotch-501/hook.sock")
     }
 
     @Test func sealedReachesNothingReal() {

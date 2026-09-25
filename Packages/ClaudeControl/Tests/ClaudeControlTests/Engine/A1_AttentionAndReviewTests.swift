@@ -103,7 +103,7 @@ struct A1_AttentionAndReviewTests {
     // MARK: - Review file
 
     private func temporaryFile() -> URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent("spcn-a1-review-\(UUID().uuidString).json")
+        FileManager.default.temporaryDirectory.appendingPathComponent("agentnotch-a1-review-\(UUID().uuidString).json")
     }
 
     @Test func readsSuperpoweredVibeNotchsFileAndWritesTheNewShape() throws {
@@ -149,9 +149,9 @@ struct A1_AttentionAndReviewTests {
     // MARK: - Open chat histories
 
     @Test func onlyOpenChatsKeepHistoriesAndTheOldestIsReleased() async throws {
-        let account = try TemporaryAccount(prefix: "spcn-a1-chat")
+        let account = try TemporaryAccount(prefix: "agentnotch-a1-chat")
         let store = SessionStore.forTests(reviewFile: account.reviewFile)
-        let monitor = ClaudeSessionMonitor(store: store, server: HookSocketServer(socketPath: "/tmp/spcn-a1-unused.sock"))
+        let monitor = ClaudeSessionMonitor(store: store, server: HookSocketServer(socketPath: "/tmp/agentnotch-a1-unused.sock"))
         let manager = ChatHistoryManager(monitor: monitor)
         var sessions: [SessionState] = []
         for index in 0..<3 {
@@ -200,7 +200,7 @@ struct A1_AttentionAndReviewTests {
     }
 
     @Test func reconstructionSeesTheSameBatches() throws {
-        let path = FileManager.default.temporaryDirectory.appendingPathComponent("spcn-a1-tasks-\(UUID().uuidString).jsonl").path
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("agentnotch-a1-tasks-\(UUID().uuidString).jsonl").path
         FileManager.default.createFile(atPath: path, contents: Data())
         defer { try? FileManager.default.removeItem(atPath: path) }
         var lines: [[String: Any]] = []

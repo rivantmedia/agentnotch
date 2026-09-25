@@ -24,10 +24,10 @@ struct EmbeddedScriptsTests {
     }
 
     @Test func installFillsInTheSocketPath() {
-        let path = "/Users/me/Library/Application Support/Superpowered Codenotch/Claude/hook.sock"
+        let path = "/Users/me/Library/Application Support/Agent Notch/Claude/hook.sock"
         for script in [EmbeddedScripts.hook(socketPath: path), EmbeddedScripts.statusLine(socketPath: path)] {
             #expect(!script.contains(EmbeddedScripts.socketPlaceholder))
-            #expect(script.contains(#"SOCKET_PATH = (os.environ.get("SPCN_SOCKET") if os.environ.get("SPCN_DEV") == "1" else None) or "\#(path)""#))
+            #expect(script.contains(#"SOCKET_PATH = (os.environ.get("AGENTNOTCH_SOCKET") if os.environ.get("AGENTNOTCH_DEV") == "1" else None) or "\#(path)""#))
         }
     }
 
@@ -44,7 +44,7 @@ nonisolated struct ScriptRuntimeTests {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["python3", "-S"] + arguments
-        process.environment = ["PATH": "/usr/bin:/bin", "SPCN_DEV": "1", "SPCN_SOCKET": "/tmp/spcn-tests-missing-\(UUID().uuidString.prefix(6)).sock"]
+        process.environment = ["PATH": "/usr/bin:/bin", "AGENTNOTCH_DEV": "1", "AGENTNOTCH_SOCKET": "/tmp/agentnotch-tests-missing-\(UUID().uuidString.prefix(6)).sock"]
         let input = Pipe()
         let output = Pipe()
         process.standardInput = input
@@ -74,7 +74,7 @@ nonisolated struct ScriptRuntimeTests {
     @Test(arguments: [ClaudeControlConfiguration.defaultHookScriptName, ClaudeControlConfiguration.defaultStatusLineScriptName])
     func talksOnlyToThisUsersSocketAndSpawnsNothing(name: String) throws {
         let script = ScriptPaths.scripts.appendingPathComponent(name).path
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("spcn-owner-\(UUID().uuidString.prefix(8))")
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("agentnotch-owner-\(UUID().uuidString.prefix(8))")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let plainFile = directory.appendingPathComponent("hook.sock").path

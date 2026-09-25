@@ -3,7 +3,7 @@ import AppKit
 import SwiftUI
 
 /// The notch half of `--snapshot-claude <dir>` (design §11), and the sealed
-/// run's `SPCN_SEALED_CAPTURE` captures: Codenotch's own `NotchRootView`
+/// run's `AGENTNOTCH_SEALED_CAPTURE` captures: Codenotch's own `NotchRootView`
 /// drawn offscreen with the Claude rings on it.
 ///
 /// `--snapshot-claude` renders the sealed fixtures with the demo's first two
@@ -35,10 +35,10 @@ import SwiftUI
 enum ClaudeNotchSnapshots {
     static let flag = "--snapshot-claude"
     /// The same, for a launch that passes no arguments through
-    /// (`SPCN_SNAPSHOT_CLAUDE=<dir> Scripts/spm-run-sealed.sh …`).
-    static let environmentKey = "SPCN_SNAPSHOT_CLAUDE"
+    /// (`AGENTNOTCH_SNAPSHOT_CLAUDE=<dir> Scripts/spm-run-sealed.sh …`).
+    static let environmentKey = "AGENTNOTCH_SNAPSHOT_CLAUDE"
 
-    /// The folder after `--snapshot-claude` (or in `SPCN_SNAPSHOT_CLAUDE`),
+    /// The folder after `--snapshot-claude` (or in `AGENTNOTCH_SNAPSHOT_CLAUDE`),
     /// or nil when snapshots were not asked for.
     ///
     /// The environment is read only in a sealed run. A live app started from
@@ -68,7 +68,7 @@ enum ClaudeNotchSnapshots {
     /// needs the fixtures, and must never draw anyone's real sessions.
     static func renderAndExit(into directory: URL, hub: ClaudeControlHub, preferences: Preferences) -> Never {
         guard Fork.isSealed else {
-            FileHandle.standardError.write(Data("\(flag) needs a sealed run (SPCN_SAFE_MODE=1)\n".utf8))
+            FileHandle.standardError.write(Data("\(flag) needs a sealed run (AGENTNOTCH_SAFE_MODE=1)\n".utf8))
             exit(2)
         }
         do {
@@ -85,7 +85,7 @@ enum ClaudeNotchSnapshots {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let started = Date()
         func note(_ what: String) {
-            FileHandle.standardError.write(Data(String(format: "[spcn-snapshot] %@ at +%.2fs\n", what,
+            FileHandle.standardError.write(Data(String(format: "[agentnotch-snapshot] %@ at +%.2fs\n", what,
                                                        Date().timeIntervalSince(started)).utf8))
         }
         hub.start()

@@ -10,11 +10,11 @@ import Foundation
 /// next to someone's real setup without touching it.
 ///
 /// Turned on by either variable:
-/// - `SPCN_SAFE_MODE` (Superpowered Codenotch)
+/// - `AGENTNOTCH_SAFE_MODE` (Agent Notch)
 /// - `CODENOTCH_DEMO` (upstream's screenshot mode, sealed in this fork)
 ///
 /// It fails closed: any non-empty value other than `0`, `false`, `no` or
-/// `off` (any case) seals the run, so `SPCN_SAFE_MODE=true` or `=yes` is
+/// `off` (any case) seals the run, so `AGENTNOTCH_SAFE_MODE=true` or `=yes` is
 /// sealed too, and a typo never starts a live run against the real home.
 /// A value other than `1`, `true` or `yes` is reported at launch.
 ///
@@ -22,7 +22,7 @@ import Foundation
 /// hopping to the main actor.
 public nonisolated enum SealedMode {
     /// The environment variables that turn sealed mode on.
-    public static let environmentKeys = ["SPCN_SAFE_MODE", "CODENOTCH_DEMO"]
+    public static let environmentKeys = ["AGENTNOTCH_SAFE_MODE", "CODENOTCH_DEMO"]
 
     /// Pure, for tests: whether `environment` asks for sealed mode.
     public static func isOn(environment: [String: String]) -> Bool {

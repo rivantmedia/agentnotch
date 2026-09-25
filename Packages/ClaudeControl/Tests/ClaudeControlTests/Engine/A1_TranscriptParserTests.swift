@@ -10,7 +10,7 @@ struct A1_TranscriptParserTests {
     private let transcript: String
 
     init() throws {
-        account = try TemporaryAccount(prefix: "spcn-a1-parser")
+        account = try TemporaryAccount(prefix: "agentnotch-a1-parser")
         transcript = account.transcript("p1")
     }
 

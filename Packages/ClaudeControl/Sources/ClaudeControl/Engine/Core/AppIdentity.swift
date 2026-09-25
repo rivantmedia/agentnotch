@@ -62,6 +62,19 @@ nonisolated enum AppIdentity {
     /// Status line wrapper copied into every account's `<configDir>/hooks/`.
     static var statusLineScriptName: String { configuration.statusLineScriptName }
 
+    /// This app's scripts under its former name, Superpowered Codenotch.
+    /// Entries running them are this app's own: an install replaces them in
+    /// place (and an uninstall removes them) rather than stacking the new
+    /// ones beside them. `HookInstaller.removeFormerNameFiles` tidies the files they leave.
+    static let formerHookScriptName = "superpowered-codenotch-hook.py"
+    static let formerStatusLineScriptName = "superpowered-codenotch-statusline.py"
+    /// Where the former wrapper saved the status line it chains to.
+    static let formerPreviousStatusLineFileName = "superpowered-codenotch-statusline.previous.json"
+    /// The former name's settings.json backups, read to recover a lost saved
+    /// status line (never written, pruned or removed).
+    static let formerBackupPrefix = "settings.json.superpowered-codenotch-"
+    static let formerOriginalBackupName = "settings.json.superpowered-codenotch.original.bak"
+
     /// Upstream Vibe Notch's hook script, used only to detect leftover entries.
     static let legacyHookScriptName = "claude-island-state.py"
     /// Superpowered Vibe Notch's scripts, detected so they can be taken over
@@ -118,7 +131,7 @@ nonisolated enum AppIdentity {
     }
 
     /// Unix socket the hook and status line scripts write to. Installed
-    /// scripts carry this path (templated at install time); `SPCN_SOCKET`
+    /// scripts carry this path (templated at install time); `AGENTNOTCH_SOCKET`
     /// overrides it on both sides.
     static var socketPath: String { configuration.socketPath }
 

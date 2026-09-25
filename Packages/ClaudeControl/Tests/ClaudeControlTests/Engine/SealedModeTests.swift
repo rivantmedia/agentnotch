@@ -7,7 +7,7 @@ import Testing
         #expect(!SealedMode.isOn(environment: ["PATH": "/usr/bin"]))
     }
 
-    @Test(arguments: ["SPCN_SAFE_MODE", "CODENOTCH_DEMO"])
+    @Test(arguments: ["AGENTNOTCH_SAFE_MODE", "CODENOTCH_DEMO"])
     func onWhenSetToOne(key: String) {
         #expect(SealedMode.isOn(environment: [key: "1"]))
     }
@@ -16,20 +16,20 @@ import Testing
     /// clear "off" leaves the run live.
     @Test(arguments: ["0", "", "  ", "false", "FALSE", "no", "off"])
     func onlyAClearOffLeavesTheRunLive(value: String) {
-        #expect(!SealedMode.isOn(environment: ["SPCN_SAFE_MODE": value]))
+        #expect(!SealedMode.isOn(environment: ["AGENTNOTCH_SAFE_MODE": value]))
         #expect(!SealedMode.isOn(environment: ["CODENOTCH_DEMO": value]))
     }
 
     @Test(arguments: ["1", "true", "TRUE", "yes", " Yes ", "on", "2", "sealed", "ture"])
     func anyOtherValueSeals(value: String) {
-        #expect(SealedMode.isOn(environment: ["SPCN_SAFE_MODE": value]))
+        #expect(SealedMode.isOn(environment: ["AGENTNOTCH_SAFE_MODE": value]))
         #expect(SealedMode.isOn(environment: ["CODENOTCH_DEMO": value]))
     }
 
     @Test func anOddValueIsReportedAndAClearOneIsNot() {
-        #expect(SealedMode.unrecognised(environment: ["SPCN_SAFE_MODE": "ture"]) == "SPCN_SAFE_MODE=ture")
-        #expect(SealedMode.unrecognised(environment: ["SPCN_SAFE_MODE": "true"]) == nil)
-        #expect(SealedMode.unrecognised(environment: ["SPCN_SAFE_MODE": "0"]) == nil)
+        #expect(SealedMode.unrecognised(environment: ["AGENTNOTCH_SAFE_MODE": "ture"]) == "AGENTNOTCH_SAFE_MODE=ture")
+        #expect(SealedMode.unrecognised(environment: ["AGENTNOTCH_SAFE_MODE": "true"]) == nil)
+        #expect(SealedMode.unrecognised(environment: ["AGENTNOTCH_SAFE_MODE": "0"]) == nil)
         #expect(SealedMode.unrecognised(environment: [:]) == nil)
     }
 

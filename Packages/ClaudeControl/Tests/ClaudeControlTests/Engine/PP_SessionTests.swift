@@ -43,7 +43,7 @@ struct PP_ProcessConfigDirTests {
     /// A real child process: its folder, never its other variables. (A copy
     /// of `sleep`: macOS hides a platform binary's environment.)
     @Test func readsAChildProcessOfTheSameUser() async throws {
-        let dir = "/tmp/spcn-pp-\(UUID().uuidString.prefix(6))/.claude-windows/1bf3e8f92b11"
+        let dir = "/tmp/agentnotch-pp-\(UUID().uuidString.prefix(6))/.claude-windows/1bf3e8f92b11"
         let bin = TestPaths.temporaryRoot("procargs")
         defer { try? FileManager.default.removeItem(atPath: bin) }
         try FileManager.default.copyItem(atPath: "/bin/sleep", toPath: bin + "/claude")

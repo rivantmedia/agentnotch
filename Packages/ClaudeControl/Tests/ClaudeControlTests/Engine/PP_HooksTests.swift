@@ -167,7 +167,7 @@ struct PP_HooksTests {
         let saved = HookInstaller.readSavedStatusLine(at: HookInstaller.previousStatusLineURL(configDir: fake.path(".claude")))
         #expect(saved?.serialized() == TakeoverFixture.originalStatusLine.serialized())
         #expect(!FileManager.default.fileExists(atPath: fake.path(".claude/hooks/superpowered-notch-hook.py")))
-        #expect(FileManager.default.fileExists(atPath: fake.path(".claude/settings.json.superpowered-codenotch.original.bak")))
+        #expect(FileManager.default.fileExists(atPath: fake.path(".claude/settings.json.agentnotch.original.bak")))
 
         // Stores and ~/.claude-shared: back to what the extension made.
         for folder in [".claude-paras", ".claude-paras-rivant-in", ".claude-claude", ".claude-shared"] {
@@ -182,7 +182,7 @@ struct PP_HooksTests {
         // Never touched: logins, markers, the manifest, the shared history.
         #expect(untouchable(fake.files()) == untouchable(before))
         // And nothing of ours in a store.
-        #expect(!FileManager.default.fileExists(atPath: fake.path(".claude-paras/hooks/superpowered-codenotch-hook.py")))
+        #expect(!FileManager.default.fileExists(atPath: fake.path(".claude-paras/hooks/agentnotch-hook.py")))
     }
 
     /// A store's settings.json that existed before Superpowered Vibe Notch

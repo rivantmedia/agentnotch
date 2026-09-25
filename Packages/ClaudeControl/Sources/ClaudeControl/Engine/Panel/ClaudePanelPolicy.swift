@@ -243,7 +243,7 @@ public nonisolated enum ClaudePanelPolicy {
 
     // MARK: - Sealed launch hook
 
-    /// What `SPCN_OPEN_PANEL_ON_LAUNCH` asks a sealed run to open.
+    /// What `AGENTNOTCH_OPEN_PANEL_ON_LAUNCH` asks a sealed run to open.
     public struct LaunchRequest: Equatable, Sendable {
         public var route: ClaudePanelRoute
         /// Open the way an auto-open does (without key) rather than a click.

@@ -24,7 +24,7 @@ struct PublicContractTests {
         let _: (URL, String, String, String, String) = (configuration.supportDirectory, configuration.socketPath,
                                                         configuration.homeDirectory, configuration.hookScriptName,
                                                         configuration.statusLineScriptName)
-        let other = live("Test", "com.example.test", "Test", ["HOME": "/tmp/spcn-contract-home"], [])
+        let other = live("Test", "com.example.test", "Test", ["HOME": "/tmp/agentnotch-contract-home"], [])
         #expect(other.mode == .live)
         let _ = ClaudeExternalUsageReading(windows: [], observedAt: Date())
     }
@@ -120,8 +120,8 @@ struct PublicContractTests {
     @Test func fieldsAndMutability() {
         var c = ClaudeControlConfiguration.sealed(appDisplayName: "T", bundleIdentifier: "com.example.t")
         c.mode = .live; c.appDisplayName = "T"; c.bundleIdentifier = "com.example.t"
-        c.supportDirectory = URL(fileURLWithPath: "/tmp/spcn-contract"); c.socketPath = "/tmp/spcn-contract.sock"
-        c.homeDirectory = "/tmp/spcn-contract-home"; c.hookScriptName = "h.py"; c.statusLineScriptName = "s.py"
+        c.supportDirectory = URL(fileURLWithPath: "/tmp/agentnotch-contract"); c.socketPath = "/tmp/agentnotch-contract.sock"
+        c.homeDirectory = "/tmp/agentnotch-contract-home"; c.hookScriptName = "h.py"; c.statusLineScriptName = "s.py"
         c.defaults = .standard; c.installsAllowed = false; c.notificationsAllowed = false; c.probesAllowed = false
         c.extraConfigDirs = []; c.externalTabFocus = nil; c.externalUsageSource = ContractUsageSource()
         #expect(c.mode == .live)

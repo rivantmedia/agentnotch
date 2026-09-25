@@ -183,7 +183,7 @@ nonisolated final class SessionRegistryScanner: @unchecked Sendable {
         dirs = [self.defaultDir]
     }
 
-    /// ~/.claude plus the configuration's extra dirs (`SPCN_EXTRA_CONFIG_DIRS`).
+    /// ~/.claude plus the configuration's extra dirs (`AGENTNOTCH_EXTRA_CONFIG_DIRS`).
     private static func initialConfigDirs() -> Set<String> {
         Set([AccountPaths.defaultConfigDir] + extraConfigDirs())
     }

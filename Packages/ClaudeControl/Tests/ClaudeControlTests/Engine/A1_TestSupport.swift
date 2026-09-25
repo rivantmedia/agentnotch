@@ -78,7 +78,7 @@ nonisolated final class TemporaryAccount: @unchecked Sendable {
     let configDir: URL
     let project: URL
 
-    init(prefix: String = "spcn-a1") throws {
+    init(prefix: String = "agentnotch-a1") throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("\(prefix)-\(UUID().uuidString)")
         configDir = root.appendingPathComponent(".claude")
         project = configDir.appendingPathComponent("projects/-tmp-proj")

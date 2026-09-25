@@ -31,7 +31,7 @@ struct Fix_BeforeBootstrapTests {
         #expect(!ClaudeBinaryLocator.mayRunBeforeBootstrap(resolvedPath: "/opt/homebrew/bin/claude"))
         #expect(!ClaudeBinaryLocator.mayRunBeforeBootstrap(resolvedPath: NSHomeDirectory() + "/.local/bin/claude"))
         #expect(ClaudeBinaryLocator.version(ofBinaryAt: "/usr/bin/true") == nil)
-        let stub = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("spcn-stub-claude").path
+        let stub = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("agentnotch-stub-claude").path
         #expect(ClaudeBinaryLocator.mayRunBeforeBootstrap(resolvedPath: stub))
     }
 
@@ -40,7 +40,7 @@ struct Fix_BeforeBootstrapTests {
     @Test func aNewAccountFolderInTheRealHomeIsProtected() throws {
         let entry = try #require(getpwuid(getuid()))
         let realHome = String(cString: entry.pointee.pw_dir)
-        #expect(HookInstaller.isProtectedBeforeBootstrap(configDir: realHome + "/.claude-spcn-guard-probe"))
+        #expect(HookInstaller.isProtectedBeforeBootstrap(configDir: realHome + "/.claude-agentnotch-guard-probe"))
         #expect(!HookInstaller.isProtectedBeforeBootstrap(configDir: NSTemporaryDirectory() + "home/.claude-x"))
     }
 }

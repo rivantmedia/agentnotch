@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-Superpowered Codenotch status line wrapper
+Agent Notch status line wrapper
 Derived from Superpowered Vibe Notch's superpowered-notch-statusline.py (Apache-2.0).
 
 Claude Code runs this as the account's `statusLine` command after each
 assistant message, with the session's status line JSON on stdin. It:
 - starts the status line command that was configured before the app
   installed this wrapper (saved next to this file in
-  superpowered-codenotch-statusline.previous.json) with the same stdin;
+  agentnotch-statusline.previous.json) with the same stdin;
 - while that runs, forwards a small subset (rate limits, context window,
-  model, cost, name) to Superpowered Codenotch.app over its Unix socket,
+  model, cost, name) to Agent Notch.app over its Unix socket,
   fire-and-forget;
 - then passes the previous command's output and exit code straight through.
   No previous command -> no output.
@@ -21,7 +21,7 @@ Claude Code cancels the run, SIGTERM or SIGHUP stops the previous command's
 whole process group too, as it would have stopped the command unwrapped.
 
 The app writes its socket path into SOCKET_PATH below when it installs this
-file; SPCN_SOCKET overrides it only with SPCN_DEV=1 too (development and
+file; AGENTNOTCH_SOCKET overrides it only with AGENTNOTCH_DEV=1 too (development and
 tests). Python 3.9
 compatible, no dependencies (runs with -S).
 """
@@ -31,10 +31,10 @@ import socket
 import stat
 import sys
 
-SOCKET_PATH = (os.environ.get("SPCN_SOCKET") if os.environ.get("SPCN_DEV") == "1" else None) or "__SPCN_SOCKET_PATH__"
+SOCKET_PATH = (os.environ.get("AGENTNOTCH_SOCKET") if os.environ.get("AGENTNOTCH_DEV") == "1" else None) or "__AGENTNOTCH_SOCKET_PATH__"
 PREVIOUS_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
-    "superpowered-codenotch-statusline.previous.json",
+    "agentnotch-statusline.previous.json",
 )
 SEND_TIMEOUT_SECONDS = 0.3
 # Claude Code sets no limit of its own and cancels runs it no longer needs;
@@ -126,10 +126,11 @@ def previous_command():
     command = previous.get("command")
     if not isinstance(command, str) or not command.strip():
         return None
-    # Never chain to a notch app's wrapper: ourselves, or Superpowered Vibe
-    # Notch's, which may chain back to us (a hand-edited file could loop
-    # forever).
-    if "superpowered-codenotch-statusline.py" in command or "superpowered-notch-statusline.py" in command:
+    # Never chain to a notch app's wrapper: ourselves (under this name or our
+    # former one, Superpowered Codenotch), or Superpowered Vibe Notch's, which
+    # may chain back to us (a hand-edited file could loop forever).
+    wrappers = ("agentnotch-statusline.py", "superpowered-codenotch-statusline.py", "superpowered-notch-statusline.py")
+    if any(name in command for name in wrappers):
         return None
     return command
 

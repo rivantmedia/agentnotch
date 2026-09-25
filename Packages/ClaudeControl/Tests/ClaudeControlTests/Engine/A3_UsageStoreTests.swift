@@ -19,7 +19,7 @@ private final class UsageFixture {
     let now = Date()
 
     init() throws {
-        root = FileManager.default.temporaryDirectory.appendingPathComponent("spcn-usage-\(UUID().uuidString)")
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("agentnotch-usage-\(UUID().uuidString)")
         configDir = root.appendingPathComponent("home/.claude-work", isDirectory: true)
         try FileManager.default.createDirectory(at: configDir, withIntermediateDirectories: true)
         account = ClaudeAccount(configDir: configDir.path, configDirEnv: configDir.path, email: "me@x.dev", accountUuid: "acc-1")

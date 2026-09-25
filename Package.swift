@@ -1,11 +1,11 @@
 // swift-tools-version:6.2
 //
-// Superpowered Codenotch: a SwiftPM build of the app for machines that have
+// Agent Notch: a SwiftPM build of the app for machines that have
 // only the Command Line Tools. Xcode users keep using project.yml + the
 // Makefile; this manifest mirrors that project and must be kept in step with it
 // (sources, packages, the ClaudeControl local package).
 //
-//     Scripts/spm-build-app.sh   builds and assembles "build/Superpowered Codenotch.app"
+//     Scripts/spm-build-app.sh   builds and assembles "build/Agent Notch.app"
 //     Scripts/spm-test.sh        runs the Swift Testing suites (Packages/ClaudeControl)
 //     Scripts/spm-run-sealed.sh  launches a sealed copy briefly and kills it
 //
@@ -26,7 +26,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "SuperpoweredCodenotch",
+    name: "AgentNotch",
     platforms: [.macOS("15.0")],
     dependencies: [
         // Same requirements as project.yml, so both builds resolve to the pins

@@ -40,7 +40,7 @@
 //  switched off (`setPausedAccounts`). The last probe time, the backoff and
 //  the last full reading persist in `usage-state.json`, so a relaunch neither
 //  probes early nor starts empty. Dev runs (`--no-install`) only probe on
-//  request unless `SPCN_USAGE_PROBE=1`.
+//  request unless `AGENTNOTCH_USAGE_PROBE=1`.
 //
 
 import Combine
@@ -108,7 +108,7 @@ final class UsageStore: ObservableObject {
     /// (`--no-install`) leave them off: a dev build next to the real app would
     /// double the probing of the same accounts (the usage endpoint answers 429
     /// to tight polling), and each probe has Claude Code touch the account's
-    /// config. `SPCN_USAGE_PROBE=1` turns them back on; `refresh` always probes.
+    /// config. `AGENTNOTCH_USAGE_PROBE=1` turns them back on; `refresh` always probes.
     nonisolated static var automaticProbesAllowedByDefault: Bool {
         // Sealed runs never launch Claude Code (see ClaudeControlConfiguration).
         if DevFlags.probesDisabled { return false }
@@ -238,7 +238,7 @@ final class UsageStore: ObservableObject {
         started = true
         stopped = false
         if !automaticProbes {
-            Self.logger.notice("Automatic usage probes are off for this run (set SPCN_USAGE_PROBE=1 to enable)")
+            Self.logger.notice("Automatic usage probes are off for this run (set AGENTNOTCH_USAGE_PROBE=1 to enable)")
         }
         restoreState()
 

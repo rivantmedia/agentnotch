@@ -1,7 +1,7 @@
 import ClaudeControl
 import Foundation
 
-/// Superpowered Codenotch's identity, kept in one file of its own so merges
+/// Agent Notch's identity, kept in one file of its own so merges
 /// from upstream Codenotch touch as little as possible.
 ///
 /// This fork has to live beside the official Codenotch on the same Mac, so
@@ -13,20 +13,20 @@ enum Fork {
     /// Must match `PRODUCT_BUNDLE_IDENTIFIER` in project.yml and the bundle id
     /// Scripts/spm-build-app.sh writes. Development builds may append a
     /// suffix (`.sealed`, `.dev`); see `ownsBundleIdentifier`.
-    static let bundleID = "com.paraswtf.superpowered-codenotch"
+    static let bundleID = "com.rivantmedia.agentnotch"
 
     /// Upstream's bundle id: never ours to quit, update, or erase.
     static let upstreamBundleID = "com.vinz.codenotch"
 
-    static let displayName = "Superpowered Codenotch"
+    static let displayName = "Agent Notch"
 
-    /// `log stream --predicate 'subsystem == "com.paraswtf.superpowered-codenotch"' --level debug`
+    /// `log stream --predicate 'subsystem == "com.rivantmedia.agentnotch"' --level debug`
     static let logSubsystem = bundleID
 
     /// Folder under `~/Library/Application Support`. Upstream uses
     /// "Codenotch"; sharing it would mix the two apps' phone-link pairings,
     /// custom icons, and the scratch folder of the usage probe.
-    static let applicationSupportFolder = "Superpowered Codenotch"
+    static let applicationSupportFolder = "Agent Notch"
 
     /// Keychain service for phone-link device secrets. Upstream's is
     /// `com.codenotch.phonelink.device`; the pairing registry lives in
@@ -92,6 +92,6 @@ enum Fork {
 
     /// Sealed development mode: fixture data, and nothing real is touched
     /// (keychain, sessions, transcripts, network, subprocesses). On with
-    /// `SPCN_SAFE_MODE=1` or `CODENOTCH_DEMO=1`. See `SealedMode`.
+    /// `AGENTNOTCH_SAFE_MODE=1` or `CODENOTCH_DEMO=1`. See `SealedMode`.
     static var isSealed: Bool { SealedMode.isOn }
 }

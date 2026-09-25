@@ -11,8 +11,8 @@
 //  followed by EOF, or just EOF when the app has no decision.
 //
 //  Socket file lifecycle:
-//  - The path is the configuration's (`SPCN_SOCKET`, else
-//    `<support>/hook.sock`, else `/tmp/spcn-<uid>/hook.sock` when that would
+//  - The path is the configuration's (`AGENTNOTCH_SOCKET`, else
+//    `<support>/hook.sock`, else `/tmp/agentnotch-<uid>/hook.sock` when that would
 //    not fit in `sun_path`). A missing parent folder is created 0700; the
 //    `/tmp` fallback folder must be a real folder owned by this user and is
 //    made 0700 if it is not.
@@ -193,7 +193,7 @@ nonisolated final class HookSocketServer: @unchecked Sendable {
 
         // sockaddr_un.sun_path holds 104 bytes including the terminator. The
         // configuration already falls back to /tmp for long support paths;
-        // an overlong SPCN_SOCKET is refused rather than truncated.
+        // an overlong AGENTNOTCH_SOCKET is refused rather than truncated.
         guard socketPath.utf8.count <= ClaudeControlConfiguration.maxSocketPathBytes else {
             setError("The socket path is longer than \(ClaudeControlConfiguration.maxSocketPathBytes) bytes: \(socketPath)")
             return
@@ -205,7 +205,7 @@ nonisolated final class HookSocketServer: @unchecked Sendable {
 
         // A socket at the path is stale: a crashed run's, or a retired
         // instance's (which won't unlink ours, see stop()). Anything else
-        // there (a file SPCN_SOCKET was pointed at by mistake) isn't ours
+        // there (a file AGENTNOTCH_SOCKET was pointed at by mistake) isn't ours
         // to delete.
         if let problem = Self.removeStaleSocket(at: socketPath) {
             setError(problem)
@@ -729,10 +729,10 @@ nonisolated struct FileIdentity: Equatable, Sendable {
 /// Makes sure the socket's folder exists and, for the shared `/tmp`
 /// fallback, that nobody else can reach into it.
 nonisolated enum HookSocketDirectory {
-    /// `/tmp/spcn-<uid>`, the folder the configuration falls back to for
+    /// `/tmp/agentnotch-<uid>`, the folder the configuration falls back to for
     /// support paths too long for `sun_path`.
     static func fallbackDirectory(userID: uid_t) -> String {
-        "/tmp/spcn-\(userID)"
+        "/tmp/agentnotch-\(userID)"
     }
 
     /// Nil when the socket can be created at `socketPath`, else a

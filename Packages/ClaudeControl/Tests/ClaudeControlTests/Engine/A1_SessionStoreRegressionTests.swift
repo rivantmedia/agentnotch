@@ -11,7 +11,7 @@ struct A1_SessionStoreRegressionTests {
     private let transcript: String
 
     init() throws {
-        account = try TemporaryAccount(prefix: "spcn-a1-store")
+        account = try TemporaryAccount(prefix: "agentnotch-a1-store")
         transcript = account.transcript("s1")
     }
 
@@ -296,7 +296,7 @@ struct A1_SessionStoreRegressionTests {
 
     @Test func aSealedAnswerChangesTheFixtureOnly() async throws {
         let store = makeStore()
-        let socketPath = "/tmp/spcn-a1-sealed-\(getpid()).sock"
+        let socketPath = "/tmp/agentnotch-a1-sealed-\(getpid()).sock"
         let monitor = ClaudeSessionMonitor(store: store, server: HookSocketServer(socketPath: socketPath), sealed: true)
         let request = PermissionContext(toolUseId: "toolu_fixture", toolName: "Bash", toolInput: [:], receivedAt: Date())
         await store.replaceAllWithFixtures([SessionState(sessionId: "s1", cwd: "/tmp/proj", phase: .waitingForApproval(request))])

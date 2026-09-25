@@ -5,8 +5,8 @@
 #   Packages/ClaudeControl/Scripts/embed-scripts.sh --check   # exit 1 if stale
 #
 # Writes Sources/ClaudeControl/Engine/Scripts/EmbeddedScripts.swift from
-#   Scripts/superpowered-codenotch-hook.py
-#   Scripts/superpowered-codenotch-statusline.py
+#   Scripts/agentnotch-hook.py
+#   Scripts/agentnotch-statusline.py
 # byte for byte, as raw string literals. Run it after editing either script;
 # the EmbeddedScripts test fails while the two are out of step.
 #
@@ -20,7 +20,7 @@ PKG="$(dirname "$HERE")"
 OUT="$PKG/Sources/ClaudeControl/Engine/Scripts/EmbeddedScripts.swift"
 MODE="${1:-write}"
 
-python3 - "$HERE/superpowered-codenotch-hook.py" "$HERE/superpowered-codenotch-statusline.py" "$OUT" "$MODE" <<'PY'
+python3 - "$HERE/agentnotch-hook.py" "$HERE/agentnotch-statusline.py" "$OUT" "$MODE" <<'PY'
 import os, sys
 
 hook, status, out, mode = sys.argv[1:5]
