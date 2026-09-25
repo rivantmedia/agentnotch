@@ -126,7 +126,7 @@ enum UIFixtures {
     static func regular() -> [SessionState] {
         [SampleSessions.permission(), SampleSessions.question(), SampleSessions.rateLimited()]
             + [reviewDone()]
-            + Array(SampleSessions.working().prefix(2)) + [workingTool()]
+            + Array(SampleSessions.working().prefix(2)) + [workingTool(), waitingOnWorkflow()]
             + [SampleSessions.idle()[0]]
     }
 
@@ -225,6 +225,20 @@ enum UIFixtures {
     }
 
     /// Working, on a tool rather than a task list, with context nearly full.
+    /// A turn that ended while the workflow it launched still runs.
+    static func waitingOnWorkflow() -> SessionState {
+        var session = SampleSessions.make(
+            id: "waiting-sweep", title: "Sweep the repo for the old name", project: "acme-web", account: work,
+            phase: .waitingForInput, context: 41, turnStarted: now.addingTimeInterval(-9 * 60),
+            completed: now.addingTimeInterval(-7 * 60), background: 1,
+            lastMessage: (role: "assistant", tool: nil, text: "The sweep is running; I'll report when it's back.")
+        )
+        session.backgroundWaitSince = now.addingTimeInterval(-7 * 60)
+        session.backgroundAgentTypes = ["workflow"]
+        session.backgroundAgentCount = 1
+        return session
+    }
+
     static func workingTool() -> SessionState {
         SampleSessions.make(
             id: "working-tool", title: "Trace the memory leak in the worker", project: "api", account: personal,

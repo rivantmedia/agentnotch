@@ -51,15 +51,8 @@ actor SessionStore {
     /// writers; this much disagreement is tolerated.
     static let registryClockTolerance: TimeInterval = 1
 
-    /// Wake-capable background task types (the Stop input's friendly
-    /// `type` labels, and the raw discriminants they fall back to): when one
-    /// finishes it wakes Claude for another turn, so a Stop that leaves one
-    /// running is not the end. Shells and monitors may run forever and
-    /// don't count.
-    static let wakingBackgroundTaskTypes: Set<String> = [
-        "subagent", "agent", "local_agent", "remote_agent", "workflow", "teammate", "in_process_teammate",
-        "cloud session", "remote_session",
-    ]
+    /// Background task types a turn waits for; see `BackgroundWork.awaitedTypes`.
+    static let wakingBackgroundTaskTypes = BackgroundWork.awaitedTypes
 
     // MARK: - State
 
@@ -103,6 +96,7 @@ actor SessionStore {
     private let publishInterval: TimeInterval
     private let effects: SessionStoreEffects
     private let completionTiming: TurnCompletion.Timing
+    private let backgroundWaitTiming: BackgroundWork.WaitTiming
 
     /// When the previous app run was last known alive (nil on a first run).
     /// Completions after it happened while nobody was watching.
@@ -135,12 +129,15 @@ actor SessionStore {
     ///   - effects: what the store asks of the rest of the app (closing held
     ///     permission sockets, rescanning a session registry).
     ///   - completionTiming: how long a Stop waits to be confirmed as the end of its turn.
+    ///   - backgroundWaitTiming: when a turn waiting on background agents
+    ///     gives up waiting without being woken.
     init(
         reviewStore: ReviewStateStore = .shared,
         parser: ConversationParser = .shared,
         publishInterval: TimeInterval = 0.05,
         effects: SessionStoreEffects = .live,
         completionTiming: TurnCompletion.Timing = .standard,
+        backgroundWaitTiming: BackgroundWork.WaitTiming = .standard,
         startedAt: Date = Date()
     ) {
         self.reviewStore = reviewStore
@@ -148,6 +145,7 @@ actor SessionStore {
         self.publishInterval = publishInterval
         self.effects = effects
         self.completionTiming = completionTiming
+        self.backgroundWaitTiming = backgroundWaitTiming
         self.previousRunAliveAt = reviewStore.previousRunAliveAt
         self.startedAt = startedAt
     }
@@ -212,6 +210,12 @@ actor SessionStore {
                 if session.completionPendingSince != nil {
                     scheduleCompletionCheck(for: session)
                 }
+            }
+
+        case .backgroundWaitCheck(let sessionId, let since):
+            withSession(sessionId) { session in
+                guard session.backgroundWaitSince == since else { return }
+                settleBackgroundWait(&session, now: Date())
             }
 
         case .loadHistory(let sessionId, let cwd):
@@ -418,6 +422,8 @@ actor SessionStore {
             session.wakeupsAtTurnStart = session.knownWakeups
             session.backgroundTaskCount = 0
             session.backgroundAgentCount = 0
+            // A background wait stands until this turn's Stop says what is
+            // still running: Esc or a failed turn leaves the agents running.
             session.scheduledWakeupCount = 0
             session.lastPromptSource = event.source
             session.lastPromptWasUserAuthored = event.isUserAuthoredPrompt
@@ -434,12 +440,15 @@ actor SessionStore {
             // its Stop (e.g. the app started mid-turn) finished work too, and
             // so did a Stop ending a continuation a blocking Stop hook forced
             // (`stop_hook_active`), even with no event in between.
+            // So did the turn an agent's result woke Claude for, even when no
+            // prompt or tool of it reached us (the SDK can wake Claude
+            // without a UserPromptSubmit).
             let wasWorking: Bool
             switch previousPhase {
             case nil, .processing?, .compacting?, .waitingForApproval?:
                 wasWorking = true
             default:
-                wasWorking = event.stopHookActive == true
+                wasWorking = event.stopHookActive == true || session.backgroundWaitSince != nil
             }
             // The hook's last_assistant_message is exact. The transcript's last
             // message is only a fallback for hooks that don't send it: it can
@@ -452,8 +461,14 @@ actor SessionStore {
                 session.lastAssistantMessage = message
             }
             let types = event.backgroundTaskTypes ?? []
+            let awaited = types.filter { Self.wakingBackgroundTaskTypes.contains($0) }
             session.backgroundTaskCount = max(event.backgroundTaskCount ?? types.count, 0)
-            session.backgroundAgentCount = types.filter { Self.wakingBackgroundTaskTypes.contains($0) }.count
+            session.backgroundAgentCount = awaited.count
+            session.backgroundAgentTypes = awaited
+            // Agents and workflows still running will wake Claude when they
+            // finish: until then the work isn't done (the session shows as
+            // working, not ready for review).
+            session.backgroundWaitSince = awaited.isEmpty ? nil : now
             session.scheduledWakeupCount = max(event.sessionCronCount ?? 0, 0)
             session.knownWakingAgents = session.backgroundAgentCount
             session.knownWakeups = session.scheduledWakeupCount
@@ -473,6 +488,7 @@ actor SessionStore {
             if let configDir = session.accountId {
                 effects.rescanRegistry(configDir)
             }
+            settleBackgroundWait(&session, now: now)
 
         case "StopFailure":
             let message = NeedsInputReason.humanizedStopError(event.stopError)
@@ -483,8 +499,11 @@ actor SessionStore {
             // the preview keeps the last real reply.
             session.backgroundTaskCount = 0
             session.backgroundAgentCount = 0
+            // The turn failed; the agents it waited on didn't (the wait
+            // stands, and the registry can end it).
             session.subagentState = SubagentState()
             session.toolTracker.endMainTurn()
+            settleBackgroundWait(&session, now: now)
 
         case "SessionStart":
             if event.source == "clear" {
@@ -578,6 +597,11 @@ actor SessionStore {
             session.completedAt = record.completedAt
             session.reviewedAt = record.reviewedAt
             session.lastAssistantMessage = record.lastAssistantMessage
+            // Still waiting on background agents when we last looked; the
+            // registry says whether they still run.
+            session.backgroundWaitSince = record.backgroundWaitSince
+            session.backgroundAgentTypes = record.backgroundAgentTypes ?? []
+            session.backgroundAgentCount = session.backgroundAgentTypes.count
             if let error = record.stopError {
                 // The turn failed while we last looked; the first transcript
                 // sync clears it if the user has moved on since.
@@ -634,6 +658,53 @@ actor SessionStore {
             try? await Task.sleep(for: .seconds(delay))
             await self?.process(.completionCheck(sessionId: sessionId, stopAt: stopAt))
         }
+    }
+
+    // MARK: - Background wait
+
+    /// Ends the wait of a turn that left background agents running once
+    /// none is left, when Claude wasn't woken to say so (see
+    /// `BackgroundWork.decide`); otherwise checks again when the answer can
+    /// change by the clock alone.
+    private func settleBackgroundWait(_ session: inout SessionState, now: Date) {
+        guard let since = session.backgroundWaitSince else { return }
+        let decision = BackgroundWork.decide(
+            waitSince: since,
+            registryStatus: session.registryStatus,
+            registryChangedAt: session.registryStatusChangedAt,
+            lastHookEventAt: session.lastHookEventAt,
+            now: now,
+            timing: backgroundWaitTiming
+        )
+        switch decision {
+        case .end(let endedAt):
+            endBackgroundWait(&session, at: endedAt)
+        case .keep(let recheckIn?):
+            let sessionId = session.sessionId
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(max(recheckIn, 0.05)))
+                await self?.process(.backgroundWaitCheck(sessionId: sessionId, since: since))
+            }
+        case .keep(nil):
+            break
+        }
+    }
+
+    /// The agents are gone without waking Claude (stopped, or their
+    /// notification never came): the turn's work was done at `at`.
+    private func endBackgroundWait(_ session: inout SessionState, at: Date) {
+        session.backgroundWaitSince = nil
+        session.backgroundTaskCount = max(session.backgroundTaskCount - session.backgroundAgentCount, 0)
+        session.backgroundAgentCount = 0
+        session.backgroundAgentTypes = []
+        session.knownWakingAgents = 0
+        // The work is done now, whatever became of the turn that waited:
+        // its Stop may never have been confirmed (the agents kept the
+        // registry busy), or a later turn was interrupted.
+        session.completionPendingSince = nil
+        session.completedAt = max(session.completedAt ?? at, at)
+        let sessionId = session.sessionId
+        Self.logger.debug("Background wait of \(sessionId.prefix(8), privacy: .public) ended without a wake-up")
     }
 
     // MARK: - Approvals
@@ -965,6 +1036,7 @@ actor SessionStore {
                     session.lastEventAt = max(session.lastEventAt, changedAt)
                 }
                 settlePendingCompletion(&session, now: Date())
+                settleBackgroundWait(&session, now: Date())
             }
             sessions[entry.sessionId] = session
             persistReviewIfChanged(session, before: reviewBefore)
@@ -1006,7 +1078,8 @@ actor SessionStore {
         case "busy":
             switch session.phase {
             case .idle, .waitingForInput:
-                if session.completionPendingSince == nil {
+                // Busy with the agents a background wait is on isn't a turn.
+                if session.completionPendingSince == nil && session.backgroundWaitSince == nil {
                     session.phase = .processing
                     if !session.isHookBacked {
                         session.turnStartedAt = changedAt
@@ -1049,6 +1122,10 @@ actor SessionStore {
         session.registryStatus = entry.status
         session.registryStatusChangedAt = entry.statusChangedAt
         switch entry.status {
+        case "busy" where session.backgroundWaitSince != nil:
+            // Busy with the agents it was waiting on; a turn of its own
+            // would be reported by its hooks.
+            session.phase = .waitingForInput
         case "busy":
             session.phase = .processing
             session.turnStartedAt = changedAt
@@ -1067,6 +1144,7 @@ actor SessionStore {
                 session.completionCheckSince = previousRunAliveAt
             }
         }
+        settleBackgroundWait(&session, now: Date())
         return session
     }
 
@@ -1113,11 +1191,15 @@ actor SessionStore {
         let stopError: String?
         let stopErrorCode: String?
         let failedAt: Date?
+        let backgroundWaitSince: Date?
+        let backgroundAgentTypes: [String]?
 
         init(_ session: SessionState) {
             completedAt = session.completedAt
             reviewedAt = session.reviewedAt
             lastAssistantMessage = session.lastAssistantMessage
+            backgroundWaitSince = session.backgroundWaitSince
+            backgroundAgentTypes = session.backgroundWaitSince == nil ? nil : session.backgroundAgentTypes
             stopError = session.hasFailedTurn ? session.stopError : nil
             stopErrorCode = session.hasFailedTurn ? session.stopErrorCode : nil
             failedAt = session.hasFailedTurn ? session.stopErrorAt : nil
@@ -1139,6 +1221,8 @@ actor SessionStore {
                 stopError: after.stopError,
                 stopErrorCode: after.stopErrorCode,
                 failedAt: after.failedAt,
+                backgroundWaitSince: after.backgroundWaitSince,
+                backgroundAgentTypes: after.backgroundAgentTypes,
                 updatedAt: Date()
             ),
             urgent: urgent
@@ -1505,6 +1589,8 @@ actor SessionStore {
             } else if session.phase.canTransition(to: .idle) {
                 session.phase = .idle
             }
+            // Esc stops the turn, not the agents a background wait is on.
+            settleBackgroundWait(&session, now: Date())
         }
     }
 

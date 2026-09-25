@@ -269,7 +269,9 @@ struct ChatContent: View {
         ChatTranscript(
             history: history,
             isLoading: isLoading,
-            workingLabel: isWorking ? (session.phase == .compacting ? "Compacting context…" : "Working…") : nil,
+            workingLabel: isWorking
+                ? (session.phase == .compacting ? "Compacting context…" : "Working…")
+                : (session.attention == .working ? session.backgroundWaitDescription.map { "Waiting on \($0)…" } : nil),
             agentDescriptions: agentDescriptions,
             onHeight: { [messagesHeight = $messagesHeight] height in
                 if abs(messagesHeight.wrappedValue - height) > 0.5 { messagesHeight.wrappedValue = height }

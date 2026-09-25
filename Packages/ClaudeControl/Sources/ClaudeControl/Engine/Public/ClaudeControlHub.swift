@@ -490,8 +490,9 @@ public final class ClaudeControlHub: ObservableObject {
         /// The turn's completion, for "viewed in its own tab" and for
         /// telling completions from before launch.
         var completedAt: Date? = nil
-        /// Waiting on background agents that will wake Claude again, or a
-        /// /loop or cron tick: stays in the review queue, never announced.
+        /// A /loop or cron tick, or a turn that scheduled a wake-up: stays in
+        /// the review queue, never announced. (A turn waiting on background
+        /// agents is still working.)
         var isQuietCompletion = false
     }
 

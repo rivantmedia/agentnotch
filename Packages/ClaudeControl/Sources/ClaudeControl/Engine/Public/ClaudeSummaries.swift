@@ -210,6 +210,9 @@ public nonisolated struct ClaudeSessionSummary: Identifiable, Hashable, Sendable
     /// Issue"), nil between tools. Part of the summary so a tool starting or
     /// ending republishes the sessions, and hover rows follow it (BHV-4).
     public var runningTool: String?
+    /// What a working session whose turn is over still waits for ("1
+    /// workflow", "2 background agents"): they wake Claude when they finish.
+    public var backgroundWait: String?
 
     public init(
         id: String,
@@ -223,7 +226,8 @@ public nonisolated struct ClaudeSessionSummary: Identifiable, Hashable, Sendable
         tasks: ClaudeTaskProgress? = nil,
         contextPercent: Double? = nil,
         backgroundTasks: Int = 0,
-        runningTool: String? = nil
+        runningTool: String? = nil,
+        backgroundWait: String? = nil
     ) {
         self.id = id
         self.ringID = ringID
@@ -237,6 +241,7 @@ public nonisolated struct ClaudeSessionSummary: Identifiable, Hashable, Sendable
         self.contextPercent = contextPercent
         self.backgroundTasks = backgroundTasks
         self.runningTool = runningTool
+        self.backgroundWait = backgroundWait
     }
 }
 

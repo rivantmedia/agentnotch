@@ -11,14 +11,16 @@ extension SessionStore {
         reviewFile: URL,
         parser: ConversationParser = ConversationParser(),
         effects: SessionStoreEffects = .none,
-        completionTiming: TurnCompletion.Timing = .immediate
+        completionTiming: TurnCompletion.Timing = .immediate,
+        backgroundWaitTiming: BackgroundWork.WaitTiming = .standard
     ) -> SessionStore {
         SessionStore(
             reviewStore: ReviewStateStore(fileURL: reviewFile, writeDelay: 0, createsFolder: false),
             parser: parser,
             publishInterval: 0,
             effects: effects,
-            completionTiming: completionTiming
+            completionTiming: completionTiming,
+            backgroundWaitTiming: backgroundWaitTiming
         )
     }
 
@@ -26,14 +28,16 @@ extension SessionStore {
         reviewStore: ReviewStateStore,
         parser: ConversationParser = ConversationParser(),
         effects: SessionStoreEffects = .none,
-        completionTiming: TurnCompletion.Timing = .immediate
+        completionTiming: TurnCompletion.Timing = .immediate,
+        backgroundWaitTiming: BackgroundWork.WaitTiming = .standard
     ) -> SessionStore {
         SessionStore(
             reviewStore: reviewStore,
             parser: parser,
             publishInterval: 0,
             effects: effects,
-            completionTiming: completionTiming
+            completionTiming: completionTiming,
+            backgroundWaitTiming: backgroundWaitTiming
         )
     }
 }

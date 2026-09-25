@@ -102,9 +102,19 @@ nonisolated struct SessionState: Equatable, Identifiable, Sendable {
     }
     /// Background tasks (e.g. background Bash, agents) still running after the turn ended.
     var backgroundTaskCount: Int
-    /// Of those, the ones that wake Claude again when they finish (subagents,
-    /// workflows, teammates, cloud sessions); shells and monitors don't.
+    /// Of those, the ones the turn waits for (subagents, workflows,
+    /// teammates, cloud sessions; see `BackgroundWork.awaitedTypes`): each
+    /// wakes Claude for another turn when it finishes.
     var backgroundAgentCount: Int = 0
+    /// Their `type` labels, for "Waiting on 1 workflow".
+    var backgroundAgentTypes: [String] = []
+    /// Set by a Stop that left such agents running: the work Claude started
+    /// isn't done, so the session shows as working, not ready for review.
+    /// The next Stop says again what is still running; until then (a wake-up
+    /// or typed turn that is interrupted, or fails) the wait stands, since
+    /// neither stops background agents. It also ends when the session
+    /// registry shows no agent left (see `SessionStore.settleBackgroundWait`).
+    var backgroundWaitSince: Date?
     /// Crons and wake-ups (/loop, ScheduleWakeup) scheduled at the last Stop.
     var scheduledWakeupCount: Int = 0
     /// `source` of the prompt that started the current or last turn.
@@ -325,8 +335,23 @@ nonisolated struct SessionState: Equatable, Identifiable, Sendable {
             backgroundTaskCount: backgroundTaskCount,
             completedAt: completedAt,
             reviewedAt: reviewedAt,
-            completionPending: completionPendingSince != nil
+            completionPending: completionPendingSince != nil,
+            awaitingBackgroundAgents: backgroundWaitSince != nil
         )
+    }
+
+    /// The turn is over and the session waits on the background agents or
+    /// workflows it started (not while Claude works on a turn again, woken
+    /// by one of them or by a prompt: that turn's own progress shows then).
+    nonisolated var isAwaitingBackgroundWork: Bool {
+        backgroundWaitSince != nil && phase != .processing && phase != .compacting
+    }
+
+    /// "1 workflow", "2 background agents and 1 teammate": what the session
+    /// waits on while `isAwaitingBackgroundWork`, else nil.
+    nonisolated var backgroundWaitDescription: String? {
+        guard isAwaitingBackgroundWork else { return nil }
+        return BackgroundWork.phrase(types: backgroundAgentTypes)
     }
 
     /// Finished work the user hasn't looked at yet.

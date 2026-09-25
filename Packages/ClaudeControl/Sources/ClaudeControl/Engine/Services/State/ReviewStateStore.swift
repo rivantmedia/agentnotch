@@ -31,6 +31,10 @@ nonisolated struct ReviewRecord: Codable, Equatable, Sendable {
     var stopError: String?
     var stopErrorCode: String?
     var failedAt: Date?
+    /// The turn ended waiting on background agents or workflows (their
+    /// `type` labels), which were still running when the record was written.
+    var backgroundWaitSince: Date?
+    var backgroundAgentTypes: [String]?
     /// Last time the record changed; drives pruning.
     var updatedAt: Date
 
@@ -41,6 +45,8 @@ nonisolated struct ReviewRecord: Codable, Equatable, Sendable {
         stopError: String? = nil,
         stopErrorCode: String? = nil,
         failedAt: Date? = nil,
+        backgroundWaitSince: Date? = nil,
+        backgroundAgentTypes: [String]? = nil,
         updatedAt: Date
     ) {
         self.completedAt = completedAt
@@ -49,12 +55,15 @@ nonisolated struct ReviewRecord: Codable, Equatable, Sendable {
         self.stopError = stopError
         self.stopErrorCode = stopErrorCode
         self.failedAt = failedAt
+        self.backgroundWaitSince = backgroundWaitSince
+        self.backgroundAgentTypes = backgroundAgentTypes
         self.updatedAt = updatedAt
     }
 
     /// Nothing worth keeping.
     var isEmpty: Bool {
         completedAt == nil && reviewedAt == nil && lastAssistantMessage == nil && stopError == nil
+            && backgroundWaitSince == nil
     }
 
     /// Same content, ignoring when it was written.

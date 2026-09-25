@@ -340,15 +340,17 @@ struct A1_SessionStoreRegressionTests {
         await store.process(event("UserPromptSubmit", status: "processing", source: "user"))
         await store.process(event("Stop", status: "waiting_for_input", backgroundTaskTypes: ["subagent", "shell"]))
         var current = try #require(await state(store))
-        #expect(current.attention == .readyForReview)
+        // The subagent will wake Claude: not done yet (see BackgroundWaitTests).
+        #expect(current.attention == .working)
         #expect(current.backgroundTaskCount == 2)
         #expect(current.backgroundAgentCount == 1)
         #expect(current.completionIsQuiet)
 
-        // A dev server alone doesn't wake Claude: that turn is really done.
+        // A dev server alone isn't waited on: that turn is done.
         await store.process(event("UserPromptSubmit", status: "processing", source: "user"))
         await store.process(event("Stop", status: "waiting_for_input", backgroundTaskTypes: ["shell"]))
         #expect(await state(store)?.completionIsQuiet == false)
+        #expect(await state(store)?.attention == .readyForReview)
 
         // A /loop tick.
         await store.process(event("UserPromptSubmit", status: "processing", source: "loop_wakeup"))

@@ -175,7 +175,8 @@ nonisolated enum ClaudeHostProjections {
             tasks: tasks(session.tasks),
             contextPercent: session.contextUsedPercent.flatMap { $0.isFinite ? min(max($0, 0), 100) : nil },
             backgroundTasks: session.backgroundTaskCount,
-            runningTool: attention == .working ? runningTool(session) : nil
+            runningTool: attention == .working ? runningTool(session) : nil,
+            backgroundWait: attention == .working ? session.backgroundWaitDescription : nil
         )
     }
 
@@ -341,7 +342,11 @@ nonisolated enum ClaudeHostProjections {
         case .working:
             state = .busy
             var parts: [String] = []
-            if let tasks = session.tasks {
+            if let wait = session.backgroundWait {
+                // The turn is over; its agents aren't.
+                parts.append("Waiting on \(wait)")
+                if let tasks = session.tasks { parts.append("\(tasks.completed)/\(tasks.total)") }
+            } else if let tasks = session.tasks {
                 parts.append("\(tasks.completed)/\(tasks.total)")
                 if let active = tasks.active.map({ collapsed($0, limit: 48) }), !active.isEmpty {
                     parts.append(active)

@@ -74,7 +74,7 @@ def default_socket():
     return path
 
 
-SCENARIOS = ["permission", "question", "tasks", "review", "ratelimit", "statusline", "registry", "goal", "bgagent"]
+SCENARIOS = ["permission", "question", "tasks", "review", "ratelimit", "statusline", "registry", "goal", "bgagent", "bgworkflow"]
 EXTRA_SCENARIOS = ["burst"]
 PREFIXES = {
     "permission": "a111",
@@ -86,6 +86,7 @@ PREFIXES = {
     "registry": "9777",
     "goal": "6888",
     "bgagent": "5999",
+    "bgworkflow": "3bbb",
     "burst": "4000",
 }
 
@@ -255,11 +256,23 @@ class FakeSession:
         status = {
             "SessionStart": "idle",
             "UserPromptSubmit": "busy",
-            "Stop": "idle",
+            "Stop": self.status_after_stop(fields.get("background_tasks") or []),
             "StopFailure": "idle",
         }.get(event)
         if status and status != self.registry_status:
             self.write_registry(status, quiet=True)
+
+    @staticmethod
+    def status_after_stop(background_tasks):
+        """Claude Code 2.1.x stays "busy" while agents, workflows, cloud
+        sessions or teammates of the session run, and says "shell" when only
+        shells or monitors are left."""
+        types = {task.get("type") for task in background_tasks if isinstance(task, dict)}
+        if types & {"subagent", "workflow", "teammate", "cloud session"}:
+            return "busy"
+        if types & {"shell", "monitor"}:
+            return "shell"
+        return "idle"
 
     def blocking_hook(self, event, on_done, **fields):
         """Start a hook that waits for the app's decision; `on_done(stdout)` runs
@@ -592,7 +605,8 @@ def scenario_goal(run_id):
 
 def scenario_bgagent(run_id):
     """A background agent asks for permission after the main turn stopped:
-    its request must stay answerable (and the turn stay done)."""
+    its request must stay answerable, and until the agent is done the
+    session keeps working (waiting on it), not ready for review."""
     s = FakeSession("bgagent", "work", run_id, "/Users/dev/work/web-app", "Audit dependencies")
     s.hook("UserPromptSubmit", prompt="audit the dependencies in the background", source="user")
     agent_tool = s.next_tool_id()
@@ -602,6 +616,7 @@ def scenario_bgagent(run_id):
            tool_response={"status": "async_launched"})
     s.hook("Stop", last_assistant_message="The audit runs in the background; I'll report when it's done.",
            background_tasks=[{"type": "subagent", "id": "agent-audit"}])
+    s.expect("attn=working awaiting=1 (the main turn stopped; its agent runs on)")
     tool_id = s.next_tool_id()
     tool_input = {"command": "npm audit --json"}
     s.hook("PreToolUse", tool_name="Bash", tool_input=tool_input, tool_use_id=tool_id,
@@ -612,7 +627,30 @@ def scenario_bgagent(run_id):
 
     s.blocking_hook("PermissionRequest", done, tool_name="Bash", tool_input=tool_input, agent_id="agent-audit")
     s.expect("attn=needsInput(permission:Bash) (the agent's request survived the main Stop)")
-    say("HINT", "dev console: 'approve %s'" % s.short)
+    say("HINT", "dev console: 'approve %s', then the agent reports back" % s.short)
+    return s
+
+
+def scenario_bgworkflow(run_id):
+    """A workflow keeps running after the turn that launched it stopped:
+    the session keeps working ("Waiting on 1 workflow") until the
+    workflow's result wakes Claude, whose last turn is the one announced."""
+    s = FakeSession("bgworkflow", "work", run_id, "/Users/dev/work/web-app", "Sweep the repo")
+    s.hook("UserPromptSubmit", prompt="sweep the repo for the old name", source="user")
+    tool = s.next_tool_id()
+    s.hook("PreToolUse", tool_name="Workflow", tool_input={"script": "…"}, tool_use_id=tool)
+    s.hook("PostToolUse", tool_name="Workflow", tool_input={"script": "…"}, tool_use_id=tool,
+           tool_response={"status": "async_launched", "taskId": "w1", "taskType": "local_workflow"})
+    s.hook("Stop", last_assistant_message="The sweep is running; I'll report when it's back.",
+           background_tasks=[{"type": "workflow", "id": "w1", "name": "sweep"}])
+    s.expect("attn=working awaiting=1 (the workflow runs on after the Stop)")
+    s.hook("Notification", notification_type="idle_prompt", message="Claude is waiting for your input")
+    s.expect("attn=working awaiting=1 (idle_prompt doesn't end the wait)")
+    # The workflow's result wakes Claude (2.1.x sends no prompt source).
+    s.hook("UserPromptSubmit", prompt="<task-notification>\n<task-id>w1</task-id>\n<status>completed</status>\n"
+                                      "<summary>Dynamic workflow \"sweep\" completed</summary>\n</task-notification>")
+    s.hook("Stop", last_assistant_message="The sweep found 12 places; all fixed.", background_tasks=[])
+    s.expect('attn=readyForReview review="The sweep found 12 places; all fixed." (announced once)')
     return s
 
 

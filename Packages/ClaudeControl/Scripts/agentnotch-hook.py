@@ -214,8 +214,12 @@ def build_message(data):
             background = data.get("background_tasks")
             message["background_task_count"] = len(background) if isinstance(background, list) else 0
             if isinstance(background, list):
-                # "subagent", "workflow", "teammate", "cloud session" wake
-                # Claude again when they finish; "shell" and "monitor" don't.
+                # The app waits on "subagent", "workflow", "teammate" and
+                # "cloud session": each wakes Claude again when it finishes.
+                # "shell", "monitor" and "MCP task" wake it too, but a shell
+                # or monitor may be a dev server that never ends (and the
+                # registry doesn't count MCP tasks); "dream" and "auto-mode
+                # scan" never wake it.
                 message["background_task_types"] = [
                     task.get("type")
                     for task in background[:MAX_BACKGROUND_TYPES]

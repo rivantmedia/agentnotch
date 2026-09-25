@@ -208,7 +208,9 @@ nonisolated enum SessionAttention: Equatable, Sendable {
     /// 2. an explicit needs-input reason (notification, registry, StopFailure),
     /// 3. processing or compacting, or a Stop not yet confirmed as the end
     ///    of the turn (`completionPending`: Claude Code still runs its Stop
-    ///    hooks, and a blocking one such as /goal continues the turn),
+    ///    hooks, and a blocking one such as /goal continues the turn), or a
+    ///    turn that ended waiting on background agents or workflows that
+    ///    will wake Claude when they finish (`awaitingBackgroundAgents`),
     /// 4. a completed turn not reviewed since it completed,
     /// 5. idle.
     static func derive(
@@ -217,7 +219,8 @@ nonisolated enum SessionAttention: Equatable, Sendable {
         backgroundTaskCount: Int,
         completedAt: Date?,
         reviewedAt: Date?,
-        completionPending: Bool = false
+        completionPending: Bool = false,
+        awaitingBackgroundAgents: Bool = false
     ) -> SessionAttention {
         if case .waitingForApproval(let context) = phase {
             return .needsInput(.forApproval(toolName: context.toolName))
@@ -231,11 +234,11 @@ nonisolated enum SessionAttention: Equatable, Sendable {
         default:
             break
         }
-        if completionPending {
+        if completionPending || awaitingBackgroundAgents {
             return .working
         }
-        // A turn that ended with background tasks still running (a dev server,
-        // a long build) is still finished work to look at: treating it as
+        // A turn that ended with only shells or monitors still running (a dev
+        // server, a watcher) is finished work to look at: treating it as
         // "working" would hide it from the review queue for as long as the
         // task lives. The UI shows the running count as a detail instead.
         let turnEnded = phase == .waitingForInput || phase == .idle

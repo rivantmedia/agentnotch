@@ -76,6 +76,10 @@ enum SessionEvent: Sendable {
     /// whose registry doesn't say when the turn is over).
     case completionCheck(sessionId: String, stopAt: Date)
 
+    /// A turn waiting on background agents (since `since`) may be done now
+    /// (see `BackgroundWork.decide`).
+    case backgroundWaitCheck(sessionId: String, since: Date)
+
     // MARK: - Chat History
 
     /// A chat opened: read and keep the session's whole history
@@ -297,6 +301,8 @@ extension SessionEvent: CustomStringConvertible {
             return "interruptDetected(session: \(sessionId.prefix(8)))"
         case .completionCheck(let sessionId, _):
             return "completionCheck(session: \(sessionId.prefix(8)))"
+        case .backgroundWaitCheck(let sessionId, _):
+            return "backgroundWaitCheck(session: \(sessionId.prefix(8)))"
         case .loadHistory(let sessionId, _):
             return "loadHistory(session: \(sessionId.prefix(8)))"
         case .releaseHistory(let sessionId):

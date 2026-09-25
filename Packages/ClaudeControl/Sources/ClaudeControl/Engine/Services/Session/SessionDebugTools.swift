@@ -77,6 +77,9 @@ final class SessionStateDump {
         if session.backgroundTaskCount > 0 {
             parts.append("bg=\(session.backgroundTaskCount)")
         }
+        if session.backgroundWaitSince != nil {
+            parts.append("awaiting=\(session.backgroundAgentCount)")
+        }
         if session.isReadyForReview && session.completionIsQuiet {
             parts.append("quiet")
         }

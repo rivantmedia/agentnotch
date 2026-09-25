@@ -118,9 +118,13 @@ final class A1_HookPipelineIntegrationTests {
         let (agentHook, agentOut) = try runHook(payload("PermissionRequest", ["agent_id": "bg-1", "tool_name": "Bash", "tool_input": input]))
         #expect(try await eventually { await self.session()?.activePermission?.toolUseId == "toolu_bg" })
 
-        // The main turn ends while the agent waits for its answer.
-        try await send("Stop", ["last_assistant_message": "Agents are running.", "background_tasks": [["type": "subagent"]]])
+        // The main turn ends while the agent waits for its answer. The real
+        // hook script forwards the task types: the turn waits on its agent.
+        try await send("Stop", ["last_assistant_message": "Agents are running.",
+                                "background_tasks": [["type": "subagent", "id": "bg-1"], ["type": "shell", "id": "b2"]]])
         #expect(try await eventually { await self.session()?.completedAt != nil })
+        #expect(await session()?.backgroundAgentTypes == ["subagent"])
+        #expect(await session()?.backgroundWaitDescription == "1 background agent")
         #expect(server.hasPendingPermission(toolUseId: "toolu_bg"))
         #expect(agentHook.isRunning)
         #expect(await session()?.attention == .needsInput(.permission(tool: "Bash")))
@@ -129,6 +133,8 @@ final class A1_HookPipelineIntegrationTests {
         #expect(try await exited(agentHook))
         #expect(try decision(agentOut)?["behavior"] as? String == "allow")
         #expect(try await eventually { await self.session()?.activePermission == nil })
+        // Answered, and the agent still runs: working, not done.
+        #expect(await session()?.attention == .working)
     }
 
     @Test func aMainRequestFallsBackToTheTerminalAtStop() async throws {

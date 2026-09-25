@@ -88,8 +88,9 @@ final class A1_DevToolsSimulatorTests {
         }
     }
 
-    /// The /goal and background-agent scenarios, with the registry the
-    /// simulator mirrors read the way the app's scanner reads it.
+    /// The /goal, background-agent and background-workflow scenarios, with
+    /// the registry the simulator mirrors read the way the app's scanner
+    /// reads it.
     @Test func goalLoopsAreDoneOnceAndAgentRequestsSurviveTheStop() async throws {
         let server = HookSocketServer(socketPath: socketPath)
         let registryOnly = TurnCompletion.Timing(fallbackDelay: 30, registryTimeout: 60, clockTolerance: 1)
@@ -102,11 +103,18 @@ final class A1_DevToolsSimulatorTests {
             try await Task.sleep(nanoseconds: 25_000_000)
         }
 
-        // Every published state of the goal session, to count its "done"s.
+        // Every published state of the goal and workflow sessions, to count
+        // their "done"s.
         let recorder = AttentionRecorder()
+        let workflowRecorder = AttentionRecorder()
+        let waited = AttentionRecorder()
         let subscription = store.sessionsPublisher.sink { sessions in
             for session in sessions where session.sessionId.hasPrefix("6888") {
                 recorder.record(session.attention)
+            }
+            for session in sessions where session.sessionId.hasPrefix("3bbb") {
+                workflowRecorder.record(session.attention)
+                if session.isAwaitingBackgroundWork { waited.record(session.attention) }
             }
         }
         defer { subscription.cancel() }
@@ -117,7 +125,7 @@ final class A1_DevToolsSimulatorTests {
         process.arguments = [
             "python3", Self.simulator,
             "--socket", socketPath, "--hook", Self.hook, "--root", root,
-            "--scenario", "goal,bgagent", "--step", "0.2", "--linger", "8", "--quiet",
+            "--scenario", "goal,bgagent,bgworkflow", "--step", "0.2", "--linger", "8", "--quiet",
         ]
         process.environment = ["PATH": "/usr/bin:/bin"]
         let output = Pipe()
@@ -135,15 +143,18 @@ final class A1_DevToolsSimulatorTests {
             }
             let agentSession = await Self.sessions(store, prefixes: ["5999"]).first
             if !answered, let request = agentSession?.activePermission, request.isFromSubagent,
-               agentSession?.completedAt != nil {
-                // The main turn is over and the agent's request is still there.
+               agentSession?.backgroundWaitSince != nil {
+                // The main turn is over (waiting on its agent), and the
+                // agent's request is still there.
                 #expect(agentSession?.attention == .needsInput(.permission(tool: "Bash")))
                 monitor.approvePermission(sessionId: agentSession!.sessionId, toolUseId: request.toolUseId)
                 answered = true
             }
             let goal = await Self.sessions(store, prefixes: ["6888"]).first
+            let workflow = await Self.sessions(store, prefixes: ["3bbb"]).first
             // The answer reached the hook once the store recorded it.
-            if answered, agentSession?.activePermission == nil, goal?.attention == .readyForReview {
+            if answered, agentSession?.activePermission == nil, goal?.attention == .readyForReview,
+               workflow?.attention == .readyForReview {
                 try await Task.sleep(nanoseconds: 300_000_000)
                 process.terminate()
             }
@@ -157,6 +168,13 @@ final class A1_DevToolsSimulatorTests {
         // Working the whole time, then done exactly once.
         #expect(recorder.readyForReviewCrossings == 1, "\(recorder.history)")
         #expect(recorder.history.last == .readyForReview)
+        // The workflow session waited (working) after its first Stop and was
+        // done once, after the workflow's result woke Claude.
+        #expect(waited.history == [.working], "\(waited.history)")
+        #expect(workflowRecorder.readyForReviewCrossings == 1, "\(workflowRecorder.history)")
+        #expect(workflowRecorder.history.last == .readyForReview)
+        // The agent session is still waiting on its agent (it never reported).
+        #expect(await Self.sessions(store, prefixes: ["5999"]).first?.attention == .working)
     }
 
     private static func sessions(_ store: SessionStore, prefixes: [String]) async -> [SessionState] {

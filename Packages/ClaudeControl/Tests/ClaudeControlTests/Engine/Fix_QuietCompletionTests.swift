@@ -31,11 +31,12 @@ struct Fix_QuietCompletionTests {
     }
 
     private func turn(_ store: SessionStore, source: String, prompt: String = "go",
-                      agents: [String]? = nil, crons: Int? = nil) async throws -> SessionState {
+                      agents: [String]? = nil, crons: Int? = nil,
+                      attention: SessionAttention = .readyForReview) async throws -> SessionState {
         await store.process(event("UserPromptSubmit", status: "processing", source: source, prompt: prompt))
         await store.process(event("Stop", status: "waiting_for_input", agents: agents, crons: crons))
         let state = try #require(await store.session(for: "s1"))
-        #expect(state.attention == .readyForReview)
+        #expect(state.attention == attention)
         return state
     }
 
@@ -63,13 +64,14 @@ struct Fix_QuietCompletionTests {
 
     @Test func teammatesThatStayDoNotSilenceTheLead() async throws {
         let store = makeStore()
-        // Spawning teammates: they will wake the lead, quiet.
-        #expect(try await turn(store, source: "user", agents: ["teammate", "teammate"]).completionIsQuiet)
-        // A typed turn while they stay alive: announced.
-        #expect(try await turn(store, source: "user", agents: ["teammate", "teammate"]).completionIsQuiet == false)
+        // Teammates at work: the lead waits for them (working), and the
+        // turn that spawned them is quiet.
+        #expect(try await turn(store, source: "user", agents: ["teammate", "teammate"], attention: .working).completionIsQuiet)
+        // A typed turn while they stay alive: announced once the wait ends.
+        #expect(try await turn(store, source: "user", agents: ["teammate", "teammate"], attention: .working).completionIsQuiet == false)
         // A teammate's report wakes the lead (not typed): quiet while one is out.
-        #expect(try await turn(store, source: "system", agents: ["teammate"]).completionIsQuiet)
-        // The last one reports: the final turn is announced.
+        #expect(try await turn(store, source: "system", agents: ["teammate"], attention: .working).completionIsQuiet)
+        // The last one reports: the final turn is done, and announced.
         #expect(try await turn(store, source: "system", agents: []).completionIsQuiet == false)
     }
 }

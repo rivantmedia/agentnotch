@@ -10,7 +10,8 @@ import Testing
 struct A1_AttentionAndReviewTests {
     // MARK: - AttentionTracker
 
-    private func session(_ id: String, attention: SessionAttention, completedAt: Date? = nil, agents: Int = 0) -> SessionState {
+    private func session(_ id: String, attention: SessionAttention, completedAt: Date? = nil,
+                         promptSource: String? = nil) -> SessionState {
         var state = SessionState(sessionId: id, cwd: "/tmp/\(id)")
         switch attention {
         case .working:
@@ -18,7 +19,7 @@ struct A1_AttentionAndReviewTests {
         case .readyForReview:
             state.phase = .waitingForInput
             state.completedAt = completedAt ?? Date()
-            state.backgroundAgentCount = agents
+            state.lastPromptSource = promptSource
         case .needsInput(let reason):
             state.phase = .processing
             state.needsInputReason = reason
@@ -79,8 +80,8 @@ struct A1_AttentionAndReviewTests {
         tracker.update([
             // Found finished on its first sync: it finished while the app was down.
             session("inferred", attention: .readyForReview, completedAt: launch.addingTimeInterval(-30)),
-            // Ended waiting for its agents: they will wake it.
-            session("quiet", attention: .readyForReview, completedAt: now, agents: 2),
+            // A /loop tick: the loop's last turn is announced instead.
+            session("quiet", attention: .readyForReview, completedAt: now, promptSource: "loop_wakeup"),
             session("done", attention: .readyForReview, completedAt: now),
         ], now: now)
         #expect(received().filter(\.becameReadyForReview).map(\.session.sessionId) == ["done"])

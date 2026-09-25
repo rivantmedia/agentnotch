@@ -223,6 +223,10 @@ nonisolated enum SessionRowContent {
         if session.phase == .compacting {
             return .text("Compacting context…", tone: .secondary, lineLimit: 1)
         }
+        if let wait = session.backgroundWaitDescription {
+            // The turn is over; the agents it started aren't.
+            return .text("Waiting on \(wait)…", tone: .secondary, lineLimit: 1)
+        }
         if let task = session.tasks.activeItem {
             return .text(collapseWhitespace(task.activeLabel), tone: .secondary, lineLimit: 1)
         }
