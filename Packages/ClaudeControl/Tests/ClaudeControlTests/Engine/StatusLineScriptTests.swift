@@ -32,7 +32,10 @@ nonisolated private final class OneShotSocketServer: @unchecked Sendable {
             close(fd)
             throw POSIXError(.EADDRINUSE)
         }
-        DispatchQueue.global().async { [self] in
+        // A thread of its own, not a GCD worker: this suite's tests block
+        // on child processes, and under a busy parallel run (CI) the global
+        // pool can be starved long enough for the message to miss its wait.
+        let thread = Thread { [self] in
             let client = accept(fd, nil, nil)
             if client >= 0 {
                 var buffer = [UInt8](repeating: 0, count: 4096)
@@ -47,6 +50,7 @@ nonisolated private final class OneShotSocketServer: @unchecked Sendable {
             }
             done.signal()
         }
+        thread.start()
     }
 
     /// What the one client sent, or nil if nobody connected in time.

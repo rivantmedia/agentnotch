@@ -17,9 +17,9 @@ struct CloudSyncRegressionTests {
         harness.syncRequests.flatMap { sessions(harness, $0) }
     }
 
-    /// Waits (briefly) until `condition` holds.
+    /// Waits until `condition` holds (generously: a busy CI runner is slow).
     static func eventually(_ condition: () -> Bool) async {
-        let deadline = Date().addingTimeInterval(10)
+        let deadline = Date().addingTimeInterval(30)
         while !condition(), Date() < deadline {
             try? await Task.sleep(for: .milliseconds(20))
         }
@@ -280,19 +280,39 @@ struct CloudSyncRegressionTests {
 
     // MARK: - Finding 21: switching off stops what is in flight
 
-    /// Holds the first sync request until the test lets it go.
+    /// Holds the first sync request until the test lets it go. It suspends
+    /// the request's task rather than blocking a thread: a blocked thread of
+    /// the cooperative pool starves every other test on a small CI runner.
     nonisolated final class Gate: @unchecked Sendable {
-        private let semaphore = DispatchSemaphore(value: 0)
         private let lock = NSLock()
         private var held = false
-        func holdFirst() {
+        private var isOpen = false
+        private var waiter: CheckedContinuation<Void, Never>?
+
+        func holdFirst() async {
             let first = lock.withLock { () -> Bool in
                 defer { held = true }
-                return !held
+                return !held && !isOpen
             }
-            if first { semaphore.wait() }
+            guard first else { return }
+            await withCheckedContinuation { continuation in
+                let openAlready = lock.withLock { () -> Bool in
+                    if isOpen { return true }
+                    waiter = continuation
+                    return false
+                }
+                if openAlready { continuation.resume() }
+            }
         }
-        func open() { semaphore.signal() }
+
+        func open() {
+            let waiting = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+                isOpen = true
+                defer { waiter = nil }
+                return waiter
+            }
+            waiting?.resume()
+        }
     }
 
     @Test(.timeLimit(.minutes(1)))
@@ -309,7 +329,7 @@ struct CloudSyncRegressionTests {
         #expect(harness.sync.stores?.recorder.pendingCount == 600)
         let gate = Gate()
         harness.transport.answer { request in
-            if request.url?.path == "/api/app/v1/sync" { gate.holdFirst() }
+            if request.url?.path == "/api/app/v1/sync" { await gate.holdFirst() }
             return try Harness.website(request)
         }
         let pass = Task { await harness.sync.syncNow() }

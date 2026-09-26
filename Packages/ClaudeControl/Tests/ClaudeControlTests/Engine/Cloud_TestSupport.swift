@@ -30,14 +30,16 @@ nonisolated final class FakeTransport: CloudTransport, @unchecked Sendable {
     }
 
     private let lock = NSLock()
-    private var handler: @Sendable (URLRequest) throws -> Answer
+    /// Async, so a test can hold a request (see `CloudSyncRegressionTests.Gate`)
+    /// by suspending, never by blocking a thread of the cooperative pool.
+    private var handler: @Sendable (URLRequest) async throws -> Answer
     private(set) var requests: [URLRequest] = []
 
-    init(_ handler: @escaping @Sendable (URLRequest) throws -> Answer) {
+    init(_ handler: @escaping @Sendable (URLRequest) async throws -> Answer) {
         self.handler = handler
     }
 
-    func answer(_ handler: @escaping @Sendable (URLRequest) throws -> Answer) {
+    func answer(_ handler: @escaping @Sendable (URLRequest) async throws -> Answer) {
         lock.withLock { self.handler = handler }
     }
 
@@ -48,11 +50,11 @@ nonisolated final class FakeTransport: CloudTransport, @unchecked Sendable {
     }
 
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        let handler = lock.withLock { () -> @Sendable (URLRequest) throws -> Answer in
+        let handler = lock.withLock { () -> @Sendable (URLRequest) async throws -> Answer in
             requests.append(request)
             return self.handler
         }
-        let answer = try handler(request)
+        let answer = try await handler(request)
         let response = HTTPURLResponse(url: request.url!, statusCode: answer.status, httpVersion: "HTTP/1.1",
                                        headerFields: answer.headers.merging(["Content-Type": "application/json"]) { a, _ in a })!
         return (answer.body, response)

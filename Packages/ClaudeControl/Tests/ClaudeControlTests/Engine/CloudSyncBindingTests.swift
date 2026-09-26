@@ -40,7 +40,7 @@ struct CloudSyncBindingTests {
         let transport = FakeTransport { request in
             switch (request.url?.host, request.url?.path) {
             case ("agentnotch.example.com", "/api/app/v1/sync"):
-                gate.holdFirst()
+                await gate.holdFirst()
                 return .init(status: 401, body: try TestPaths.contractFixture("error.json"))
             case (_, "/auth/v1/token"):
                 return CloudAuthTests.tokenAnswer(access: "b-refreshed", refresh: "b-refresh-2")
@@ -76,7 +76,7 @@ struct CloudSyncBindingTests {
         let transport = FakeTransport { request in
             switch request.url?.path {
             case "/api/app/v1/sync":
-                gate.holdFirst()
+                await gate.holdFirst()
                 return .init(status: 401, body: try TestPaths.contractFixture("error.json"))
             case "/auth/v1/token":
                 return CloudAuthTests.tokenAnswer(access: "new-refreshed", refresh: "new-refresh-2")
@@ -117,7 +117,7 @@ struct CloudSyncBindingTests {
         let first = FirstOnly()
         harness.transport.answer { request in
             if request.url?.path == "/api/app/v1/sync", first.take() {
-                gate.holdFirst()
+                await gate.holdFirst()
                 return try answer(request)
             }
             return try Harness.website(request)
