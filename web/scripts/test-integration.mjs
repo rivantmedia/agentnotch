@@ -4,7 +4,10 @@
  *
  * 1. Starts `postgres:16-alpine` as the container `agentnotch-web-test` on 127.0.0.1:55432
  *    (`--rm`, so stopping it deletes it). A leftover container of that name from an interrupted
- *    run is stopped first. No other container is ever touched.
+ *    run is stopped first. No other container is ever touched. Scripts/cloud-contract-e2e.sh
+ *    names its own (`agentnotch-web-test-e2e` on 55439) through the environment, and runs only
+ *    tests/integration/contract-e2e.test.ts in it; scripts/test-container.mjs accepts nothing
+ *    outside `agentnotch-web-test*` on ports 55432 to 55439.
  * 2. Applies prisma/migrations with `prisma migrate deploy`, then checks the result has no drift
  *    from prisma/schema.prisma.
  * 3. Runs Vitest with vitest.integration.config.ts (extra arguments are passed through).
@@ -13,10 +16,14 @@
 import { spawn, spawnSync } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 
-const CONTAINER = "agentnotch-web-test";
-const PORT = 55432;
+import { testContainer } from "./test-container.mjs";
+
+const {
+  name: CONTAINER,
+  port: PORT,
+  databaseUrl: DATABASE_URL,
+} = testContainer(process.env);
 const IMAGE = "postgres:16-alpine";
-const DATABASE_URL = `postgresql://postgres:test@127.0.0.1:${PORT}/postgres`;
 
 /** @param {string[]} args */
 function docker(args, { quiet = false } = {}) {

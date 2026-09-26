@@ -19,7 +19,7 @@ import {
   Skeleton,
 } from "../../_components/ui";
 import { PROJECTS_DESCRIPTION } from "./copy";
-import { sessionsInput, type SessionFilter } from "./queries";
+import { projectForId, sessionsInput, type SessionFilter } from "./queries";
 
 type Person = RouterOutputs["accounts"]["get"]["members"][number];
 type Project = RouterOutputs["projects"]["list"][number];
@@ -166,9 +166,10 @@ function Projects({
   );
 }
 
+/** Each name is listed once per person; two people's projects of one name say whose they are. */
 function projectOptionLabel(
   project: Project,
-  projects: Project[],
+  projects: readonly Project[],
   pooled: boolean,
 ) {
   const sameName = projects.filter((p) => p.name === project.name).length > 1;
@@ -212,6 +213,13 @@ function ProjectsTable({
             <th scope="col" className={cx(header, "text-right")}>
               Sessions
             </th>
+            <th
+              scope="col"
+              className={cx(header, "text-right")}
+              title="How many Macs its sessions were synced from"
+            >
+              Macs
+            </th>
             <th scope="col" className={cx(header, "text-right")}>
               Total tokens
             </th>
@@ -237,7 +245,9 @@ function ProjectsTable({
         </thead>
         <tbody className="divide-y divide-line">
           {projects.map((project) => {
-            const selected = project.id === selectedId;
+            const selected =
+              selectedId !== undefined &&
+              project.projectIds.includes(selectedId);
             const summary = project.latestSummaries[0];
             return (
               <tr
@@ -276,6 +286,12 @@ function ProjectsTable({
                 ) : null}
                 <td className={cx(num, "align-top")}>
                   {formatExact(project.sessionCount)}
+                </td>
+                <td
+                  className={cx(num, "align-top text-ink-2")}
+                  title={plural(project.macCount, "Mac", "Macs")}
+                >
+                  {formatExact(project.macCount)}
                 </td>
                 <td
                   className={cx(num, "align-top font-semibold")}
@@ -345,8 +361,8 @@ function SessionFilters({
   const [projects] = api.projects.list.useSuspenseQuery({ accountKey });
   const id = useId();
   const active = Boolean(filter.projectId ?? filter.ownerId);
-  const knownProject =
-    !filter.projectId || projects.some((p) => p.id === filter.projectId);
+  // A link may name any row of a project; the select shows the project it belongs to.
+  const selectedProject = projectForId(projects, filter.projectId);
   const knownMember =
     !filter.ownerId || members.some((m) => m.id === filter.ownerId);
 
@@ -366,13 +382,13 @@ function SessionFilters({
         <select
           id={`${id}-project`}
           className="field sm:w-64"
-          value={filter.projectId ?? ""}
+          value={selectedProject?.id ?? filter.projectId ?? ""}
           onChange={(e) =>
             onChange({ ...filter, projectId: e.target.value || undefined })
           }
         >
           <option value="">All projects</option>
-          {!knownProject ? (
+          {filter.projectId && !selectedProject ? (
             <option value={filter.projectId}>Selected project</option>
           ) : null}
           {projects.map((p) => (

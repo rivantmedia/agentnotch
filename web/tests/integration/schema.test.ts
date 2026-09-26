@@ -18,6 +18,7 @@ describe("migrations", () => {
     for (const expected of [
       "Device",
       "PoolJoinFailure",
+      "PoolJoinIpFailure",
       "RateLimit",
       "Session",
       "UsageWindow",

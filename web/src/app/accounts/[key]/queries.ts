@@ -5,6 +5,13 @@
 
 export const SESSIONS_PAGE_SIZE = 20;
 
+const ACCOUNT_KEY = /^[0-9a-f]{64}$/;
+
+/** Whether a path segment can be an account key at all (64 lowercase hex). */
+export function isAccountKey(key: string): boolean {
+  return ACCOUNT_KEY.test(key);
+}
+
 /** How far back the usage charts go. */
 export const USAGE_HISTORY_DAYS = 30;
 
@@ -26,6 +33,19 @@ export function filterFromParams(params: {
     projectId: project && ID.test(project) ? project : undefined,
     ownerId: member && ID.test(member) ? member : undefined,
   };
+}
+
+/**
+ * The project a filter's project id selects. Projects group a person's rows of one folder name
+ * (one per Mac), and a link may name any of those rows: it selects the whole group.
+ */
+export function projectForId<P extends { projectIds: readonly string[] }>(
+  projects: readonly P[],
+  projectId: string | undefined,
+): P | undefined {
+  return projectId === undefined
+    ? undefined
+    : projects.find((p) => p.projectIds.includes(projectId));
 }
 
 export function sessionsInput(accountKey: string, filter: SessionFilter) {

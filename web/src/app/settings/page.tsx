@@ -7,6 +7,7 @@ import { api } from "~/trpc/server";
 import { ConnectMacSteps } from "../_components/connect-mac";
 import { RelativeTime } from "../_components/time";
 import { PageHeader, SectionHeading } from "../_components/ui";
+import { DataControls } from "./data-controls";
 
 export const metadata: Metadata = { title: "Settings" };
 
@@ -114,6 +115,15 @@ export default async function SettingsPage() {
             </Link>
           </p>
         </div>
+      </section>
+
+      <section aria-labelledby="data-title" className="flex flex-col gap-4">
+        <SectionHeading
+          id="data-title"
+          title="Your data"
+          description="Remove what your Macs synced to this website. Neither can be undone."
+        />
+        <DataControls />
       </section>
     </div>
   );

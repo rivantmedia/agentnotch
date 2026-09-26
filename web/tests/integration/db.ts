@@ -28,8 +28,9 @@ afterAll(async () => {
 /** Empties every table (in one statement, so foreign keys don't matter). */
 export async function resetDb(): Promise<void> {
   await db.$executeRawUnsafe(
-    `TRUNCATE TABLE "PoolJoinFailure", "PoolMember", "Pool", "UsageReading", "UsageWindow",
-       "Session", "Project", "UserAccount", "ClaudeAccount", "Device", "RateLimit", "User"
+    `TRUNCATE TABLE "PoolJoinFailure", "PoolJoinIpFailure", "PoolMember", "Pool",
+       "UsageReading", "UsageWindow", "Session", "Project", "UserAccount", "ClaudeAccount",
+       "Device", "RateLimit", "User"
        RESTART IDENTITY CASCADE`,
   );
 }

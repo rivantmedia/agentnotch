@@ -11,10 +11,13 @@ import {
   MAX_WINDOWS_PER_ACCOUNT,
 } from "~/server/services/accounts";
 import { formatPoolCode, POOL_CODE_TTL_MS } from "~/server/services/pool-code";
+import { ipKey } from "~/server/client-ip";
 import {
   createPoolCode,
   JOIN_FAILURE_LIMIT,
+  JOIN_FAILURE_PRUNE_BATCH,
   JOIN_FAILURE_WINDOW_MS,
+  JOIN_IP_FAILURE_LIMIT,
   joinPool,
   leavePool,
   listPools,
@@ -516,6 +519,141 @@ describe("a pool on Ann's personal account", () => {
       JOIN_FAILURE_LIMIT,
     );
     expect(outcomes.filter((c) => c === "TOO_MANY_REQUESTS")).toHaveLength(5);
+  });
+
+  it("limits failed redemptions per IP address too, whoever is signed in", async () => {
+    const { code } = await annAndBob();
+    for (const id of ["eve", "fay", "gus", "hal"]) await createUser(id);
+    const office = ipKey("203.0.113.7", undefined);
+    const start = new Date("2026-09-25T12:00:00Z");
+    // 30 failures from one address, nobody past their own 10.
+    let tries = 0;
+    for (const [userId, count] of [
+      ["dan", 9],
+      ["cat", 9],
+      ["eve", 9],
+      ["fay", 3],
+    ] as const) {
+      for (let i = 0; i < count; i++) {
+        const at = new Date(start.getTime() + tries++);
+        expect(
+          await denied(joinPool(db, userId, UNKNOWN_CODE, at, office)),
+        ).toBe("NOT_FOUND");
+      }
+    }
+    expect(tries).toBe(JOIN_IP_FAILURE_LIMIT);
+
+    // Someone without a failure of their own, from that address: refused, the right code too.
+    const later = new Date(start.getTime() + 60_000);
+    const refused = await joinPool(db, "gus", code, later, office).catch(
+      (e: unknown) => e,
+    );
+    expect(refused).toMatchObject({
+      code: "TOO_MANY_REQUESTS",
+      message: expect.stringContaining("from this network") as unknown,
+    });
+    // From another address, or with none known, the right code works.
+    const home = ipKey("198.51.100.1", undefined);
+    expect((await joinPool(db, "gus", code, later, home)).joined).toBe(true);
+    expect((await joinPool(db, "hal", code, later, null)).joined).toBe(true);
+
+    // Only the address's hash is stored, and the rows name nobody.
+    const rows = await db.poolJoinIpFailure.findMany();
+    expect(rows).toHaveLength(JOIN_IP_FAILURE_LIMIT);
+    expect(new Set(rows.map((r) => r.ipKey))).toEqual(new Set([office]));
+    expect(
+      JSON.stringify(rows, (_, v: unknown) =>
+        typeof v === "bigint" ? String(v) : v,
+      ),
+    ).not.toContain("203.0.113.7");
+
+    // An hour after the failures, the address may try again.
+    const nextHour = new Date(start.getTime() + JOIN_FAILURE_WINDOW_MS + 60);
+    expect((await joinPool(db, "eve", code, nextHour, office)).joined).toBe(
+      true,
+    );
+    expect(await db.poolJoinIpFailure.count()).toBe(0);
+  });
+
+  it("counts an address's failures exactly under concurrent guesses by several people", async () => {
+    await annAndBob();
+    for (const id of ["eve", "fay"]) await createUser(id);
+    const office = ipKey("203.0.113.7", undefined);
+    const at = new Date("2026-09-25T12:00:00Z");
+    // 9 each from four people: 36 guesses, each person under their own limit.
+    const outcomes = await Promise.all(
+      ["dan", "cat", "eve", "fay"].flatMap((userId) =>
+        Array.from({ length: 9 }, () =>
+          denied(joinPool(db, userId, UNKNOWN_CODE, at, office)),
+        ),
+      ),
+    );
+    expect(outcomes.filter((c) => c === "NOT_FOUND")).toHaveLength(
+      JOIN_IP_FAILURE_LIMIT,
+    );
+    expect(outcomes.filter((c) => c === "TOO_MANY_REQUESTS")).toHaveLength(6);
+  });
+
+  it("deletes failures past the hour on each attempt, a batch at a time, oldest first", async () => {
+    const start = new Date("2026-09-25T12:00:00Z");
+    const office = ipKey("203.0.113.7", undefined);
+    // 150 failures from long ago, per user and per address, and 3 of each from this hour.
+    const old = JOIN_FAILURE_PRUNE_BATCH + 50;
+    const longAgo = (i: number) =>
+      new Date(start.getTime() - 2 * JOIN_FAILURE_WINDOW_MS + i);
+    const recent = (i: number) => new Date(start.getTime() - 60_000 + i);
+    await db.poolJoinFailure.createMany({
+      data: [
+        ...Array.from({ length: old }, (_, i) => ({
+          userId: "cat",
+          at: longAgo(i),
+        })),
+        ...Array.from({ length: 3 }, (_, i) => ({
+          userId: "dan",
+          at: recent(i),
+        })),
+      ],
+    });
+    await db.poolJoinIpFailure.createMany({
+      data: [
+        ...Array.from({ length: old }, (_, i) => ({
+          ipKey: office,
+          at: longAgo(i),
+        })),
+        ...Array.from({ length: 3 }, (_, i) => ({
+          ipKey: office,
+          at: recent(i),
+        })),
+      ],
+    });
+    const past = () => ({ at: { lte: longAgo(old) } });
+    const oldest = async () =>
+      (
+        await db.poolJoinFailure.findFirst({
+          where: past(),
+          orderBy: { at: "asc" },
+        })
+      )?.at;
+
+    // One attempt deletes one batch of each table, the oldest; the hour's failures still count.
+    expect(await denied(joinPool(db, "dan", UNKNOWN_CODE, start, office))).toBe(
+      "NOT_FOUND",
+    );
+    expect(await db.poolJoinFailure.count({ where: past() })).toBe(50);
+    expect(await db.poolJoinIpFailure.count({ where: past() })).toBe(50);
+    expect(await oldest()).toEqual(longAgo(JOIN_FAILURE_PRUNE_BATCH));
+    expect(await db.poolJoinFailure.count({ where: { userId: "dan" } })).toBe(
+      4,
+    );
+
+    // The next deletes the rest.
+    expect(await denied(joinPool(db, "dan", UNKNOWN_CODE, start, office))).toBe(
+      "NOT_FOUND",
+    );
+    expect(await db.poolJoinFailure.count({ where: past() })).toBe(0);
+    expect(await db.poolJoinIpFailure.count({ where: past() })).toBe(0);
+    expect(await db.poolJoinFailure.count()).toBe(5);
+    expect(await db.poolJoinIpFailure.count()).toBe(5);
   });
 
   it("describes a pooled account by the creator's report, never another member's", async () => {

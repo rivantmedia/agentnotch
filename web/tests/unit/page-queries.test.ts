@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   filterFromParams,
+  isAccountKey,
+  projectForId,
   SESSIONS_PAGE_SIZE,
   sessionsInput,
   usageFrom,
@@ -71,5 +73,24 @@ describe("account page queries", () => {
       accountKey: KEY,
       from: new Date(from),
     });
+  });
+
+  it("select a whole project group by any of its rows' ids", () => {
+    // One person's "agentnotch" from two Macs, and another project.
+    const projects = [
+      { id: "p1", projectIds: ["p1", "p7"], name: "agentnotch" },
+      { id: "p2", projectIds: ["p2"], name: "billing" },
+    ];
+    expect(projectForId(projects, "p1")?.name).toBe("agentnotch");
+    expect(projectForId(projects, "p7")?.id).toBe("p1");
+    expect(projectForId(projects, "p2")?.id).toBe("p2");
+    expect(projectForId(projects, "gone")).toBeUndefined();
+    expect(projectForId(projects, undefined)).toBeUndefined();
+  });
+
+  it("recognise account keys", () => {
+    expect(isAccountKey(KEY)).toBe(true);
+    expect(isAccountKey(KEY.toUpperCase())).toBe(false);
+    expect(isAccountKey(KEY.slice(1))).toBe(false);
   });
 });

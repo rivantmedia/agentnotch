@@ -35,7 +35,12 @@ export type AppApiDeps = {
     viewer: AppViewer,
     request: SyncRequest,
   ) => Promise<{ sessions: number; usage: number }>;
+  /** Per user, keyed by their id. */
   limiter: RateLimiter;
+  /** Per client IP address, keyed by `clientIpKey`. */
+  ipLimiter: RateLimiter;
+  /** The key of the caller's IP address (a hash, never the address), or null when unknown. */
+  clientIpKey: (headers: Headers) => string | null;
   siteUrl: string;
   now?: () => Date;
   /** Where unexpected errors go (they reach the client only as INTERNAL). */
@@ -80,14 +85,17 @@ export async function handleSync(
   return guard("sync", deps, async () => {
     const viewer = await requireViewer(request, deps);
 
-    // Before reading the body, so a runaway client costs as little as possible.
+    // Before reading the body, so a runaway client costs as little as possible. The user's own
+    // limit first: someone over it doesn't use up what their network shares with others.
     const limit = await deps.limiter.take(viewer.id);
-    if (!limit.ok) {
-      throw new AppApiError(
-        "RATE_LIMITED",
-        `Too many syncs. Try again in ${limit.retryAfterSeconds} s.`,
-        { "Retry-After": String(limit.retryAfterSeconds) },
-      );
+    if (!limit.ok) throw tooManySyncs(limit.retryAfterSeconds, "");
+    // Without a known address, only the user's limit applies.
+    const ipKey = deps.clientIpKey(request.headers);
+    if (ipKey !== null) {
+      const ipLimit = await deps.ipLimiter.take(ipKey);
+      if (!ipLimit.ok) {
+        throw tooManySyncs(ipLimit.retryAfterSeconds, " from this network");
+      }
     }
 
     const raw = await readJsonBody(request, LIMITS.bodyBytes);
@@ -105,6 +113,14 @@ export async function handleSync(
     };
     return Response.json(body, { headers: NO_STORE });
   });
+}
+
+function tooManySyncs(retryAfterSeconds: number, from: string): AppApiError {
+  return new AppApiError(
+    "RATE_LIMITED",
+    `Too many syncs${from}. Try again in ${retryAfterSeconds} s.`,
+    { "Retry-After": String(retryAfterSeconds) },
+  );
 }
 
 function now(deps: AppApiDeps): Date {

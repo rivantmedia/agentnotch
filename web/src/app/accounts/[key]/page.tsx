@@ -18,6 +18,7 @@ import { Badge, PeopleIcon, Stat } from "../../_components/ui";
 import { AccountActivity } from "./account-activity";
 import {
   filterFromParams,
+  isAccountKey,
   sessionsInput,
   usageFrom,
   usageInput,
@@ -25,8 +26,6 @@ import {
 import { UsageSection } from "./usage-section";
 
 export const metadata: Metadata = { title: "Account" };
-
-const ACCOUNT_KEY = /^[0-9a-f]{64}$/;
 
 export default async function AccountPage({
   params,
@@ -38,8 +37,11 @@ export default async function AccountPage({
     member?: string | string[];
   }>;
 }) {
+  // layout.tsx already answered 404 for a key the viewer can't see, before anything streamed.
+  // This render sits below loading.tsx, so a notFound() here comes after a 200; it only covers
+  // access lost in between.
   const { key } = await params;
-  if (!ACCOUNT_KEY.test(key)) notFound();
+  if (!isAccountKey(key)) notFound();
   await requireViewer(`/accounts/${key}`);
 
   let account: Awaited<ReturnType<typeof api.accounts.get>>;

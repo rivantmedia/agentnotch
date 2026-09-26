@@ -10,7 +10,8 @@ import {
   handleSync,
   type AppApiDeps,
 } from "~/server/app-api/handlers";
-import { SYNC_RATE } from "~/server/app-api/rate-limit";
+import { SYNC_IP_RATE, SYNC_RATE } from "~/server/app-api/rate-limit";
+import { clientIpKey } from "~/server/client-ip";
 import { errorResponseSchema, LIMITS } from "~/server/app-api/schema";
 import { TokenCheckUnavailable } from "~/server/auth/token-errors";
 
@@ -27,6 +28,8 @@ function deps(overrides: Partial<AppApiDeps> = {}): AppApiDeps {
       headers.get("authorization") === "Bearer good" ? VIEWER : null,
     applySync: vi.fn(async () => ({ sessions: 2, usage: 2 })),
     limiter: memoryRateLimiter(SYNC_RATE),
+    ipLimiter: memoryRateLimiter(SYNC_IP_RATE),
+    clientIpKey: (headers) => clientIpKey(headers, undefined),
     siteUrl: "https://agentnotch.example.com",
     // The fixture's dates are 2026-09-25; the server's clock is pinned just after them.
     now: () => SERVER_NOW,
@@ -190,6 +193,74 @@ describe("POST /api/app/v1/sync", () => {
     now += 10_000; // one token back
     expect((await handleSync(syncRequest(body), d)).status).toBe(200);
     expect((await handleSync(syncRequest(body), d)).status).toBe(429);
+  });
+
+  describe("per IP address", () => {
+    /** Each bearer token `user-<n>` is its own person, so only the address is shared. */
+    function manyUsers(now: () => number) {
+      return deps({
+        resolveViewer: async (headers) => {
+          const match = /^Bearer (user-\d+)$/.exec(
+            headers.get("authorization") ?? "",
+          );
+          return match ? { ...VIEWER, id: match[1]! } : null;
+        },
+        ipLimiter: memoryRateLimiter({ ...SYNC_IP_RATE, now }),
+      });
+    }
+    const body = JSON.stringify(syncFixture());
+    const from = (user: number, ip: string | null) =>
+      syncRequest(body, {
+        authorization: `Bearer user-${user}`,
+        // What a client wrote comes first; the proxy appends the address it saw.
+        ...(ip === null ? {} : { "x-forwarded-for": `6.6.6.6, ${ip}` }),
+      });
+
+    it("allows 60 syncs a minute from one address, whoever sends them", async () => {
+      let now = 0;
+      const d = manyUsers(() => now);
+      for (let user = 0; user < 60; user++) {
+        expect((await handleSync(from(user, "203.0.113.7"), d)).status).toBe(
+          200,
+        );
+      }
+      // Someone new, well inside their own limit: the address has used its minute.
+      const limited = await handleSync(from(60, "203.0.113.7"), d);
+      const error = await expectError(limited, 429, "RATE_LIMITED");
+      expect(error.message).toContain("from this network");
+      expect(limited.headers.get("retry-after")).toBe("1");
+      expect(d.applySync).toHaveBeenCalledTimes(60);
+
+      // Other addresses, and requests without one, aren't held back.
+      expect((await handleSync(from(61, "198.51.100.1"), d)).status).toBe(200);
+      expect((await handleSync(from(62, null), d)).status).toBe(200);
+
+      now += 1_000; // one a second comes back
+      expect((await handleSync(from(63, "203.0.113.7"), d)).status).toBe(200);
+      expect((await handleSync(from(64, "203.0.113.7"), d)).status).toBe(429);
+    });
+
+    it("applies only the per-user limit when there is no address", async () => {
+      const d = manyUsers(() => 0);
+      for (let user = 0; user < 100; user++) {
+        expect((await handleSync(from(user, null), d)).status).toBe(200);
+      }
+    });
+
+    it("doesn't count a sync the user's own limit refused", async () => {
+      const ipLimiter = memoryRateLimiter({ ...SYNC_IP_RATE, now: () => 0 });
+      const take = vi.spyOn(ipLimiter, "take");
+      const d = deps({ ipLimiter });
+      const request = () =>
+        syncRequest(body, { "x-forwarded-for": "203.0.113.7" });
+      for (let i = 0; i < 12; i++) {
+        expect((await handleSync(request(), d)).status).toBe(200);
+      }
+      expect((await handleSync(request(), d)).status).toBe(429);
+      expect(take).toHaveBeenCalledTimes(12);
+      // Keyed by a hash of the address, never the address.
+      expect(take.mock.calls[0]![0]).toMatch(/^[0-9a-f]{64}$/);
+    });
   });
 
   it("answers 503, never 401, when the sign-in can't be checked right now", async () => {

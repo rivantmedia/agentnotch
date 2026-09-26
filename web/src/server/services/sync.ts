@@ -98,7 +98,7 @@ export async function applySync(
     async (tx) => {
       // One sync per user at a time: the quotas are counted and applied atomically, and two
       // batches never lock the same rows in opposite orders.
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`sync:${userId}`}, 0))`;
+      await lockUserData(tx, userId);
       await enforceAccountQuota(tx, userId, accounts, quotas);
       const sessions = await sessionsWithinQuota(
         tx,
@@ -224,6 +224,14 @@ export async function applySync(
             "summaryAt" = COALESCE(EXCLUDED."summaryAt", cur."summaryAt"),
             "deviceId" = EXCLUDED."deviceId",
             "updatedAt" = EXCLUDED."updatedAt"`;
+
+        // A session whose project key changed (a Mac with a new install secret) moved to another
+        // project row above; the row it left, now without sessions, goes. Only this user's rows:
+        // everyone's sessions point at their own projects.
+        await tx.$executeRaw`
+          DELETE FROM "Project" p
+          WHERE p."userId" = ${userId}
+            AND NOT EXISTS (SELECT 1 FROM "Session" s WHERE s."projectId" = p."id")`;
       }
 
       if (usage.newWindows.length > 0) {
@@ -270,6 +278,17 @@ export async function applySync(
       usageRowsOf(reading).some((row) => kept.readings.has(usageRowKey(row))),
     ).length,
   };
+}
+
+/**
+ * Holds the lock that serialises everything writing a user's synced rows (a sync, or removing
+ * their data from /settings) until the transaction ends.
+ */
+export async function lockUserData(
+  tx: Prisma.TransactionClient,
+  userId: string,
+): Promise<void> {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`sync:${userId}`}, 0))`;
 }
 
 /** Refuses a batch that would take the user past the account cap (nothing is stored). */

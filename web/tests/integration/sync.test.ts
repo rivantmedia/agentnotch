@@ -915,4 +915,62 @@ describe("applySync", () => {
       usage: 3,
     });
   });
+
+  it("deletes a project row once a sync moves its last session to another", async () => {
+    await createUser("bob", "Bob");
+    await applySync(db, "ann", request(), NOW);
+    await applySync(
+      db,
+      "bob",
+      request((r) => (r.device.id = "11111111-2222-4333-8444-555555555555")),
+      NOW,
+    );
+    // A row of Bob's that no session uses: not Ann's sync's to clean up.
+    const bobsUnused = await db.project.create({
+      data: {
+        userId: "bob",
+        accountKey: K1,
+        key: "9".repeat(64),
+        name: "unused",
+      },
+    });
+    const before = await session(S1);
+
+    // A sync that moves nothing deletes nothing.
+    await applySync(db, "ann", request(), NOW);
+    expect(await db.project.count({ where: { userId: "ann" } })).toBe(2);
+
+    // The same session under a new key: the Mac's install secret changed.
+    await applySync(
+      db,
+      "ann",
+      request((r) => (r.sessions[0]!.project.key = "e".repeat(64))),
+      NOW,
+    );
+    const after = await session(S1);
+    expect(after.projectId).not.toBe(before.projectId);
+    expect(after.project).toMatchObject({
+      key: "e".repeat(64),
+      name: "agentnotch",
+    });
+    expect(
+      await db.project.findUnique({ where: { id: before.projectId } }),
+    ).toBeNull();
+    // Ann's other project stays, and nothing of Bob's moves.
+    expect(
+      (
+        await db.project.findMany({
+          where: { userId: "ann" },
+          select: { name: true },
+        })
+      )
+        .map((p) => p.name)
+        .sort(),
+    ).toEqual(["agentnotch", "billing-service"]);
+    expect(await db.project.count({ where: { userId: "bob" } })).toBe(3);
+    expect(
+      await db.project.findUnique({ where: { id: bobsUnused.id } }),
+    ).not.toBeNull();
+    expect(await db.session.count()).toBe(4);
+  });
 });

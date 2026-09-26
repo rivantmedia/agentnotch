@@ -3,7 +3,7 @@
  */
 import { compareWindowIds, isFixedWindow } from "~/lib/format";
 import { usageSourceSchema } from "~/server/app-api/schema";
-import { type Db } from "~/server/db-types";
+import { Prisma, type Db } from "~/server/db-types";
 import {
   AccessDenied,
   canSeeAccount,
@@ -13,13 +13,13 @@ import {
   visibleOwnerIds,
   type AccessScope,
 } from "~/server/services/access";
+import { ownedRowSql, sqlTime } from "~/server/services/sql";
 import { SYNC_QUOTAS } from "~/server/services/sync";
 import {
   daysBefore,
   decimalToNumber,
   peopleById,
   personOrUnknown,
-  SESSION_SUMS,
   tokenTotals,
   type Person,
   type TokenTotals,
@@ -67,8 +67,10 @@ export type AccountSummary = {
    * MAX_WINDOWS_PER_ACCOUNT, in the order `rankMeterWindows` gives.
    */
   usage: UsageWindowReading[];
+  /** Sessions started in the last 7 days (a session dated in the future counts as now). */
   last7Days: PeriodTotals;
   last30Days: PeriodTotals;
+  /** The latest session activity, never later than the server's clock. */
   lastActivityAt: Date | null;
 };
 
@@ -76,11 +78,6 @@ export type AccountDetail = AccountSummary & { members: Person[] };
 
 /** Readings older than this say nothing about a 5-hour or weekly window any more. */
 const USAGE_LOOKBACK_DAYS = 35;
-/**
- * Readings dated later than this past the server's clock are left out of "latest": a Mac whose
- * clock runs ahead must not pin everyone's meters (sync accepts up to a day ahead, for skew).
- */
-const USAGE_FUTURE_SKEW_MS = 5 * 60 * 1000;
 /** Meters shown per account at most (a reading carries at most 20 windows). */
 export const MAX_WINDOWS_PER_ACCOUNT = 20;
 
@@ -144,8 +141,6 @@ async function summarize(
 ): Promise<AccountSummary[]> {
   const visible = ownedRowWhere(scope);
   const inKeys = { accountKey: { in: keys } };
-  const since7 = daysBefore(now, 7);
-  const since30 = daysBefore(now, 30);
 
   // Whose reports may describe these accounts, and whose windows rank first: the viewer's, and
   // the creators' of the pools the viewer is in on them.
@@ -162,56 +157,37 @@ async function summarize(
     keys.reduce((sum, key) => sum + visibleOwnerIds(scope, key).length, 0) *
     SYNC_QUOTAS.windowsPerAccount;
 
-  const [reports, latestPerWindow, totals7, totals30, activity] =
-    await Promise.all([
-      db.userAccount.findMany({
-        where: {
-          accountKey: { in: keys },
-          userId: { in: [...new Set(reporters)] },
-        },
-      }),
-      db.usageReading.groupBy({
-        by: ["accountKey", "userId", "windowId"],
-        where: {
-          AND: [
-            visible,
-            inKeys,
-            {
-              observedAt: {
-                gte: daysBefore(now, USAGE_LOOKBACK_DAYS),
-                lte: new Date(now.getTime() + USAGE_FUTURE_SKEW_MS),
-              },
+  const [reports, latestPerWindow, activity] = await Promise.all([
+    db.userAccount.findMany({
+      where: {
+        accountKey: { in: keys },
+        userId: { in: [...new Set(reporters)] },
+      },
+    }),
+    db.usageReading.groupBy({
+      by: ["accountKey", "userId", "windowId"],
+      where: {
+        AND: [
+          visible,
+          inKeys,
+          {
+            // Nothing dated after the server's clock: sync accepts dates up to a day ahead (for
+            // clock skew), and a Mac whose clock runs ahead must not pin everyone's meters.
+            observedAt: {
+              gte: daysBefore(now, USAGE_LOOKBACK_DAYS),
+              lte: now,
             },
-          ],
-        },
-        _max: { observedAt: true },
-        // Were the limit ever reached, the ids last in the alphabet would be the ones left out
-        // (the fixed windows sort early).
-        orderBy: [
-          { windowId: "asc" },
-          { accountKey: "asc" },
-          { userId: "asc" },
+          },
         ],
-        take: groupLimit,
-      }),
-      db.session.groupBy({
-        by: ["accountKey"],
-        where: { AND: [visible, inKeys, { startedAt: { gte: since7 } }] },
-        _count: { _all: true },
-        _sum: SESSION_SUMS,
-      }),
-      db.session.groupBy({
-        by: ["accountKey"],
-        where: { AND: [visible, inKeys, { startedAt: { gte: since30 } }] },
-        _count: { _all: true },
-        _sum: SESSION_SUMS,
-      }),
-      db.session.groupBy({
-        by: ["accountKey"],
-        where: { AND: [visible, inKeys] },
-        _max: { lastActivityAt: true },
-      }),
-    ]);
+      },
+      _max: { observedAt: true },
+      // Were the limit ever reached, the ids last in the alphabet would be the ones left out
+      // (the fixed windows sort early).
+      orderBy: [{ windowId: "asc" }, { accountKey: "asc" }, { userId: "asc" }],
+      take: groupLimit,
+    }),
+    sessionActivity(db, scope, keys, now),
+  ]);
 
   // Per account: which windows get a meter (rankMeterWindows), and for each, whose reading is
   // the newest. Then one lookup of exactly those readings: at most one per source for each.
@@ -281,6 +257,7 @@ async function summarize(
       });
     }
 
+    const sessions = activity.find((a) => a.accountKey === key);
     return {
       key,
       email: report?.email ?? null,
@@ -296,27 +273,105 @@ async function summarize(
         const reading = usage.get(windowId);
         return reading ? [reading] : [];
       }),
-      last7Days: period(totals7.find((t) => t.accountKey === key)),
-      last30Days: period(totals30.find((t) => t.accountKey === key)),
-      lastActivityAt:
-        activity.find((a) => a.accountKey === key)?._max.lastActivityAt ?? null,
+      last7Days: sessions?.last7Days ?? EMPTY_PERIOD,
+      last30Days: sessions?.last30Days ?? EMPTY_PERIOD,
+      lastActivityAt: sessions?.lastActivityAt ?? null,
     };
   });
 }
 
-function period(
-  row:
-    | {
-        _count: { _all: number };
-        _sum: Parameters<typeof tokenTotals>[0] & {
-          costUsd: Parameters<typeof decimalToNumber>[0];
-        };
-      }
-    | undefined,
-): PeriodTotals {
-  return {
-    sessions: row?._count._all ?? 0,
-    tokens: tokenTotals(row?._sum),
-    costUsd: decimalToNumber(row?._sum.costUsd),
-  };
+const EMPTY_PERIOD: PeriodTotals = {
+  sessions: 0,
+  tokens: tokenTotals(null),
+  costUsd: null,
+};
+
+/** The periods an account card totals, by how many days back they reach. */
+const PERIODS = { last7Days: 7, last30Days: 30 } as const;
+type PeriodName = keyof typeof PERIODS;
+
+const TOKEN_COLUMNS = [
+  "inputTokens",
+  "outputTokens",
+  "cacheCreationTokens",
+  "cacheReadTokens",
+] as const;
+type TokenColumn = (typeof TOKEN_COLUMNS)[number];
+
+/** One row per account; each period's columns are prefixed with its name. */
+type ActivityRow = { accountKey: string; lastActivityAt: Date | null } & Record<
+  `${PeriodName}_sessions`,
+  number
+> &
+  Record<`${PeriodName}_${TokenColumn}`, bigint> &
+  Record<`${PeriodName}_costUsd`, Prisma.Decimal | null>;
+
+/**
+ * Per account: the 7- and 30-day totals and the latest activity of the sessions the viewer sees,
+ * in one statement. Every session's times are clamped to the server's clock first, so one dated
+ * in the future counts as now: it can't date an account's activity later than now, and it falls
+ * in the periods exactly as a session started now would.
+ */
+async function sessionActivity(
+  db: Db,
+  scope: AccessScope,
+  keys: string[],
+  now: Date,
+): Promise<
+  Array<
+    { accountKey: string; lastActivityAt: Date | null } & Record<
+      PeriodName,
+      PeriodTotals
+    >
+  >
+> {
+  const at = sqlTime(now);
+  const periodColumns = (Object.keys(PERIODS) as PeriodName[]).map((name) => {
+    const inPeriod = Prisma.sql`t."startedAt" >= ${sqlTime(daysBefore(now, PERIODS[name]))}`;
+    // Column names come from the constants above, never from input.
+    const as = (column: string) => Prisma.raw(`"${name}_${column}"`);
+    return Prisma.join(
+      [
+        Prisma.sql`COUNT(*) FILTER (WHERE ${inPeriod})::int AS ${as("sessions")}`,
+        ...TOKEN_COLUMNS.map(
+          (column) =>
+            Prisma.sql`COALESCE(SUM(t.${Prisma.raw(`"${column}"`)}) FILTER (WHERE ${inPeriod}), 0)::bigint AS ${as(column)}`,
+        ),
+        Prisma.sql`SUM(t."costUsd") FILTER (WHERE ${inPeriod}) AS ${as("costUsd")}`,
+      ],
+      ", ",
+    );
+  });
+  const rows = await db.$queryRaw<ActivityRow[]>`
+    SELECT t."accountKey", ${Prisma.join(periodColumns, ", ")},
+           MAX(t."lastActivityAt") AS "lastActivityAt"
+    FROM (
+      SELECT s."accountKey",
+             LEAST(s."startedAt", ${at}) AS "startedAt",
+             LEAST(s."lastActivityAt", ${at}) AS "lastActivityAt",
+             s."inputTokens", s."outputTokens", s."cacheCreationTokens", s."cacheReadTokens",
+             s."costUsd"
+      FROM "Session" s
+      WHERE s."accountKey" IN (${Prisma.join(keys)})
+        AND ${ownedRowSql(ownedRowWhere(scope), "s")}
+    ) t
+    GROUP BY t."accountKey"`;
+  return rows.map((row) => {
+    const period = (name: PeriodName): PeriodTotals => ({
+      sessions: row[`${name}_sessions`],
+      tokens: tokenTotals({
+        inputTokens: row[`${name}_inputTokens`],
+        outputTokens: row[`${name}_outputTokens`],
+        cacheCreationTokens: row[`${name}_cacheCreationTokens`],
+        cacheReadTokens: row[`${name}_cacheReadTokens`],
+      }),
+      costUsd: decimalToNumber(row[`${name}_costUsd`]),
+    });
+    return {
+      accountKey: row.accountKey,
+      lastActivityAt: row.lastActivityAt,
+      last7Days: period("last7Days"),
+      last30Days: period("last30Days"),
+    };
+  });
 }

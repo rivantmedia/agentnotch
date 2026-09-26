@@ -1,11 +1,13 @@
 import { z } from "zod";
 
+import { env } from "~/env";
 import {
   accountKeyInput,
   idInput,
   storableText,
 } from "~/server/api/routers/inputs";
 import { createTRPCRouter, protectedProcedure } from "~/server/api/trpc";
+import { clientIpKey } from "~/server/client-ip";
 import {
   createPoolCode,
   joinPool,
@@ -40,11 +42,19 @@ export const poolsRouter = createTRPCRouter({
 
   /**
    * Redeems a code (case, dashes and O/0, I/L/1 mix-ups don't matter). Failed attempts are
-   * counted per user; too many in an hour answer TOO_MANY_REQUESTS.
+   * counted per user and per client IP address; too many in an hour answer TOO_MANY_REQUESTS.
    */
   join: protectedProcedure
     .input(z.object({ code: storableText(z.string().min(1).max(32)) }))
-    .mutation(({ ctx, input }) => joinPool(ctx.db, ctx.viewer.id, input.code)),
+    .mutation(({ ctx, input }) =>
+      joinPool(
+        ctx.db,
+        ctx.viewer.id,
+        input.code,
+        new Date(),
+        clientIpKey(ctx.headers, env.RATE_LIMIT_PEPPER),
+      ),
+    ),
 
   /** Leaves a pool; the creator leaving deletes it. */
   leave: protectedProcedure

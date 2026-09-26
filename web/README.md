@@ -27,26 +27,63 @@ can't be turned back into a path; the website never shows project keys to anyone
 format is the contract in [`contract/README.md`](contract/README.md), with fixtures that both
 sides test against.
 
-**Projects are per Mac.** Each install of the app has its own secret, so the website can't tell
-that two Macs worked in the same folder: the same folder used on two Macs is listed as two
-projects, each with its own sessions and totals. A Mac that loses its secret (a new support
-folder) starts new projects too. The account page's projects table says so.
+**Projects are grouped by name.** Each install of the app has its own secret, so the website
+can't tell that two Macs worked in the same folder: each Mac's folder is its own `Project` row,
+and a Mac that loses its secret (a new support folder) starts new rows. Project lists group one
+person's rows on an account by folder name: a group adds up their sessions and tokens, takes the
+latest use and counts the Macs its sessions came from, and the project filter picks the whole
+group (a link may name any of its rows). Two different folders with the same name are grouped
+too. The rows themselves, and the contract, stay per Mac. When a sync moves a session to another
+project row (its Mac's secret changed), the row it left is deleted in the same transaction once
+no session uses it. The account page's projects table says all this.
 
 ## Pages
 
-| Path              | What it shows                                                                                                                                                                  |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `/`               | What sync is, sign-in, and what the app sends                                                                                                                                  |
-| `/login`          | "Continue with Google"; explains `?error=` from a failed sign-in                                                                                                               |
-| `/dashboard`      | One card per visible Claude account, with limits, 7-day totals and a pooled badge. Also the most recent sessions. With nothing synced yet, it shows how to connect the Mac app |
-| `/accounts/<key>` | 30-day usage charts per limit, with a table view. The projects table (per Mac). Sessions filtered by project and member (the filter is kept in `?project=` / `?member=`)       |
-| `/pools`          | Create, copy and revoke share codes (they last 7 days). See members by email and remove them. Join with a code, or leave                                                       |
-| `/settings`       | The signed-in email, the website address for the app, the Macs that synced                                                                                                     |
+| Path              | What it shows                                                                                                                                                                   |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/`               | What sync is, sign-in, and what the app sends                                                                                                                                   |
+| `/login`          | "Continue with Google"; explains `?error=` from a failed sign-in                                                                                                                |
+| `/dashboard`      | One card per visible Claude account, with limits, 7-day totals and a pooled badge. Also the most recent sessions. With nothing synced yet, it shows how to connect the Mac app  |
+| `/accounts/<key>` | 30-day usage charts per limit, with a table view. The projects table (grouped by folder name, Macs counted). Sessions filtered by project and member (`?project=` / `?member=`) |
+| `/pools`          | Create, copy and revoke share codes (they last 7 days). See members by email and remove them. Join with a code, or leave                                                        |
+| `/settings`       | The signed-in email, the website address for the app, the Macs that synced. Removing your summaries, or all your synced data                                                    |
 
 Everything signed-in reads through tRPC, and every read goes through the access rules in
 `src/server/services/access.ts`. Pages prefetch their queries on the server and hand them to
 client components (`useSuspenseQuery`), so the first render already has the data. Times are
-written in the browser, in the viewer's own time zone.
+written in the browser, in the viewer's own time zone. The browser's tRPC client logs calls to
+the console in development only, so refusals a page expects and handles (an account you can't
+see, a code that didn't work) print nothing in production.
+
+An account you can't see (or that doesn't exist) answers HTTP 404, not a 200 carrying the
+not-found page: `src/app/accounts/[key]/layout.tsx` checks access before anything streams, above
+the route's `loading.tsx`, and the page only loads the account after that.
+
+**Dates from the future.** Sync accepts dates up to a day past the server's clock (for Macs whose
+clock runs a little ahead), and they are stored as sent, but no view dates anything later than
+now. A usage meter's "latest reading" ignores readings dated after now. Sessions count as now at
+the latest, clamped in the SQL: in the 7- and 30-day totals, in the order of recent sessions and
+the times shown for them (their summaries' times included), and in an account's last activity
+and a project's last use. The list of sessions pages through one snapshot: the first page's
+"now" travels in its cursor and later pages clamp against it, so "Load more" never skips or
+repeats a session, however much later it is pressed.
+
+**Your data.** On `/settings`, each behind a phrase typed to confirm (the tRPC mutation takes it
+too) and in one transaction that waits for any sync of yours to finish:
+
+- **Remove my summaries** clears the summary text, model and time of every session you synced.
+  Nothing else changes. A Mac sends a summary again only with a session that changes later while
+  its summaries switch is on.
+- **Delete all my synced data** deletes your sessions, projects, usage readings and window ids,
+  account reports, Macs and pool memberships; the pools you created, with everyone's membership
+  of them; and the bare Claude account keys you synced that nobody else's row refers to any
+  more. It touches nobody else's rows. Your sign-in stays, as do the keys other people still
+  use, your rate limits (your sync bucket and failed share-code attempts: a deletion must not
+  reset them, and they empty on their own) and the per-IP limits' rows (which name nobody, and
+  go once they are idle). Unless sync is turned off in the Mac app, its next sync
+  sends data again: the app remembers what it sent, so that is new usage readings and sessions
+  that are new or have changed. Signing in again later starts empty, apart from what a Mac
+  sends after the deletion.
 
 ## Layout
 
@@ -56,7 +93,8 @@ written in the browser, in the viewer's own time zone.
 | `src/app/api/app/v1/{config,me,sync}`    | The Mac app's API (plain route handlers, bearer tokens only)                                       |
 | `src/server/app-api/`                    | Its zod schemas (the contract), error shape, body cap, rate-limit arithmetic, handlers             |
 | `src/server/auth/`                       | Bearer verification (`jose`, JWKS or legacy HS256) and `getViewer`                                 |
-| `src/server/services/`                   | Access rules, sync, accounts, sessions, projects, usage, pools, database rate limits               |
+| `src/server/services/`                   | Access rules, sync, accounts, sessions, projects, usage, pools, your data, database rate limits    |
+| `src/server/client-ip.ts`                | The client's IP address as the per-IP limits key it (hashed, never stored)                         |
 | `src/server/api/`                        | tRPC routers for the website's pages                                                               |
 | `src/lib/`                               | Pure helpers: formatting, chart geometry, redirect checks, site address                            |
 | `src/lib/supabase/`, `src/middleware.ts` | Supabase cookie session: refresh, protected pages                                                  |
@@ -135,6 +173,7 @@ cp .env.example .env    # .env is git-ignored; never commit it
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | The **publishable** key (Project Settings > API Keys). Never the secret key                         |
 | `NEXT_PUBLIC_SITE_URL`                 | The site's public address; the app's "Open dashboard" goes to `<this>/dashboard`                    |
 | `SUPABASE_JWT_SECRET`                  | Optional: only for projects still signing tokens with the legacy HS256 secret                       |
+| `RATE_LIMIT_PEPPER`                    | Optional, recommended: a long random string that keys the hash of IP addresses in the per-IP limits |
 
 `NEXT_PUBLIC_*` values are compiled into the build. Set them before building, and rebuild
 after changing them.
@@ -167,7 +206,8 @@ Notes:
 
 - **Limits.** Kept in Postgres, so they hold across every function instance:
   - sync: a burst of 12 calls (one catch-up pass of the app fits), then one every 10 s, per
-    user (429 with `Retry-After`);
+    user; and 60 a minute per IP address (a burst of 60, then one a second), whoever is signed
+    in (429 with `Retry-After` either way);
   - at most 50 Claude accounts per user: a sync that would add a 51st is refused (403);
   - per user and any 24 hours, at most 5,000 new sessions and 20,000 new usage readings (one
     window's value at one moment is one reading); and per user and account, at most 32 distinct
@@ -178,8 +218,25 @@ Notes:
   - an account card shows at most 20 meters: the 5-hour, weekly and extra-usage ones, then
     per-model ones you or the pool's creator reported, then other members', each by id;
   - share codes: 12 characters, valid for 7 days; after 10 failed codes in an hour a user can't
-    join anything until the hour is up. Removing a member revokes the current code;
+    join anything until the hour is up, and after 30 failed codes from one IP address in an
+    hour nobody signed in from there can. Removing a member revokes the current code;
   - tRPC: at most 10 queries per batch, and mutations are never batched.
+
+  The per-IP limits know a client by the **last** hop of `X-Forwarded-For` (the one the proxy
+  in front of the site appended), else by `X-Real-IP`. Earlier hops are whatever
+  the client sent and are never read, and a header that holds no address falls through to the
+  next rather than switching the limits off. An IPv6 client is counted by its /64, since anyone
+  given IPv6 can send from any address in theirs. Only a hash of the address (or /64) is kept:
+  its SHA-256, or an HMAC keyed with `RATE_LIMIT_PEPPER` when that is set, so the stored keys
+  can't be turned back into addresses by hashing all of them. The address itself is never
+  stored, and a bucket is deleted once it has been idle long enough to be full again (a failed
+  share code's row, after the hour). A request without a usable address gets only the per-user
+  limits.
+
+  This trusts the proxy in front of the site to write those headers. Vercel does: it sets
+  `X-Real-IP` and `X-Forwarded-For` to the address it saw, overwriting whatever a client sent.
+  See the self-hosting note for other proxies.
+
 - **Errors.** In production, an unexpected error reaches the browser as a generic message and
   is logged on the server. A bearer token the site can't check right now (its signing keys
   didn't load) gets a 503, not a 401, so the Mac app retries instead of signing out.
@@ -189,7 +246,11 @@ Notes:
 - **Self-hosting.** `npm run build && npm start` works behind a reverse proxy. Pass the
   `Host` header through, or set `X-Forwarded-Host` and `X-Forwarded-Proto`: sign-in and
   sign-out redirects are built from them. Without them, Next.js would use its own listen
-  address.
+  address. The per-IP limits read the last `X-Forwarded-For` hop, else `X-Real-IP`, so the proxy
+  must append the client's address to `X-Forwarded-For` (nginx: `$proxy_add_x_forwarded_for`;
+  cloud load balancers do this themselves), or overwrite it. Behind more than one proxy (a CDN
+  in front of nginx, say), have the last one append the client's address as the first one
+  reported it (nginx's `real_ip` module does this), or every client counts as the CDN's address.
 
 ## Connect the Mac app
 
@@ -213,6 +274,7 @@ goes to `/dashboard`, and its pooling link to `/dashboard/pools`, which redirect
 ```sh
 npm run typecheck
 npm run lint
+npm run format:check
 npm test                   # unit tests: contract, schemas, bearer auth, access rules, formatting, charts, …
 npm run test:integration   # needs Docker; see below
 SKIP_ENV_VALIDATION=1 npm run build
@@ -222,3 +284,26 @@ SKIP_ENV_VALIDATION=1 npm run build
 on `127.0.0.1:55432`. It applies the migrations and checks the schema has no drift. Then it
 runs `tests/integration` and always stops the container, which deletes it. It touches no
 other container.
+
+**The contract end to end.** From the repository root, `Scripts/cloud-contract-e2e.sh` checks
+that the Mac app and this site agree when each runs its real code. It needs Docker and
+`node_modules`, and makes no network call:
+
+1. A Swift test in `Packages/ClaudeControl` captures sessions and usage through the app's sync
+   service and writes the exact request body it sent.
+2. `tests/integration/contract-e2e.test.ts` posts that body twice through the real
+   `POST /api/app/v1/sync` route (`src/app/api/app/v1/sync/route.ts` and its real dependencies).
+   The bearer token is signed in the test and the key set is served from memory. The test checks
+   every stored row against the body (accounts, projects, sessions with their token totals,
+   usage windows), checks that the second post changes nothing, and writes the route's answer.
+   Every field the app sent must be compared with a stored row or listed, with the reason, in
+   `NOT_STORED` (`tests/support/contract-rows.ts`): the route's schema drops fields it doesn't
+   know without a word, so a field the app adds or renames fails the check instead of being
+   lost. It runs in a container of its own, `agentnotch-web-test-e2e` on `127.0.0.1:55439`,
+   which `scripts/test-integration.mjs` starts and always stops; if that runner is killed before
+   it can, the script removes the container on exit. `scripts/test-container.mjs` accepts only
+   `agentnotch-web-test*` names on ports 55432 to 55439.
+3. A second Swift test reads that answer with the app's own client.
+
+In a plain `npm run test:integration` the contract test is skipped (it runs only when
+`AGENTNOTCH_CONTRACT_OUT` names a request, and only against `127.0.0.1:55439`).

@@ -5,7 +5,8 @@
  * Codes: one pool per (account, creator), with one current code that works for 7 days. When it
  * lapses or is revoked, asking for a code issues a new one for the same pool, so the people in
  * it stay together. Removing a member revokes the current code, so they can't rejoin with it.
- * Failed redemptions are counted per user (PoolJoinFailure) and cap how fast anyone can guess.
+ * Failed redemptions are counted per user (PoolJoinFailure) and per client IP address
+ * (PoolJoinIpFailure, by a hash of the address), and cap how fast anyone can guess.
  */
 import { type Db, type Prisma, type PrismaClient } from "~/server/db-types";
 import {
@@ -27,10 +28,16 @@ import {
   POOL_CODE_TTL_MS,
   type RandomBytes,
 } from "~/server/services/pool-code";
+import { sqlTime } from "~/server/services/sql";
 import { memberLabel } from "~/server/services/users";
 
 /** At most this many failed redemptions per user in JOIN_FAILURE_WINDOW_MS; then no more tries. */
 export const JOIN_FAILURE_LIMIT = 10;
+/**
+ * At most this many from one IP address in JOIN_FAILURE_WINDOW_MS, whoever is signed in: one
+ * person with many accounts behind one address can't multiply their guesses.
+ */
+export const JOIN_IP_FAILURE_LIMIT = 30;
 export const JOIN_FAILURE_WINDOW_MS = 60 * 60 * 1000;
 
 export type PoolMemberView = {
@@ -254,16 +261,43 @@ async function freeCode(
   throw new Error("No free pool code after 5 attempts");
 }
 
+/** At most this many rows of each failure table are deleted per attempt (`pruneJoinFailures`). */
+export const JOIN_FAILURE_PRUNE_BATCH = 100;
+
+/**
+ * The failure tables only ever need the last hour: each attempt deletes up to
+ * JOIN_FAILURE_PRUNE_BATCH older rows of each, oldest first, so one attempt's work stays small
+ * however long nobody tried. Rows another attempt is deleting are skipped, not waited for.
+ */
+export async function pruneJoinFailures(
+  tx: Db,
+  windowStart: Date,
+  limit: number = JOIN_FAILURE_PRUNE_BATCH,
+): Promise<void> {
+  const before = sqlTime(windowStart);
+  await tx.$executeRaw`
+    DELETE FROM "PoolJoinFailure" WHERE "id" IN (
+      SELECT "id" FROM "PoolJoinFailure" WHERE "at" <= ${before}
+      ORDER BY "at" LIMIT ${limit} FOR UPDATE SKIP LOCKED)`;
+  await tx.$executeRaw`
+    DELETE FROM "PoolJoinIpFailure" WHERE "id" IN (
+      SELECT "id" FROM "PoolJoinIpFailure" WHERE "at" <= ${before}
+      ORDER BY "at" LIMIT ${limit} FOR UPDATE SKIP LOCKED)`;
+}
+
 /**
  * Redeems a code. Unknown, expired and revoked codes get the same NOT_FOUND to anyone who isn't
- * a member, and each such failure counts: after JOIN_FAILURE_LIMIT in an hour, every attempt is
- * refused (right codes included, or the refusal itself would tell right from wrong).
+ * a member, and each such failure counts, for the user and for `ipKey` (the client's address,
+ * hashed; null when unknown, and then only the user's count applies): after JOIN_FAILURE_LIMIT
+ * for the user, or JOIN_IP_FAILURE_LIMIT for the address, in an hour, every attempt is refused
+ * (right codes included, or the refusal itself would tell right from wrong).
  */
 export async function joinPool(
   db: PrismaClient,
   viewerId: string,
   typedCode: string,
   now: Date = new Date(),
+  ipKey: string | null = null,
 ): Promise<{ poolId: string; accountKey: string; joined: boolean }> {
   const code = normalizePoolCode(typedCode);
   if (!code) {
@@ -280,24 +314,36 @@ export async function joinPool(
       | { ok: true; poolId: string; accountKey: string; joined: boolean }
       | { ok: false; denied: Denied }
     > => {
-      // One attempt per user at a time, so the failure count is exact.
+      // One attempt per user, and per address, at a time, so the failure counts are exact. The
+      // user's lock is always taken first, so two attempts never wait on each other in a circle.
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`pool-join:${viewerId}`}, 0))`;
+      if (ipKey !== null) {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`pool-join-ip:${ipKey}`}, 0))`;
+      }
       const windowStart = new Date(now.getTime() - JOIN_FAILURE_WINDOW_MS);
-      // The table only ever needs the last hour.
-      await tx.poolJoinFailure.deleteMany({
-        where: { at: { lte: windowStart } },
-      });
+      await pruneJoinFailures(tx, windowStart);
       const failures = await tx.poolJoinFailure.count({
         where: { userId: viewerId, at: { gt: windowStart } },
       });
-      if (failures >= JOIN_FAILURE_LIMIT) {
+      const ipFailures =
+        ipKey === null
+          ? 0
+          : await tx.poolJoinIpFailure.count({
+              where: { ipKey, at: { gt: windowStart } },
+            });
+      if (
+        failures >= JOIN_FAILURE_LIMIT ||
+        ipFailures >= JOIN_IP_FAILURE_LIMIT
+      ) {
         return {
           ok: false,
           denied: {
             ok: false,
             code: "TOO_MANY_REQUESTS",
             message:
-              "Too many codes that didn't work. Wait an hour, then try again.",
+              failures >= JOIN_FAILURE_LIMIT
+                ? "Too many codes that didn't work. Wait an hour, then try again."
+                : "Too many codes that didn't work from this network. Wait an hour, then try again.",
           },
         };
       }
@@ -316,6 +362,9 @@ export async function joinPool(
         await tx.poolJoinFailure.create({
           data: { userId: viewerId, at: now },
         });
+        if (ipKey !== null) {
+          await tx.poolJoinIpFailure.create({ data: { ipKey, at: now } });
+        }
         return { ok: false, denied: decision };
       }
       if (decision.action === "join") {

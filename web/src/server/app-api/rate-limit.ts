@@ -24,6 +24,25 @@ export type TokenBucketOptions = {
  */
 export const SYNC_RATE = { capacity: 12, perMs: 120_000 } as const;
 
+/**
+ * Sync calls per client IP address, whoever is signed in: 60 a minute (a burst of 60, refilled at
+ * one a second), on top of each user's own limit. Many people's Macs behind one office address
+ * fit; one person with many accounts can't multiply their rate.
+ */
+export const SYNC_IP_RATE = { capacity: 60, perMs: 60_000 } as const;
+
+/** Limiter names: a bucket's key is `<name>:<user id or IP key>`. */
+export const SYNC_LIMITER = "sync";
+export const SYNC_IP_LIMITER = "sync-ip";
+
+/** The limiters keyed by user id. */
+export const USER_RATE_LIMITS = [SYNC_LIMITER] as const;
+
+/** Every rate-limit bucket that belongs to one user. */
+export function userRateLimitKeys(userId: string): string[] {
+  return USER_RATE_LIMITS.map((name) => `${name}:${userId}`);
+}
+
 /** The tokens in a bucket that held `tokens` at `updatedAt`, as of `now`. */
 export function refilledTokens(
   bucket: { tokens: number; updatedAt: Date },

@@ -231,8 +231,20 @@ model PoolJoinFailure {
   @@index([userId, at])
 }
 
-/// A token bucket for a per-user rate limit (key e.g. `sync:<userId>`), shared by every server
-/// instance. `tokens` is what was left at `updatedAt`; it refills continuously from there.
+/// A failed attempt to redeem a share code, by network: the per-IP half of the guess limit.
+/// `ipKey` is a hash of the client's address (src/server/client-ip.ts), never the address, and
+/// the row names no user. Kept for an hour.
+model PoolJoinIpFailure {
+  id    BigInt   @id @default(autoincrement())
+  ipKey String
+  at    DateTime
+
+  @@index([ipKey, at])
+}
+
+/// A token bucket for a rate limit (key e.g. `sync:<userId>`, or `sync-ip:<hash of an IP>`),
+/// shared by every server instance. `tokens` is what was left at `updatedAt`; it refills
+/// continuously from there.
 model RateLimit {
   key       String   @id
   tokens    Float

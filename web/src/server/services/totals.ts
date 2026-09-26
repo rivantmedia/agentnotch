@@ -24,15 +24,6 @@ export type Person = {
   isViewer: boolean;
 };
 
-/** The `_sum` block for session token totals and cost. */
-export const SESSION_SUMS = {
-  inputTokens: true,
-  outputTokens: true,
-  cacheCreationTokens: true,
-  cacheReadTokens: true,
-  costUsd: true,
-} as const;
-
 type TokenColumns = {
   inputTokens: bigint | null;
   outputTokens: bigint | null;

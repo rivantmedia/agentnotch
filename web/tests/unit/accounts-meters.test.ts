@@ -103,7 +103,8 @@ function fakeDb(readings: Reading[]) {
   };
   const db = {
     userAccount: { findMany: async () => [] },
-    session: { groupBy: async () => [] },
+    // The session totals (one raw statement): no sessions.
+    $queryRaw: async () => [],
     usageReading: {
       groupBy: async (args: { take?: number }) => {
         calls.groupBy.push(args);
@@ -193,8 +194,8 @@ describe("listAccounts' meters", () => {
     ],
   );
 
-  // Ann's real windows, and Bob's made-up ones, dated after hers (up to the 5 minutes ahead that
-  // "latest" still takes).
+  // Ann's real windows, and Bob's made-up ones, dated after hers (and no later than now, which
+  // "latest" never looks past).
   const readings = [
     reading(1, "ann", "session", "2026-09-25T11:50:00Z"),
     reading(2, "ann", "weekly_all", "2026-09-25T11:50:00Z"),
@@ -206,7 +207,7 @@ describe("listAccounts' meters", () => {
         100 + i,
         "bob",
         `weekly_aa_fake_${String(i).padStart(2, "0")}`,
-        "2026-09-25T12:06:00Z",
+        "2026-09-25T12:01:00Z",
         100,
       ),
     ),

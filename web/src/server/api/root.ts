@@ -1,4 +1,5 @@
 import { accountsRouter } from "~/server/api/routers/accounts";
+import { myDataRouter } from "~/server/api/routers/my-data";
 import { poolsRouter } from "~/server/api/routers/pools";
 import { projectsRouter } from "~/server/api/routers/projects";
 import { sessionsRouter } from "~/server/api/routers/sessions";
@@ -16,6 +17,7 @@ export const appRouter = createTRPCRouter({
   projects: projectsRouter,
   usage: usageRouter,
   pools: poolsRouter,
+  myData: myDataRouter,
 });
 
 // export type definition of API

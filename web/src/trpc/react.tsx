@@ -14,6 +14,7 @@ import SuperJSON from "superjson";
 
 import { TRPC_MAX_BATCH_SIZE } from "~/server/api/limits";
 import { type AppRouter } from "~/server/api/root";
+import { shouldLogTrpc } from "./logging";
 import { createQueryClient } from "./query-client";
 
 let clientQueryClientSingleton: QueryClient | undefined = undefined;
@@ -50,11 +51,7 @@ export function TRPCReactProvider(props: { children: React.ReactNode }) {
   const [trpcClient] = useState(() =>
     api.createClient({
       links: [
-        loggerLink({
-          enabled: (op) =>
-            process.env.NODE_ENV === "development" ||
-            (op.direction === "down" && op.result instanceof Error),
-        }),
+        loggerLink({ enabled: () => shouldLogTrpc(process.env.NODE_ENV) }),
         // The server batches queries only, and at most TRPC_MAX_BATCH_SIZE at a time
         // (src/server/api/http.ts); mutations go one per request.
         splitLink({

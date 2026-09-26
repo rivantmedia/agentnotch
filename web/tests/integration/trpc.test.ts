@@ -6,8 +6,13 @@ import { TRPCError } from "@trpc/server";
 import superjson from "superjson";
 import { beforeEach, describe, expect, it } from "vitest";
 
+import {
+  DELETE_DATA_CONFIRMATION,
+  REMOVE_SUMMARIES_CONFIRMATION,
+} from "~/lib/data-controls";
 import { createCaller } from "~/server/api/root";
 import { type TRPCContext } from "~/server/api/trpc";
+import { ipKey } from "~/server/client-ip";
 import { applySync } from "~/server/services/sync";
 
 import { keysFixture } from "../support/fixtures";
@@ -16,11 +21,12 @@ import { AFTER_FIXTURE, K1, K2, request, S1, S2 } from "./seed";
 
 function caller(
   viewer: { id: string; email: string; name: string | null } | null,
+  headers: Record<string, string> = {},
 ) {
   const ctx: TRPCContext = {
     db,
     viewer: viewer ? { ...viewer, via: "cookie" } : null,
-    headers: new Headers(),
+    headers: new Headers(headers),
   };
   return createCaller(ctx);
 }
@@ -52,6 +58,7 @@ describe("tRPC routers", () => {
       anon.viewer.me(),
       anon.accounts.list(),
       anon.accounts.get({ accountKey: K1 }),
+      anon.accounts.visible({ accountKey: K1 }),
       anon.sessions.list({}),
       anon.sessions.get({ id: "x" }),
       anon.projects.list({ accountKey: K1 }),
@@ -63,6 +70,8 @@ describe("tRPC routers", () => {
       anon.pools.revoke({ poolId: "x" }),
       anon.pools.leave({ poolId: "x" }),
       anon.pools.removeMember({ poolId: "x", userId: "y" }),
+      anon.myData.removeSummaries({ confirm: REMOVE_SUMMARIES_CONFIRMATION }),
+      anon.myData.deleteAll({ confirm: DELETE_DATA_CONFIRMATION }),
     ];
     for (const call of calls) expect(await trpcCode(call)).toBe("UNAUTHORIZED");
     expect(await anon.viewer.current()).toBeNull();
@@ -167,6 +176,36 @@ describe("tRPC routers", () => {
     }
     const { code } = await caller(ann).pools.create({ accountKey: K1 });
     expect(await trpcCode(api.pools.join({ code }))).toBe("TOO_MANY_REQUESTS");
+  });
+
+  it("say which accounts the viewer may see, for the account page's 404", async () => {
+    expect(await caller(ann).accounts.visible({ accountKey: K1 })).toBe(true);
+    expect(await caller(bob).accounts.visible({ accountKey: K1 })).toBe(false);
+    expect(
+      await caller(ann).accounts.visible({ accountKey: "e".repeat(64) }),
+    ).toBe(false);
+    const { code } = await caller(ann).pools.create({ accountKey: K1 });
+    await caller(bob).pools.join({ code });
+    expect(await caller(bob).accounts.visible({ accountKey: K1 })).toBe(true);
+    expect(await caller(bob).accounts.visible({ accountKey: K2 })).toBe(false);
+  });
+
+  it("count failed codes against the client's address, stored as a hash", async () => {
+    const fromOffice = caller(bob, {
+      "x-forwarded-for": "10.0.0.1, 203.0.113.7",
+    });
+    expect(
+      await trpcCode(fromOffice.pools.join({ code: "ZZZZ-ZZZZ-ZZZZ" })),
+    ).toBe("NOT_FOUND");
+    // No address known: only the per-user count.
+    expect(
+      await trpcCode(caller(bob).pools.join({ code: "ZZZZ-ZZZZ-ZZZZ" })),
+    ).toBe("NOT_FOUND");
+    expect(await db.poolJoinFailure.count({ where: { userId: "bob" } })).toBe(
+      2,
+    );
+    const rows = await db.poolJoinIpFailure.findMany();
+    expect(rows.map((r) => r.ipKey)).toEqual([ipKey("203.0.113.7", undefined)]);
   });
 
   it("refuse NUL in text inputs as bad input", async () => {

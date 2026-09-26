@@ -17,7 +17,8 @@ import {
   handleSync,
   type AppApiDeps,
 } from "~/server/app-api/handlers";
-import { SYNC_RATE } from "~/server/app-api/rate-limit";
+import { SYNC_IP_RATE, SYNC_RATE } from "~/server/app-api/rate-limit";
+import { clientIpKey } from "~/server/client-ip";
 import {
   configResponseSchema,
   errorResponseSchema,
@@ -61,6 +62,8 @@ function deps(overrides: Partial<AppApiDeps> = {}): AppApiDeps {
       usage: request.usage.length,
     }),
     limiter: memoryRateLimiter(SYNC_RATE),
+    ipLimiter: memoryRateLimiter(SYNC_IP_RATE),
+    clientIpKey: (headers) => clientIpKey(headers, undefined),
     siteUrl: SITE_URL,
     now: () => SERVER_NOW,
     ...overrides,

@@ -13,6 +13,9 @@ export const env = createEnv({
     // Only for projects still signing access tokens with the legacy shared secret (HS256).
     // Projects on asymmetric signing keys are verified against their JWKS and leave it unset.
     SUPABASE_JWT_SECRET: z.string().min(32).optional(),
+    // Optional: keys the hash of a client's IP address in the per-IP rate limits, so the stored
+    // hashes can't be turned back into addresses by trying every one.
+    RATE_LIMIT_PEPPER: z.string().min(16).optional(),
     NODE_ENV: z
       .enum(["development", "test", "production"])
       .default("development"),
@@ -37,6 +40,7 @@ export const env = createEnv({
     DATABASE_URL: process.env.DATABASE_URL,
     DIRECT_URL: process.env.DIRECT_URL,
     SUPABASE_JWT_SECRET: process.env.SUPABASE_JWT_SECRET,
+    RATE_LIMIT_PEPPER: process.env.RATE_LIMIT_PEPPER,
     NODE_ENV: process.env.NODE_ENV,
     NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
     NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:
