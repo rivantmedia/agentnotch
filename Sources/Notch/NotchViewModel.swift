@@ -1074,7 +1074,30 @@ final class NotchViewModel: ObservableObject {
 
     func sessionCap(for snapshot: ProviderSnapshot, cellCount: Int) -> Int {
         guard screenSize != .zero else { return NotchLayout.defaultSessionCap }
-        return sessionCap(for: snapshot, budget: cardBudget(cellCount: cellCount))
+        return sessionCap(for: snapshot, budget: perCardBudget(cellCount: cellCount))
+    }
+
+    /// The room a card really has on this screen. `cardBudget` measures the
+    /// screen in the notch's scale, which is the tighter answer at `large`
+    /// but at `small` promises more than the screen holds, because the card
+    /// is drawn at one size whatever the notch is set to (see `panelSize`).
+    /// Upstream's worst-case caps kept its cards short enough not to notice;
+    /// a card sized to its own content fills the budget, so it must also fit
+    /// the panel `panelSize` draws.
+    private func perCardBudget(cellCount: Int) -> CGFloat {
+        let onScreen: CGFloat
+        if edge.isVertical {
+            onScreen = screenSize.height
+                - shapeLength(cellCount: cellCount) * sizeScale
+                - 2 * abs(splitShift(cellCount: cellCount)) * sizeScale
+                - 2 * NotchLayout.cardCorner
+        } else {
+            onScreen = screenSize.height
+                - (contentInset + NotchLayout.bodyDepth(for: edge)) * sizeScale
+                - NotchLayout.tailLength
+                - NotchLayout.tailGap
+        }
+        return min(cardBudget(cellCount: cellCount), onScreen)
     }
 
     /// Walked up like `NotchLayout.sessionsFitting`, and costed the same way
@@ -1102,7 +1125,7 @@ final class NotchViewModel: ObservableObject {
         guard screenSize != .zero else {
             return contentCardHeight { _ in NotchLayout.defaultSessionCap }
         }
-        let budget = cardBudget(cellCount: cellCount)
+        let budget = perCardBudget(cellCount: cellCount)
         return contentCardHeight { self.sessionCap(for: $0, budget: budget) }
     }
     // Fork: GUX-1 end.
