@@ -532,7 +532,7 @@ nonisolated enum CloudSyncPass {
         for candidate in found {
             guard budget > 0 else { break }
             let root = candidate.root
-            guard let account = accounts[root.accountKey] else { continue }
+            guard accounts[root.accountKey] != nil else { continue }
             // Only transcripts never read count: one looked at before
             // (and left out) is a stat to check again.
             if stores.scanner.cachedSummary(of: candidate.sessionId) == nil { budget -= 1 }

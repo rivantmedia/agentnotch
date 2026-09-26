@@ -4,7 +4,9 @@ import Testing
 
 /// S8: the bare-`python3` command runs a real interpreter found on PATH, and
 /// exits 0 (running nothing) when that is only xcode-select's shim.
-struct Fix_PythonShimTests {
+///
+/// Not main-actor bound: it blocks on child processes (see StatusLineScriptTests).
+nonisolated struct Fix_PythonShimTests {
     private func run(_ command: String, path: String) throws -> (status: Int32, output: String) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")

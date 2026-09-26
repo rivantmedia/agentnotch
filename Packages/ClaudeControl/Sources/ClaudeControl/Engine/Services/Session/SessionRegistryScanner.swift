@@ -164,6 +164,9 @@ nonisolated final class SessionRegistryScanner: @unchecked Sendable {
     /// The config folders each physical sessions folder's entries were last
     /// attributed to (so a folder whose last session ended gets its `[]`).
     private var attributedByFolder: [String: Set<String>] = [:]
+    /// How many times each physical sessions folder was read (for tests: one
+    /// read per pass, however many config folders lead there).
+    private var readsByFolder: [String: Int] = [:]
     /// Which config folder a process runs with (injectable for tests).
     private let configDirOfProcess: @Sendable (Int32) -> ProcessConfigDir.Value
     /// `configDirOfProcess` is the shared kernel cache (not a test's stand-in).
@@ -209,6 +212,12 @@ nonisolated final class SessionRegistryScanner: @unchecked Sendable {
     /// Config dirs being scanned (normalized). Always includes ~/.claude.
     var configDirs: Set<String> {
         queue.sync { dirs }
+    }
+
+    /// `body` run on the scanner's queue with each sessions folder's read
+    /// count, so what a test compares it with was recorded by the same passes.
+    func withFolderReads<T>(_ body: ([String: Int]) -> T) -> T {
+        queue.sync { body(readsByFolder) }
     }
 
     /// Adds an account's config dir (e.g. from an AccountSighting); scans it right away.
@@ -323,6 +332,7 @@ nonisolated final class SessionRegistryScanner: @unchecked Sendable {
     private func scanFolder(_ folder: String, aliases: Set<String>) -> Set<Int32> {
         let sorted = aliases.sorted()
         guard let first = sorted.first else { return [] }
+        readsByFolder[folder, default: 0] += 1
         let entries = Self.liveEntries(configDir: first)
         scannedDirs.formUnion(aliases)
         let attributed = Self.attribute(entries, aliases: aliases,

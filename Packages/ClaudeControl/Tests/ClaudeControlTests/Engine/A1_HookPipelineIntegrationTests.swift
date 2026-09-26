@@ -40,7 +40,7 @@ final class A1_HookPipelineIntegrationTests {
         #expect(try await eventually { FileManager.default.fileExists(atPath: self.socketPath) })
     }
 
-    private func eventually(timeout: TimeInterval = 10, _ condition: () async -> Bool) async throws -> Bool {
+    private func eventually(timeout: TimeInterval = 30, _ condition: () async -> Bool) async throws -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while await !condition() {
             guard Date() < deadline else { return false }

@@ -317,7 +317,8 @@ struct CloudSyncTests {
         harness.sync.observeLive([harness.observation(id)], liveIDs: [id])
         await harness.sync.syncNow()
         func sent(_ index: Int) throws -> [String: Any] {
-            try #require((harness.body(harness.syncRequests[index])["sessions"] as? [[String: Any]])?.first)
+            let sessions = harness.body(harness.syncRequests[index])["sessions"] as? [[String: Any]]
+            return try #require(sessions?.first)
         }
         #expect(try sent(0)["messageCount"] as? Int == 2)
 

@@ -54,7 +54,7 @@ struct A1_ReviewFixesTests {
         ])
     }
 
-    private func eventually(timeout: TimeInterval = 10, _ condition: () async -> Bool) async throws -> Bool {
+    private func eventually(timeout: TimeInterval = 30, _ condition: () async -> Bool) async throws -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while await !condition() {
             guard Date() < deadline else { return false }

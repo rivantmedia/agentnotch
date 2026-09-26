@@ -7,7 +7,7 @@ import Testing
 /// Temporary folders only.
 @MainActor
 struct DesktopHostedSessionsTests {
-    static let hostId = "local_0123abcd-89ef-4a5b-8c6d-001122334455"
+    nonisolated static let hostId = "local_0123abcd-89ef-4a5b-8c6d-001122334455"
     static let accountA = CloudFixture.accountUuid
     static let organizationA = "5e4d3c2b-1a09-4f8e-9d7c-6b5a49382716"
     static let accountW = CloudFixture.workUuid

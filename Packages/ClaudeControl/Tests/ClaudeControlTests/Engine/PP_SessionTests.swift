@@ -65,7 +65,7 @@ struct PP_ProcessConfigDirTests {
         #expect(ProcessConfigDir.read(pid: -4) == .unreadable)
 
         // Cached per process start: read once.
-        final class Counter: @unchecked Sendable { var reads = 0 }
+        nonisolated final class Counter: @unchecked Sendable { var reads = 0 }
         let counter = Counter()
         let cache = ProcessConfigDirCache(reader: { pid in counter.reads += 1; return ProcessConfigDir.read(pid: pid) })
         #expect(cache.value(pid: child.pid) == .set(dir))
@@ -127,7 +127,7 @@ struct PP_RegistryScanTests {
         }
         let windowParas = fake.path(".claude-windows/801f9dd51396")
         let windowBiios = fake.path(".claude-windows/1bf3e8f92b11")
-        final class Reads: @unchecked Sendable {
+        nonisolated final class Reads: @unchecked Sendable {
             let lock = NSLock()
             var asked: [Int32] = []
             var snapshots: [String: [String]] = [:]
@@ -148,11 +148,17 @@ struct PP_RegistryScanTests {
         #expect(snapshots[windowParas] == ["s-paras"])
         #expect(snapshots[windowBiios] == ["s-biios"])
         #expect(snapshots[fake.path(".claude")] == nil)
-        // Each process was asked once per pass (the first pass, the new
-        // folders' pass, perhaps a timer's), not once per folder (4 a pass).
-        let asked = reads.lock.withLock { reads.asked }
-        #expect(asked.filter { $0 == paras }.count <= 3)
-        #expect(asked.filter { $0 == biios }.count <= 3)
+        // Each process was asked once per read of the shared folder, not once
+        // per config folder leading there (4 a read). How many reads there
+        // were depends on timing (the first pass, the new folders' pass, a
+        // timer's or a rescan's on a slow machine), so count them.
+        let shared = SessionRegistryScanner.sessionsFolder(of: windowParas)
+        let (folderReads, asked) = scanner.withFolderReads { folders in
+            (folders[shared] ?? 0, reads.lock.withLock { reads.asked })
+        }
+        #expect(folderReads >= 1)
+        #expect(asked.filter { $0 == paras }.count == folderReads)
+        #expect(asked.filter { $0 == biios }.count == folderReads)
 
         // Biios's session ends: its window gets `[]`.
         try FileManager.default.removeItem(atPath: fake.path(".claude-shared/sessions/\(biios).json"))

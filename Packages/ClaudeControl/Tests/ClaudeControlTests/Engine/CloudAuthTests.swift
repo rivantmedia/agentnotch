@@ -145,7 +145,7 @@ struct CloudAuthTests {
     @Test func anExpiringTokenIsRefreshedOnceAndSavedFirst() async throws {
         let transport = FakeTransport { request in
             guard request.url?.query == "grant_type=refresh_token" else { return .json(404, [:]) }
-            Thread.sleep(forTimeInterval: 0.05)
+            try await Task.sleep(for: .milliseconds(50))
             return Self.tokenAnswer(access: "access-2", refresh: "refresh-2")
         }
         let store = CloudSessionMemoryStore(Self.session(expiresIn: 30))

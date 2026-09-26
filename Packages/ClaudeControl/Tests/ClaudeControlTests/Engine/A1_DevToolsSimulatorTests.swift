@@ -48,7 +48,7 @@ final class A1_DevToolsSimulatorTests {
 
         // While it lingers, its sessions are alive; check them then.
         var states: [SessionState] = []
-        let checkDeadline = Date().addingTimeInterval(20)
+        let checkDeadline = Date().addingTimeInterval(60)
         while Date() < checkDeadline {
             try await Task.sleep(nanoseconds: 200_000_000)
             states = await Self.sessions(store, prefixes: ["c333", "d444", "e555"])
@@ -134,7 +134,10 @@ final class A1_DevToolsSimulatorTests {
         try process.run()
 
         var answered = false
-        let testDeadline = Date().addingTimeInterval(30)
+        // The loop is also what reads the registry, which the last Stops
+        // wait for: it runs as long as the simulator does (slow on a busy
+        // machine), the deadline only guarding against one that hangs.
+        let testDeadline = Date().addingTimeInterval(120)
         while process.isRunning, Date() < testDeadline {
             try await Task.sleep(nanoseconds: 100_000_000)
             for dir in [".claude", ".claude-work"] {

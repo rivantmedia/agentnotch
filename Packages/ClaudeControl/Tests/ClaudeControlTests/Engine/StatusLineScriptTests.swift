@@ -254,6 +254,49 @@ nonisolated struct StatusLineScriptTests {
         #expect(!FileManager.default.fileExists(atPath: finished.path))
     }
 
+    /// A cancel that lands while Popen is still returning (the command's
+    /// shell already running, its pid not yet known to the handler) stops
+    /// the command too. Under load that window is real; here the SIGTERM is
+    /// sent from inside Popen so the test hits it every time.
+    @Test(.timeLimit(.minutes(1)))
+    func aCancelWhileTheCommandStartsStillStopsIt() throws {
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let started = dir.appendingPathComponent("started")
+        let finished = dir.appendingPathComponent("finished")
+        try setPrevious("touch '\(started.path)'; sleep 3; touch '\(finished.path)'")
+        let driver = """
+        import importlib.util, os, signal, subprocess, sys, time
+        spec = importlib.util.spec_from_file_location("wrapper", sys.argv[1])
+        wrapper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(wrapper)
+        real_popen = subprocess.Popen
+        def popen(*args, **kwargs):
+            process = real_popen(*args, **kwargs)
+            deadline = time.time() + 20
+            while not os.path.exists(sys.argv[2]) and time.time() < deadline:
+                time.sleep(0.01)
+            os.kill(os.getpid(), signal.SIGTERM)
+            return process
+        subprocess.Popen = popen
+        wrapper.start_previous()
+        sys.exit(0)
+        """
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["python3", "-S", "-c", driver, script.path, started.path]
+        process.environment = ["PATH": "/usr/bin:/bin"]
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        process.waitUntilExit()
+
+        #expect(FileManager.default.fileExists(atPath: started.path))
+        #expect(process.terminationStatus == 128 + SIGTERM)
+        Thread.sleep(forTimeInterval: 4)
+        #expect(!FileManager.default.fileExists(atPath: finished.path))
+    }
+
     /// The whole chain: install into a config dir that already has a status
     /// line, then run `statusLine.command` from the written settings.json the
     /// way Claude Code does (through the shell, JSON on stdin).

@@ -4,7 +4,9 @@ import Testing
 
 /// S10: an installed script follows AGENTNOTCH_SOCKET only with AGENTNOTCH_DEV=1 too, so
 /// a leftover `export AGENTNOTCH_SOCKET` never sends a real session elsewhere.
-struct Fix_ScriptSocketOverrideTests {
+///
+/// Not main-actor bound: it blocks on child processes (see StatusLineScriptTests).
+nonisolated struct Fix_ScriptSocketOverrideTests {
     private func socketPath(script: String, environment: [String: String]) throws -> String {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("agentnotch-override-\(UUID().uuidString).py")
         try script.write(to: file, atomically: true, encoding: .utf8)

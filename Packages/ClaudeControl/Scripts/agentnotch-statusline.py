@@ -43,6 +43,9 @@ PREVIOUS_TIMEOUT_SECONDS = 30
 
 # The previous command while it runs, for the signal handlers.
 _previous_process = None
+# A cancel that arrived while the previous command was being started, before
+# its process group was known; start_previous() acts on it once it is.
+_pending_signal = None
 
 
 def as_dict(value):
@@ -138,12 +141,17 @@ def previous_command():
 def stop_previous_and_exit(signum, _frame):
     """Claude Code cancelled this run: stop the previous command's process
     group too (it has its own), then exit as the signal would have."""
+    global _pending_signal
     process = _previous_process
-    if process is not None:
-        try:
-            os.killpg(process.pid, signum)
-        except Exception:
-            pass
+    if process is None:
+        # Popen hasn't returned: the command may be running already (its
+        # shell can start before Popen does), so wait for its pid.
+        _pending_signal = signum
+        return
+    try:
+        os.killpg(process.pid, signum)
+    except Exception:
+        pass
     os._exit(128 + signum)
 
 
@@ -170,6 +178,8 @@ def start_previous():
         stdout=subprocess.PIPE,
         start_new_session=True,
     )
+    if _pending_signal is not None:
+        stop_previous_and_exit(_pending_signal, None)
     return _previous_process
 
 

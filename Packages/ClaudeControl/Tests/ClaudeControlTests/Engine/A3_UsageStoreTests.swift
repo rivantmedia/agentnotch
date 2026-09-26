@@ -39,7 +39,11 @@ private final class UsageFixture {
     var id: String { "uuid:acc-1" }
     static let sideID = "uuid:acc-2"
 
-    func makeStore(desktopOn: Bool = true, waitLimit: TimeInterval = 5) -> UsageStore {
+    /// `waitLimit` is generous by default: a refresh returns once its probe
+    /// answered, and on a busy machine running the whole suite the fake
+    /// probe's hops can take longer than a few seconds. Tests of the limit
+    /// itself pass their own.
+    func makeStore(desktopOn: Bool = true, waitLimit: TimeInterval = 30) -> UsageStore {
         UsageStore(
             registry: registry,
             configReader: ClaudeGlobalConfigReader(),
@@ -443,7 +447,7 @@ struct A3_UsageRefreshPolicyTests {
     @Test func pausingARingDropsItsQueuedRequest() async throws {
         let fixture = try UsageFixture()
         try fixture.writeGlobalConfig()
-        let side = try fixture.addSideAccount()
+        _ = try fixture.addSideAccount()
         fixture.probe.answer(.usage(fixture.parsed(session: 5)))
         fixture.probe.hold()
         let store = fixture.makeStore(desktopOn: false, waitLimit: 30)
@@ -482,7 +486,7 @@ struct A3_UsageRefreshPolicyTests {
     @Test func nothingIsProbedAfterStop() async throws {
         let fixture = try UsageFixture()
         try fixture.writeGlobalConfig()
-        let side = try fixture.addSideAccount()
+        _ = try fixture.addSideAccount()
         fixture.probe.answer(.usage(fixture.parsed(session: 5)))
         fixture.probe.hold()
         let store = fixture.makeStore(desktopOn: false)

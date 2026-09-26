@@ -5,6 +5,10 @@ import Testing
 /// Runs the real hook script against a private HookSocketServer: the
 /// PermissionRequest round-trip (read-until-EOF, response shape, merge onto
 /// the original tool_input) and dead-hook detection.
+///
+/// Stays on the main actor, unlike the other suites that wait on child
+/// processes: made nonisolated, a `waitUntilExit()` that follows an
+/// `await` once never returned although its hook had exited.
 @Suite(.serialized)
 struct HookSocketIntegrationTests {
     /// Packages/ClaudeControl/Scripts/agentnotch-hook.py.

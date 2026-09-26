@@ -5,7 +5,9 @@ import Testing
 
 // MARK: - AppleScript generation
 
-struct TerminalScriptTests {
+/// Not main-actor bound: `compiles` waits on osacompile, and must not hold
+/// up other tests' main-actor work meanwhile.
+nonisolated struct TerminalScriptTests {
     @Test func devicePathNormalizesAndRejectsJunk() {
         #expect(TerminalScript.devicePath(forTTY: "ttys003") == "/dev/ttys003")
         #expect(TerminalScript.devicePath(forTTY: "/dev/ttys012") == "/dev/ttys012")
