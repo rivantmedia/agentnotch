@@ -20,7 +20,11 @@
 //  website doesn't have yet; those it has stay there. A pass belongs to the
 //  sign-in and website it started with. Only visible, remembered,
 //  signed-in accounts are ever mentioned, and a session the engine can't
-//  attribute for certain is never guessed onto one.
+//  attribute for certain is never guessed onto one: while it can't, its new
+//  responses count for no account (`SessionLedger`). A session Claude
+//  Desktop hosts is attributed by the hub from Desktop's own record of it
+//  (`DesktopHostedSessions`); one found only on disk can't be, and isn't
+//  backfilled.
 //
 //  Schedule: every 5 minutes while on, 30 seconds after a session ends or a
 //  summary is written, and on demand; at most five requests a pass, the rest
@@ -95,32 +99,6 @@ protocol CloudSyncEnvironment: AnyObject {
     func summaryFolderStillRuns(_ folder: CloudSummaryFolder, identityId: String) async -> Bool
     /// Claude Code is being launched for something else (a usage check).
     var isLaunchingClaude: Bool { get }
-}
-
-// MARK: - Claude Desktop's accounts
-
-/// Which accounts Claude Desktop has hosted Claude Code sessions for: the
-/// folder names under `~/Library/Application Support/Claude/claude-code-sessions`
-/// (a listing only; no file there is opened). A session Claude Desktop
-/// hosted runs in `~/.claude` whoever Desktop is signed in as, so it is
-/// attributed only when Desktop has exactly one account, and it is the one
-/// the hub names.
-nonisolated enum CloudDesktopAccounts {
-    static func folder(home: String) -> String {
-        (home as NSString).appendingPathComponent("Library/Application Support/Claude/claude-code-sessions")
-    }
-
-    /// The account UUIDs (lowercased); nil when the folder isn't there.
-    static func accountUuids(home: String, fileManager: FileManager = .default) -> Set<String>? {
-        guard let names = try? fileManager.contentsOfDirectory(atPath: folder(home: home)) else { return nil }
-        return Set(names.filter { CloudKeys.isUUID($0) }.map { $0.lowercased() })
-    }
-
-    /// Whether a Desktop-hosted session can be the account's. Pure.
-    static func confirms(accountUuid: String, listing: Set<String>?) -> Bool {
-        guard let listing, listing.count == 1 else { return false }
-        return listing.first == accountUuid.lowercased()
-    }
 }
 
 // MARK: - What was sent
@@ -326,7 +304,6 @@ nonisolated enum CloudSyncPass {
         var accounts: [CloudAccountInfo]
         /// Nil: no backfill this pass.
         var backfillFolders: [CloudBackfill.Folder]?
-        var desktopAccounts: Set<String>?
         var includeSummaries: Bool
         var device: CloudSyncRequest.Device
         var now: Date
@@ -369,8 +346,7 @@ nonisolated enum CloudSyncPass {
         if let folders = input.backfillFolders {
             // Transcripts Claude Code deleted since (their totals were sent).
             stores.scanner.pruneMissingFiles()
-            backfilled = backfill(folders: folders, accounts: allowed, desktopAccounts: input.desktopAccounts,
-                                  stores: stores, home: input.home, now: input.now)
+            backfilled = backfill(folders: folders, accounts: allowed, stores: stores, home: input.home, now: input.now)
         }
 
         var changed: [(CloudSyncRequest.Session, CloudSyncMemory.Record)] = []
@@ -477,8 +453,11 @@ nonisolated enum CloudSyncPass {
         // A session more than one account ran: the status line's cost is the
         // whole process's (a resumed session starts from the total it had),
         // which can't be divided between them, so no part carries one. Its
-        // tokens are split exactly, by who ran it when.
-        let isSplit = owners.count > 1
+        // tokens are split exactly, by who ran it when. Split means another
+        // owner (nobody included) has responses in it: a stretch of nobody
+        // with none (a session placed a moment after it started) takes
+        // nothing from it.
+        let isSplit = Self.isSplit(totals, accountKey: entry.accountKey)
         let session = CloudSyncRequest.Session(
             accountKey: entry.accountKey,
             sessionId: entry.sessionId,
@@ -497,6 +476,12 @@ nonisolated enum CloudSyncPass {
             summary: includeSummaries ? stores.summaries.summary(for: entry.key)?.contract : nil
         )
         return (session, TranscriptStamp(bytes: totals.transcriptBytes, modified: totals.transcriptModified))
+    }
+
+    /// Whether anyone but `accountKey` (nobody included) made responses in
+    /// the session, as the transcript was counted by its owners. Pure.
+    static func isSplit(_ totals: SessionTokenSummary, accountKey: String) -> Bool {
+        totals.parts.contains { $0.key != accountKey && $0.value.messageCount > 0 }
     }
 
     /// What is remembered of a sent session: hashes of its payload without
@@ -518,7 +503,7 @@ nonisolated enum CloudSyncPass {
     /// original claims its responses before a copy resumed or forked from
     /// it. Returns how many were added.
     static func backfill(folders: [CloudBackfill.Folder], accounts: [String: CloudAccountInfo],
-                         desktopAccounts: Set<String>?, stores: CloudStores, home: String, now: Date) -> Int {
+                         stores: CloudStores, home: String, now: Date) -> Int {
         struct Found {
             var sessionId: String
             var path: String
@@ -557,10 +542,9 @@ nonisolated enum CloudSyncPass {
                   let first = totals.firstTimestamp, first > root.signedInSince,
                   let last = totals.lastTimestamp else { continue }
             let source = CloudSessionSource.from(entrypoint: totals.entrypoint)
-            // Claude Desktop runs its sessions as whoever it is signed in as.
-            if source == .desktop, !CloudDesktopAccounts.confirms(accountUuid: account.accountUuid, listing: desktopAccounts) {
-                continue
-            }
+            // Claude Desktop runs its sessions as whoever it is signed in as,
+            // not as the folder: only its record of a running one tells whose.
+            if source == .desktop || DesktopHostedSessions.isDesktopHosted(entrypoint: totals.entrypoint) { continue }
             added.append(CloudLedgerEntry(
                 sessionId: candidate.sessionId,
                 identityId: root.identityId,
@@ -672,7 +656,6 @@ final class CloudSync: ObservableObject {
     /// An account whose 5-hour window is at least this used (percent) gets
     /// no summaries until it comes down: they would eat into real work.
     nonisolated static let summaryUsageCeiling: Double = 80
-    nonisolated static let desktopListingLifetime: TimeInterval = 60
 
     // MARK: Dependencies
 
@@ -694,7 +677,6 @@ final class CloudSync: ObservableObject {
         var websiteOverride: String?
         /// This run may launch Claude Code for a summary.
         var summariesAllowed: @Sendable () -> Bool
-        var desktopAccounts: @Sendable () -> Set<String>?
 
         /// The app's: the engine's folder, the real network (refused unless
         /// bootstrapped and live), Claude Code for summaries.
@@ -714,8 +696,7 @@ final class CloudSync: ObservableObject {
                 appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0",
                 deviceName: CloudSync.computerName(),
                 websiteOverride: sealed ? nil : DevFlags.webURLOverride,
-                summariesAllowed: { CloudSync.summariesAllowedByDefault },
-                desktopAccounts: { CloudDesktopAccounts.accountUuids(home: home) }
+                summariesAllowed: { CloudSync.summariesAllowedByDefault }
             )
         }
     }
@@ -775,7 +756,6 @@ final class CloudSync: ObservableObject {
     /// The hub reported running sessions since capture last (re)started:
     /// until it has, `lastLiveIDs` says nothing about what ended.
     private var liveObservedSinceResume = false
-    private var desktopListing: (at: Date, uuids: Set<String>?)?
 
     init(dependencies: @escaping @MainActor () -> Dependencies = { Dependencies.live() }) {
         makeDependencies = dependencies
@@ -1054,32 +1034,31 @@ final class CloudSync: ObservableObject {
     /// Signed in, sync on: sessions are captured and readings recorded.
     private var isCapturing: Bool { canUpload }
 
-    /// The hub's running sessions of known accounts (see
-    /// `ClaudeControlHub.feedCloud`), and every running session's id. Only
-    /// while signed in with sync on; only allowed accounts, each keyed as
-    /// `accounts()` keys it.
-    func observeLive(_ live: [LiveSessionObservation], liveIDs: Set<String>) {
+    /// The hub's running sessions it attributed for certain (see
+    /// `ClaudeControlHub.feedCloud`), those whose account it can't tell now
+    /// (`unsure`), those it hasn't placed yet (`waiting`: neither counted
+    /// nor paused), and every running session's id. Only while signed in
+    /// with sync on; only allowed accounts, each keyed as `accounts()` keys
+    /// it. A session the ledger knows that runs as no allowed account now
+    /// (unsure, or an account the website may not hear of) counts for none.
+    func observeLive(_ live: [LiveSessionObservation], unsure: Set<String> = [], waiting: Set<String> = [],
+                     liveIDs: Set<String>) {
         guard isCapturing, let stores, let environment else { return }
-        lastLiveIDs = liveIDs
+        lastLiveIDs = liveIDs.union(waiting)
         liveObservedSinceResume = true
         let accounts = environment.accounts()
         let byIdentity = Dictionary(accounts.map { ($0.identityId, $0) }, uniquingKeysWith: { first, _ in first })
-        var listing: Set<String>??
         let kept: [LiveSessionObservation] = live.compactMap { observation in
             guard let account = byIdentity[observation.identityId] else { return nil }
             var keyed = observation
             keyed.accountKey = account.accountKey
-            if CloudSessionSource.from(entrypoint: observation.entrypoint) == .desktop {
-                // Claude Desktop's folder is listed only when one of its sessions runs.
-                if listing == nil { listing = .some(currentDesktopListing()) }
-                guard CloudDesktopAccounts.confirms(accountUuid: account.accountUuid, listing: listing ?? nil) else { return nil }
-            }
             return keyed
         }
         let ledgerAccounts = Dictionary(kept.compactMap { observation in
             byIdentity[observation.identityId].map { ($0.accountKey, $0.ledgerAccount) }
         }, uniquingKeysWith: { first, _ in first })
-        let ended = stores.ledger.observe(live: kept, liveIDs: liveIDs, accounts: ledgerAccounts, now: now)
+        let ended = stores.ledger.observe(live: kept, liveIDs: liveIDs, unsure: unsure, waiting: waiting,
+                                          accounts: ledgerAccounts, now: now)
         if !ended.isEmpty { syncSoon() }
     }
 
@@ -1182,7 +1161,6 @@ final class CloudSync: ObservableObject {
         let input = CloudSyncPass.Input(
             accounts: environment.accounts(),
             backfillFolders: backfillFolders,
-            desktopAccounts: currentDesktopListing(),
             includeSummaries: settings.cloudSummariesEnabled,
             device: CloudSyncRequest.Device(id: settings.cloudDeviceId, name: deps.deviceName, appVersion: deps.appVersion),
             now: passStart,
@@ -1279,16 +1257,6 @@ final class CloudSync: ObservableObject {
     private func makeAPI(website: URL) -> CloudAPI {
         CloudAPI(website: website, transport: deps?.transport ?? URLSessionCloudTransport.shared, auth: auth,
                  appVersion: deps?.appVersion ?? "0")
-    }
-
-    private func currentDesktopListing() -> Set<String>? {
-        let now = self.now
-        if let listing = desktopListing, now.timeIntervalSince(listing.at) < Self.desktopListingLifetime {
-            return listing.uuids
-        }
-        let uuids = deps?.desktopAccounts()
-        desktopListing = (now, uuids)
-        return uuids
     }
 
     // MARK: Summaries

@@ -102,6 +102,115 @@ struct SessionSummarizerTests {
         #expect(SessionSummarizer.scrub(text) == text)
     }
 
+    /// Regression (M1): no user's or volume's name survives the scrub: a
+    /// path that ends at a volume loses its name like a home folder does,
+    /// and components with spaces (volume names often have them) stay in
+    /// the path instead of leaking what follows the space.
+    @Test func noUserOrVolumeNameSurvivesTheScrub() {
+        let cases: [(String, String)] = [
+            // Volumes, bare or below.
+            ("Mounted /Volumes/Backup and copied the build.", "Mounted … and copied the build."),
+            ("Moved it to /Volumes/Backup/.", "Moved it to …."),
+            ("Copied /Volumes/Backup/photos/2024/img.jpg.", "Copied img.jpg."),
+            ("Ejected /Volumes/My Passport before lunch", "Ejected … before lunch"),
+            ("Ejected /Volumes/My Passport, then /Volumes/Untitled 2.", "Ejected …, then …."),
+            ("Saved /Volumes/My Passport/Backups/db.sqlite", "Saved db.sqlite"),
+            ("Read /Volumes/Macintosh HD/Users/jane/notes.md today", "Read notes.md today"),
+            ("Opened /Volumes/Macintosh HD/Users/jane", "Opened ~"),
+            ("Checked /System/Volumes/Data/Users/jane/.zshrc", "Checked .zshrc"),
+            ("Checked /System/Volumes/Data/Users/jane.", "Checked ~."),
+            // Users whose folder has a space in it.
+            ("Edited /Users/Jane Doe/Documents/plan.md", "Edited plan.md"),
+            ("Cleaned /Users/Jane Doe and /home/jane doe/tmp/x.log", "Cleaned ~ and x.log"),
+            ("Listed /Users/Jane Doe's files", "Listed ~'s files"),
+            // Deeper components with spaces stay in the path.
+            ("Wrote /Users/jane/My Big Project/src/main.swift twice", "Wrote main.swift twice"),
+            ("Set ~/Library/Application Support/Code/User/settings.json up", "Set settings.json up"),
+            // A clause's end is never crossed; a new path is its own.
+            ("Fixed /Users/jane/a.txt. Then b/c.txt", "Fixed a.txt. Then b/c.txt"),
+            ("Diffed /Users/jane/a.txt /Users/jane/b.txt", "Diffed a.txt b.txt"),
+        ]
+        for (raw, expected) in cases {
+            let text = SessionSummarizer.scrub(raw)
+            #expect(text == expected, "\(raw)")
+            #expect(SessionSummarizer.scrub(text) == text, "\(raw)")
+        }
+        let all = SessionSummarizer.scrub(cases.map(\.0).joined(separator: " "))
+        for name in ["jane", "Jane", "Doe", "doe", "Backup ", "Passport", "Macintosh", "HD", "Untitled", "Data/"] {
+            #expect(!all.contains(name), "\(name) in \(all)")
+        }
+
+        // This Mac's own names are known whole, whatever their case.
+        let known = ["my backup", "Macintosh HD", "jane smith"]
+        #expect(SessionSummarizer.shortenPaths("Filled /Volumes/my backup today.", knownNames: known) == "Filled … today.")
+        #expect(SessionSummarizer.shortenPaths("Filled /Volumes/MY BACKUP.", knownNames: known) == "Filled ….")
+        #expect(SessionSummarizer.shortenPaths("Filled /Volumes/my backup/old/a.zip", knownNames: known) == "Filled a.zip")
+        #expect(SessionSummarizer.shortenPaths("In /Users/jane smith now", knownNames: known) == "In ~ now")
+        // A name not in a path is left as written.
+        #expect(SessionSummarizer.shortenPaths("my backup of x/Volumes/my backup", knownNames: known)
+                == "my backup of x/Volumes/my backup")
+    }
+
+    /// Regression (review, confirmed): the words after a path stay words. A
+    /// path stops at a file's name, and prose with a slash in it
+    /// (client/server, read/write, TCP/IP) is never taken for more of the
+    /// path, while folder names with spaces still are.
+    @Test func theWordsAfterAPathStayWords() {
+        let cases: [(String, String)] = [
+            ("Updated /Users/jane/proj/api.ts to handle client/server sync.", "Updated api.ts to handle client/server sync."),
+            ("Fixed ~/proj/io.c so the read/write path works", "Fixed io.c so the read/write path works"),
+            ("Wrote /tmp/out.log for TCP/IP checks", "Wrote out.log for TCP/IP checks"),
+            ("Edited ~/proj/a.swift and b/c.swift", "Edited a.swift and b/c.swift"),
+            ("Changed /etc/hosts.allow For TCP/IP", "Changed hosts.allow For TCP/IP"),
+            // A folder, then ordinary words.
+            ("Moved ~/proj so the read/write path works", "Moved proj so the read/write path works"),
+            ("Moved ~/proj into src/app/x.swift", "Moved proj into src/app/x.swift"),
+            ("Opened /Users/jane in read/write mode", "Opened ~ in read/write mode"),
+            ("Mounted /Volumes/Backup for the client/server tests", "Mounted … for the client/server tests"),
+            // A name, then a joining word and a relative path.
+            ("Checked /Users/jane and src/lib/a.ts", "Checked ~ and src/lib/a.ts"),
+            ("Searched /home/jane for config/app.json", "Searched ~ for config/app.json"),
+            ("Copied /Volumes/Backup to lib/x.ts", "Copied … to lib/x.ts"),
+            // Folder names with spaces still stay in the path.
+            ("Built ~/Library/Application Support/Code/x.json and b/c", "Built x.json and b/c"),
+            ("Read /Volumes/Macintosh HD/tmp/a.log for TCP/IP", "Read a.log for TCP/IP"),
+            ("Cleaned /home/jane doe/ and /home/jane doe/notes.md", "Cleaned ~ and notes.md"),
+        ]
+        for (raw, expected) in cases {
+            let text = SessionSummarizer.scrub(raw)
+            #expect(text == expected, "\(raw)")
+            #expect(SessionSummarizer.scrub(text) == text, "\(raw)")
+        }
+    }
+
+    /// Regression (review): whitespace is folded before paths are
+    /// shortened, so a user's or volume's name split by a newline, a tab, a
+    /// double or a no-break space doesn't survive.
+    @Test func aNameSplitByAnyWhitespaceDoesNotSurvive() {
+        for space in ["\u{00A0}", "  ", "\n", "\t", " \n ", "\u{2009}"] {
+            let shown = space.unicodeScalars.map { String($0.value, radix: 16) }
+            #expect(SessionSummarizer.scrub("Saved to /Volumes/My\(space)Passport now") == "Saved to … now", "\(shown)")
+            #expect(SessionSummarizer.scrub("Saw /Users/Jane\(space)Doe, then left") == "Saw ~, then left", "\(shown)")
+            #expect(SessionSummarizer.scrub("Kept /Volumes/Macintosh\(space)HD/Users/jane/a.txt") == "Kept a.txt", "\(shown)")
+            #expect(SessionSummarizer.scrub("Cleaned /home/jane\(space)doe/tmp/x.log") == "Cleaned x.log", "\(shown)")
+        }
+    }
+
+    /// The names the scrub knows on this Mac: its volumes and users' home
+    /// folders, from folder listings; none before bootstrap (tests).
+    @Test func theScrubKnowsThisMacsVolumesAndUsers() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("local-names-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        for folder in ["Volumes/My Passport", "Volumes/.hidden", "Users/jane", "Users/Shared", "home/Jane Doe"] {
+            try FileManager.default.createDirectory(at: root.appendingPathComponent(folder), withIntermediateDirectories: true)
+        }
+        #expect(LocalNames.list(volumes: root.appendingPathComponent("Volumes").path,
+                                users: root.appendingPathComponent("Users").path,
+                                home: root.appendingPathComponent("home/Jane Doe").path)
+                == ["Jane Doe", "My Passport", "jane"])
+        #expect(LocalNames.current().isEmpty)
+    }
+
     // MARK: - The answer
 
     @Test func aResultBecomesASummary() {

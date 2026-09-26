@@ -237,6 +237,15 @@ from every Mac that syncs. Nothing leaves this Mac until you sign in and turn sy
     while that account ran it, and with no cost: the status line's cost is the whole Claude
     Code process's total (a resumed session starts from what it had already spent), so it
     can't be divided between the accounts.
+  - Only responses the app can put on an account for certain. While it can't tell which
+    account a running session runs as (a `~/.claude` that Claude Parallel Profiles is
+    switching between accounts, a Claude Desktop session whose record isn't found, below),
+    that session's new responses count for no account: its account's part ends at its last
+    activity the app was sure of (sent, like a resumed session's, with no cost), and nothing
+    it does meanwhile is ever synced under a guess.
+    Once the account is certain again, counting goes on from then (for a new process of the
+    session, from when that process started). A session first seen that way counts only from
+    its first process the app is sure of.
   - Usage-limit readings (5-hour, weekly, per model, extra usage) and where each came from:
     the usage check, the status line, `.claude.json` or Claude Desktop. A reset time the
     website wouldn't take (before 2023, or more than 32 days ahead) is sent empty.
@@ -245,12 +254,17 @@ from every Mac that syncs. Nothing leaves this Mac until you sign in and turn sy
   contents, tool input or output, or your Claude login. Accounts you don't track or have
   forgotten, and folders nobody is signed in to, are left out. The one exception is what a
   summary says, if you turn summaries on (below): it is Claude's own sentence about the
-  session, written from your prompts and its replies. Before it leaves the Mac, absolute paths
-  in it (under `/Users`, `/home`, `/private`, `/Volumes`, `/opt`, `/var`, `/Library`, `/etc`,
-  `/tmp` or `~/`) are cut to their last component (a home folder itself, `/Users/<name>` or
-  `/home/<name>`, becomes `~`, so no user name is left), and text matching common key, token
-  and password formats, and the value of any `NAME=value` or `NAME: value` whose name ends in
-  `KEY`, `TOKEN`, `SECRET`, `PASSWORD` or `PASS`, is replaced by `[redacted]`; it may still
+  session, written from your prompts and its replies. Before it leaves the Mac, its whitespace
+  is folded to single spaces and absolute paths in it (under `/Users`, `/home`, `/private`,
+  `/Volumes`, `/System`, `/opt`, `/var`, `/Library`, `/etc`, `/tmp` or `~/`) are cut to their
+  last component, folder names with spaces included (`/Volumes/Macintosh HD/…`,
+  `~/Library/Application Support/…`); the words after a path stay as written. A path that
+  ends at a home folder (`/Users/<name>`, `/home/<name>`) becomes `~` and one that ends at a
+  volume (`/Volumes/<name>`) becomes `…`, together with the capitalised words that finish the
+  name (`/Volumes/My Passport`) or, for this Mac's own volumes and users, the whole name
+  whatever it is, so no user or volume name is left. Text matching common key, token and
+  password formats, and the value of any `NAME=value` or `NAME: value` whose name ends in
+  `KEY`, `TOKEN`, `SECRET`, `PASSWORD` or `PASS`, is replaced by `[redacted]`. It may still
   name a file or folder by its name or a path within the project.
 - **Session summaries** are a separate switch, **Summarise finished sessions with Claude**,
   off until you turn it on (and only while sync is on). Only sessions that end after you turn
@@ -269,16 +283,27 @@ from every Mac that syncs. Nothing leaves this Mac until you sign in and turn sy
   Turning summaries off (signing out and saving another website do too) deletes the summaries
   on this Mac that haven't been sent yet. **Summaries already sent stay on the website:**
   turning summaries off, signing out or removing the app doesn't take them off it, and the
-  people you share the account with keep seeing them there.
+  people you share the account with keep seeing them there. Remove them, or delete what was
+  synced, on the website's *Settings* page (`<website>/settings`), which the *Cloud* section
+  links to.
 - **Sharing an account.** Pooling happens on the website: **Share accounts…** opens its
   *Pools* page. Create a share code for an account you have synced and give it to someone
   else who uses the same Claude account. Once they redeem it, everyone in the pool sees every
   member's sessions and usage for that account, and nothing else of each other's. The creator
   can revoke the code or remove members; members can leave.
 - **Claude Desktop** here means two things: its plan-limit readings (with *Also read Claude
-  Desktop's cached usage* on) and the Claude Code sessions it hosts, recorded when Claude
-  Desktop is signed in to a single account and it is the session's. It does not mean
-  claude.ai chats, in Claude Desktop or a browser: the app doesn't read those.
+  Desktop's cached usage* on) and the Claude Code sessions it hosts. Claude Desktop runs those
+  as whichever account it is signed in to, not as the folder they run in, so the app places
+  each one by Claude Desktop's own record of it. Claude Code's session registry marks such a
+  session (entrypoint `claude-desktop`, `claude-desktop-3p` or `local-agent`) with Desktop's
+  id for it (`hostSessionId`), and the session is the account under whose folder
+  `~/Library/Application Support/Claude/claude-code-sessions/<account>/<organization>/<id>.json`
+  exists (checked with `lstat`, never through a link; the file is never opened; a sealed run
+  checks nothing). The session then shows on that account's ring and is synced as that
+  account's. When no account you have here has that record (or more than one does), the
+  session is shown where its folder puts it but never synced; a Claude Desktop session found
+  only on disk, not running, is never backfilled. It does not mean claude.ai chats, in Claude
+  Desktop or a browser: the app doesn't read those.
 - **Pointing a run at a development site:** `AGENTNOTCH_WEB_URL=http://localhost:3000`
   overrides the address for that run (a sign-in saved for another website is set aside, not
   deleted). A sealed run shows a signed-in example and sends nothing.
@@ -298,11 +323,13 @@ from every Mac that syncs. Nothing leaves this Mac until you sign in and turn sy
   - for a session in a shared `sessions/` folder, its process's `CLAUDE_CONFIG_DIR` from the
     kernel (same user only; nothing else of the environment is kept), to tell which account
     runs it;
-  - its `sessions/` registry and the transcripts under `projects/`, for titles, tasks,
-    context and the conversation (and, with cloud sync on, token counts);
-  - with cloud sync on, the folder names in Claude Desktop's
-    `~/Library/Application Support/Claude/claude-code-sessions` (a listing; no file there is
-    opened), to tell which account a session Claude Desktop hosts runs as;
+  - its `sessions/` registry (`<pid>.json` only) and the transcripts under `projects/`, for
+    titles, tasks, context and the conversation (and, with cloud sync on, token counts);
+  - while a session Claude Desktop hosts is running, whether Claude Desktop's record of it
+    exists under `~/Library/Application Support/Claude/claude-code-sessions/<account>/<organization>/`
+    (an `lstat`, and a listing of an account's folder when its organization isn't known; a
+    link there is never followed and no file there is opened), to tell which account the
+    session runs as;
   - with **Also read Claude Desktop's cached usage** on (the default), the cached `/usage`
     response Claude Desktop keeps for the same organization.
 - **Runs `claude`** only for these things:
@@ -431,8 +458,12 @@ keeps its hooks and usage check. This app follows that layout:
 - **Checks.**
   - `Scripts/check-seams.sh`: every edit to upstream's files is a listed, tagged seam.
   - `Scripts/verify-token-free.sh`: no Claude path can read a token.
+  - `Scripts/cloud-contract-e2e.sh`: the app's real sync request goes through the website's
+    real sync route into a throwaway Postgres, and the route's answer comes back through the
+    app's client. It needs Docker and `web/node_modules`, and makes no network call (see
+    [`web/README.md`](web/README.md#checks)).
 
-  Both compare against `upstream/main` (`git remote add upstream
+  The first two compare against `upstream/main` (`git remote add upstream
   https://github.com/vinzdg/codenotch`) or `UPSTREAM_REF=<commit>`.
   `Packages/ClaudeControl/Scripts/embed-scripts.sh --check` confirms the embedded hook
   scripts match the `.py` files.

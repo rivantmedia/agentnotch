@@ -105,6 +105,32 @@ struct CloudSettingsTests {
         #expect(CloudSettingsCopy.waiting(sessions: 0, readings: 1) == "1 usage reading to send.")
     }
 
+    // MARK: The website's settings
+
+    /// Regression (M5): the section points to the website's settings page
+    /// for removing summaries or deleting synced data, built from the
+    /// dashboard's address (the page beside it), else the website's.
+    @Test func theSectionPointsToTheWebsitesSettingsForRemovingData() throws {
+        func state(website: String? = nil, dashboard: String? = nil) -> ClaudeCloudState {
+            ClaudeCloudState(websiteURL: website, auth: .signedIn(email: nil), dashboardURL: dashboard.flatMap(URL.init(string:)))
+        }
+        #expect(state(dashboard: "https://a.example/dashboard").settingsURL?.absoluteString == "https://a.example/settings")
+        #expect(state(dashboard: "https://a.example/app/dashboard/").settingsURL?.absoluteString
+                == "https://a.example/app/settings")
+        #expect(state(website: "https://a.example").settingsURL?.absoluteString == "https://a.example/settings")
+        #expect(state(website: "http://localhost:3000", dashboard: "http://localhost:3000/home").settingsURL?.absoluteString
+                == "http://localhost:3000/settings")
+        #expect(state().settingsURL == nil)
+        #expect(state(website: "ftp://a.example").settingsURL == nil)
+        #expect(UIFixtures.cloudSignedIn().settingsURL?.absoluteString == "https://agentnotch.example.com/settings")
+
+        let url = try #require(URL(string: "https://a.example/settings"))
+        let text = CloudSettingsCopy.dataSettings(url: url)
+        #expect(String(text.characters) == "Remove summaries or delete synced data in the website's Settings.")
+        let linked = text.runs.compactMap { run in run.link.map { (String(text[run.range].characters), $0) } }
+        #expect(linked.count == 1 && linked.first?.0 == "Settings" && linked.first?.1 == url)
+    }
+
     // MARK: Building
 
     @Test func theSectionBuildsInEveryState() {

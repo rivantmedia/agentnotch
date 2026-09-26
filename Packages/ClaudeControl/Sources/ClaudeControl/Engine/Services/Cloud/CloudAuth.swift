@@ -43,6 +43,16 @@ import Security
 /// The host's browser step: open the URL, return the callback URL.
 public typealias ClaudeCloudBrowser = @MainActor @Sendable (URL) async throws -> URL
 
+/// What a host with no browser step for the website sign-in throws (the
+/// default `ClaudeSettingsHost.presentWebsiteSignIn`): the sign-in fails and
+/// says so, where a cancellation would look like the user closed a window
+/// that never opened.
+public nonisolated struct ClaudeWebsiteSignInUnavailable: LocalizedError, Equatable, Sendable {
+    public init() {}
+
+    public var errorDescription: String? { "This app can't open the website's sign-in." }
+}
+
 // MARK: - Session
 
 /// A Supabase session for the website, and where it came from.

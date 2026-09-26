@@ -11,7 +11,10 @@
 //  sealed, where `cloud` is a fixed, signed-in example.
 //
 //  `cloud` is republished from `CloudSync.shared`. The running sessions the
-//  hub attributes for certain feed the session ledger (`feedCloud`).
+//  hub attributes for certain feed the session ledger (`feedCloud`), and
+//  those it can't stop counting for anyone until it can. Those it simply
+//  hasn't placed yet (`cloudPlacement`) wait: nothing is counted or paused
+//  for a moment's not knowing.
 //
 
 import Foundation
@@ -85,6 +88,17 @@ public nonisolated struct ClaudeCloudState: Hashable, Sendable {
     /// Sharing accounts with other people happens on the website: `<dashboard>/pools`.
     public var poolsURL: URL? { dashboardURL?.appendingPathComponent("pools") }
 
+    /// The website's settings page, where synced data is removed: next to
+    /// the dashboard (`<site>/dashboard` → `<site>/settings`), else under the
+    /// website's address. Nil with neither.
+    public var settingsURL: URL? {
+        if let dashboardURL, dashboardURL.lastPathComponent == "dashboard" {
+            return dashboardURL.deletingLastPathComponent().appendingPathComponent("settings")
+        }
+        guard let websiteURL, let site = CloudWebsite.validated(websiteURL) else { return nil }
+        return site.appendingPathComponent("settings")
+    }
+
     /// What a sealed run shows: signed in to an example website, sync on,
     /// the last sync three minutes ago. Nothing behind it is real.
     static func sealedFixture(now: Date) -> ClaudeCloudState {
@@ -153,15 +167,53 @@ extension ClaudeControlHub {
     /// Where accounts are shared with other people (`<dashboard>/pools`).
     public var cloudPoolsURL: URL? { cloud.poolsURL }
 
+    /// Where summaries are removed and synced data deleted (`<site>/settings`).
+    public var cloudSettingsURL: URL? { cloud.settingsURL }
+
     // MARK: - Feeding the ledger
 
     /// The running sessions the hub attributed for certain, with their
     /// account, for the session ledger (only while sync is on; the ledger
-    /// keeps allowed accounts only). `liveIDs` is every session running now.
-    func feedCloud(_ attributed: [(state: SessionState, identity: ClaudeIdentityAccount)], liveIDs: Set<String>) {
+    /// keeps allowed accounts only); those whose account it can't tell now
+    /// (their new responses count for no account until it can); those it
+    /// hasn't placed yet (they wait); and every session running now.
+    func feedCloud(_ attributed: [(state: SessionState, identity: ClaudeIdentityAccount)], unsure: Set<String>,
+                   waiting: Set<String>, liveIDs: Set<String>) {
         guard !isSealed else { return }
         let observations = attributed.compactMap { Self.cloudObservation(state: $0.state, identity: $0.identity) }
-        CloudSync.shared.observeLive(observations, liveIDs: liveIDs)
+        CloudSync.shared.observeLive(observations, unsure: unsure, waiting: waiting, liveIDs: liveIDs)
+    }
+
+    /// How the session ledger hears of a running session.
+    nonisolated enum CloudPlacement: Equatable, Sendable {
+        /// Its account is known for certain.
+        case certain
+        /// Its account can't be told: its new responses count for no one.
+        case unsure
+        /// Not placed yet: neither counted nor paused.
+        case waiting
+    }
+
+    /// How long a session the hub has just seen may take to be placed (the
+    /// registry is read every few seconds) before not knowing its account
+    /// counts as not being able to tell.
+    nonisolated static let placementGrace: TimeInterval = 30
+
+    /// Where the session ledger puts a running session attributed so (after
+    /// Claude Desktop's record was looked for, when `isDesktopHosted`):
+    /// certain for a known identity. Only real uncertainty is unsure: a
+    /// session the hub simply hasn't placed yet waits, for at most
+    /// `placementGrace` after it first saw it. That is a folder the
+    /// registry hasn't grouped yet (`.known(nil)`), or a session Claude
+    /// Desktop hosts whose registry entry hasn't been read (no Desktop id,
+    /// no registry status: its state was just made by a hook). Pure.
+    nonisolated static func cloudPlacement(_ attribution: FolderAttribution, isDesktopHosted: Bool,
+                                           state: SessionState, now: Date) -> CloudPlacement {
+        if case .known(let identity) = attribution, identity != nil { return .certain }
+        guard now.timeIntervalSince(state.createdAt) < placementGrace else { return .unsure }
+        if attribution == .known(nil) { return .waiting }
+        if isDesktopHosted, state.hostSessionId == nil, state.registryStatus == nil { return .waiting }
+        return .unsure
     }
 
     /// A running session as the ledger captures it: its account's key (from

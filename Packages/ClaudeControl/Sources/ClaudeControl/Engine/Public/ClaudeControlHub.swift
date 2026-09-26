@@ -123,6 +123,9 @@ public final class ClaudeControlHub: ObservableObject {
     /// Sealed: fixture usage per account id (the third account's included,
     /// for when the sealed demo adds it).
     private var fixtureUsage: [String: AccountUsage] = [:]
+    /// Claude Desktop's records of the sessions it hosts, looked up (not sealed).
+    private lazy var desktopSessions = DesktopSessionAttributor(
+        root: DesktopHostedSessions.root(home: configuration.homeDirectory))
 
     /// How long a completion counts as "just finished" on its ring.
     public nonisolated static let freshSuccessWindow: TimeInterval = 90
@@ -315,11 +318,26 @@ public final class ClaudeControlHub: ObservableObject {
         let defaultRing = Self.defaultRingID(accounts: accounts)
         var snapshots: [AttentionSnapshot] = []
         // Sessions whose account is known for certain, for the website's
-        // session ledger (a guess is never recorded).
+        // session ledger (a guess is never recorded), those whose account
+        // can't be told now (their responses count for no one), and those
+        // not placed yet (they wait; see `cloudPlacement`).
         var attributed: [(state: SessionState, identity: ClaudeIdentityAccount)] = []
+        var unsure: Set<String> = []
+        var waiting: Set<String> = []
+        // Claude Desktop runs the sessions it hosts as its own account: its
+        // record of each tells whose (never when sealed).
+        var desktopCandidates: [DesktopHostedSessions.Candidate]?
         for state in ClaudeSessionMonitor.shared.instances {
             let folderId = state.accountId ?? AccountRegistry.defaultConfigDir(home: registry.homePath)
-            let attribution = registry.attribution(forFolderId: folderId, startedAt: state.pidStartedAt)
+            var attribution = registry.attribution(forFolderId: folderId, startedAt: state.pidStartedAt)
+            let isDesktopHosted = !isSealed && DesktopHostedSessions.isDesktopHosted(entrypoint: state.entrypoint)
+            if isDesktopHosted {
+                if desktopCandidates == nil { desktopCandidates = Self.desktopCandidates(registry) }
+                let desktopIdentity = desktopSessions.identity(hostSessionId: state.hostSessionId,
+                                                               candidates: desktopCandidates ?? [], now: now)
+                attribution = DesktopHostedSessions.attribution(folder: attribution, isDesktopHosted: true,
+                                                                desktopIdentity: desktopIdentity)
+            }
             let identity: ClaudeIdentityAccount?
             if case .known(let id?) = attribution {
                 // Switched off, or forgotten (BHV-3): not on any ring, never announced.
@@ -327,6 +345,11 @@ public final class ClaudeControlHub: ObservableObject {
                 identity = registry.identity(id: id)
                 if let identity, !identity.isHidden { attributed.append((state, identity)) }
             } else {
+                if Self.cloudPlacement(attribution, isDesktopHosted: isDesktopHosted, state: state, now: now) == .waiting {
+                    waiting.insert(state.sessionId)
+                } else {
+                    unsure.insert(state.sessionId)
+                }
                 if hiddenAccountIDs.contains(folderId) || registry.isForgotten(folderId) { continue }
                 identity = attribution.bestGuess.flatMap(registry.identity(id:)) ?? registry.identity(forFolderId: folderId)
             }
@@ -349,7 +372,9 @@ public final class ClaudeControlHub: ObservableObject {
         if !isSealed {
             // A pid whose session ended may be reused by another app later.
             SessionHostCache.shared.retain(pids: Set(ClaudeSessionMonitor.shared.instances.compactMap(\.pid)))
-            feedCloud(attributed, liveIDs: Set(ClaudeSessionMonitor.shared.instances.map(\.sessionId)))
+            desktopSessions.retain(Set(ClaudeSessionMonitor.shared.instances.compactMap(\.hostSessionId)))
+            feedCloud(attributed, unsure: unsure, waiting: waiting,
+                      liveIDs: Set(ClaudeSessionMonitor.shared.instances.map(\.sessionId)))
         }
 
         // Readings per tracked account.
@@ -392,6 +417,17 @@ public final class ClaudeControlHub: ObservableObject {
 
         emitTransitions(snapshots)
         scheduleBoundary(Self.nextBoundary(freshSuccessUntil: fresh, readings: readings, now: now))
+    }
+
+    /// The known identities as Claude Desktop's records name them: account
+    /// UUID and organization (the one the account's key uses).
+    static func desktopCandidates(_ registry: AccountRegistry) -> [DesktopHostedSessions.Candidate] {
+        registry.identities.compactMap { identity in
+            guard let uuid = AccountIdentityGrouping.accountUuid(ofKey: identity.id), !uuid.isEmpty else { return nil }
+            return DesktopHostedSessions.Candidate(
+                identityId: identity.id, accountUuid: uuid,
+                organizationUuid: CloudKeys.organization(of: identity, correctedFolders: registry.correctedFolders))
+        }
     }
 
     /// A session's ring: its account's when that account has one, else the

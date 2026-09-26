@@ -47,6 +47,10 @@ nonisolated struct SessionRegistryEntry: Equatable, Sendable {
     let statusUpdatedAt: Date?
     /// `ps -o lstart` of the process, in UTC.
     let procStart: String?
+    /// Claude Desktop's id for a session it hosts (`local_…`), written only
+    /// with a Desktop entrypoint (see `DesktopHostedSessions`); nil when
+    /// missing or not in Claude Code's own form.
+    let hostSessionId: String?
 
     init(
         pid: Int,
@@ -62,7 +66,8 @@ nonisolated struct SessionRegistryEntry: Equatable, Sendable {
         startedAt: Date? = nil,
         updatedAt: Date? = nil,
         statusUpdatedAt: Date? = nil,
-        procStart: String? = nil
+        procStart: String? = nil,
+        hostSessionId: String? = nil
     ) {
         self.pid = pid
         self.sessionId = sessionId
@@ -78,6 +83,7 @@ nonisolated struct SessionRegistryEntry: Equatable, Sendable {
         self.updatedAt = updatedAt
         self.statusUpdatedAt = statusUpdatedAt
         self.procStart = procStart
+        self.hostSessionId = hostSessionId.flatMap { DesktopHostedSessions.isHostSessionId($0) ? $0 : nil }
     }
 
     /// Parses a registry file's JSON object. Timestamps are epoch milliseconds.
@@ -98,13 +104,20 @@ nonisolated struct SessionRegistryEntry: Equatable, Sendable {
             startedAt: Self.date(fromMilliseconds: json["startedAt"]),
             updatedAt: Self.date(fromMilliseconds: json["updatedAt"]),
             statusUpdatedAt: Self.date(fromMilliseconds: json["statusUpdatedAt"]),
-            procStart: JSONValue.string(json["procStart"])
+            procStart: JSONValue.string(json["procStart"]),
+            hostSessionId: JSONValue.string(json["hostSessionId"])
         )
     }
 
     /// Interactive sessions the app tracks (bg/daemon kinds and SDK entrypoints are ignored).
     var isTracked: Bool {
         !SessionFilter.isIgnored(registryKind: kind, entrypoint: entrypoint)
+    }
+
+    /// Claude Desktop hosts the session: it runs as Desktop's account, not
+    /// as its config folder's (`DesktopHostedSessions`).
+    var isDesktopHosted: Bool {
+        DesktopHostedSessions.isDesktopHosted(entrypoint: entrypoint)
     }
 
     /// The name was derived by Claude Code rather than chosen by the user.

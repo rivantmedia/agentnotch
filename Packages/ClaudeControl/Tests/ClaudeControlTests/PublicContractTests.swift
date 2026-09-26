@@ -115,6 +115,26 @@ struct PublicContractTests {
         #expect(host.isRingShown("claude"))
         // The browser step of the website sign-in is the app's.
         let _: (any ClaudeSettingsHost) -> (URL) async throws -> URL = { host in host.presentWebsiteSignIn }
+        // ...and optional: a host written before it existed still conforms.
+        let older: ClaudeSettingsHost = OlderSettingsHost()
+        #expect(older.isRingShown("claude"))
+    }
+
+    /// Regression (M4): `presentWebsiteSignIn(_:)` was added to the
+    /// protocol after hosts existed. A host that doesn't implement it gets a
+    /// default that fails the sign-in with `ClaudeWebsiteSignInUnavailable`
+    /// (saying why), while one that does keeps its own.
+    @Test func theWebsiteSignInStepIsOptional() async throws {
+        let url = try #require(URL(string: "https://example.com/auth"))
+        let older: ClaudeSettingsHost = OlderSettingsHost()
+        await #expect(throws: ClaudeWebsiteSignInUnavailable()) {
+            _ = try await older.presentWebsiteSignIn(url)
+        }
+        #expect(ClaudeWebsiteSignInUnavailable().errorDescription == "This app can't open the website's sign-in.")
+        func sendable<T: Sendable>(_: T.Type) {}
+        sendable(ClaudeWebsiteSignInUnavailable.self)
+        let current: ClaudeSettingsHost = ContractSettingsHost()
+        #expect(try await current.presentWebsiteSignIn(url) == url)
     }
 
     /// The website side of the hub: sign-in, the sync and summary switches,
@@ -123,6 +143,7 @@ struct PublicContractTests {
         let _: KeyPath<ClaudeControlHub, ClaudeCloudState> = \.cloud
         let _: KeyPath<ClaudeControlHub, URL?> = \.cloudDashboardURL
         let _: KeyPath<ClaudeControlHub, URL?> = \.cloudPoolsURL
+        let _: KeyPath<ClaudeControlHub, URL?> = \.cloudSettingsURL
         let _: (ClaudeControlHub) -> (String?) async -> Bool = ClaudeControlHub.setCloudWebsite
         let _: (ClaudeControlHub) -> (@escaping ClaudeCloudBrowser) async -> Bool = ClaudeControlHub.cloudSignIn(presentingBrowser:)
         let _: (ClaudeControlHub) -> () async -> Void = ClaudeControlHub.cloudSignOut
@@ -145,6 +166,7 @@ struct PublicContractTests {
              state.pendingUsage, state.summarizedSessions, state.dashboardURL)
         let _: (Bool, String?, URL?) = (state.isSignedIn, state.email, state.poolsURL)
         #expect(state.poolsURL?.absoluteString == "https://example.com/dashboard/pools")
+        #expect(state.settingsURL?.absoluteString == "https://example.com/settings")
         func auth(_ v: ClaudeCloudState.Auth) -> Int {
             switch v { case .signedOut: return 0; case .signingIn: return 1; case .signedIn(email: _): return 2; case .error(let text): return text.count }
         }
@@ -304,6 +326,18 @@ private final class ContractSettingsHost: ClaudeSettingsHost {
     func openNotificationsSettings() {}
     func openSessionsPanel() {}
     func presentWebsiteSignIn(_ url: URL) async throws -> URL { url }
+}
+
+/// A host written before the website existed: no `presentWebsiteSignIn(_:)`.
+/// It must still compile as a `ClaudeSettingsHost` (M4).
+@MainActor
+private final class OlderSettingsHost: ClaudeSettingsHost {
+    func nickname(ringID: String) -> String? { nil }
+    func setNickname(_ n: String?, ringID: String) {}
+    func isRingShown(_ ringID: String) -> Bool { true }
+    func setRingShown(_ on: Bool, ringID: String) {}
+    func openNotificationsSettings() {}
+    func openSessionsPanel() {}
 }
 
 /// `ClaudeExternalUsageSource` as the app's Desktop-cache adapter implements it.

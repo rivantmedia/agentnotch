@@ -199,15 +199,17 @@ nonisolated enum CloudSessionSource: String, Codable, Sendable, CaseIterable {
 
     /// From Claude Code's entrypoint (`CLAUDE_CODE_ENTRYPOINT`, the
     /// registry's or a transcript line's `entrypoint`): `cli`,
-    /// `claude-vscode`, `claude-desktop` (Claude Desktop hosts Claude Code
-    /// sessions too), `sdk-ts`/`sdk-py`/`sdk-cli`. Unknown or missing is `other`.
+    /// `claude-vscode`, `claude-desktop`/`claude-desktop-3p`/`local-agent`
+    /// (Claude Desktop hosts Claude Code sessions too), `sdk-ts`/`sdk-py`/
+    /// `sdk-cli`. Unknown or missing is `other`.
     static func from(entrypoint: String?) -> CloudSessionSource {
         guard let value = entrypoint?.trimmingCharacters(in: .whitespaces).lowercased(), !value.isEmpty else {
             return .other
         }
         if value == "cli" { return .cli }
         if value.contains("vscode") { return .vscode }
-        if value.contains("desktop") { return .desktop }
+        // `local-agent`: Claude Desktop hosts it too (`DesktopHostedSessions`).
+        if value.contains("desktop") || DesktopHostedSessions.isDesktopHosted(entrypoint: value) { return .desktop }
         if value.hasPrefix("sdk") { return .sdk }
         return .other
     }

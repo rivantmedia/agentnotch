@@ -22,14 +22,9 @@ struct CloudSyncTests {
     nonisolated final class Switches: @unchecked Sendable {
         private let lock = NSLock()
         private var summaries = true
-        private var listing: Set<String>?
         var summariesAllowed: Bool {
             get { lock.withLock { summaries } }
             set { lock.withLock { summaries = newValue } }
-        }
-        var desktop: Set<String>? {
-            get { lock.withLock { listing } }
-            set { lock.withLock { listing = newValue } }
         }
     }
 
@@ -105,8 +100,7 @@ struct CloudSyncTests {
                 summaryRunner: { [runner] request in await runner.runAsync(request) },
                 clock: { [clock] in clock.now }, home: root.path, appVersion: "9.9", deviceName: "Test Mac",
                 websiteOverride: nil,
-                summariesAllowed: { [switches] in switches.summariesAllowed },
-                desktopAccounts: { [switches] in switches.desktop })
+                summariesAllowed: { [switches] in switches.summariesAllowed })
         }
 
         func start() async {
@@ -311,23 +305,93 @@ struct CloudSyncTests {
         #expect(harness.syncRequests.isEmpty)
     }
 
-    @Test func desktopSessionsNeedDesktopsOneAccountToBeTheirs() async throws {
+    /// Regression (M2): while the hub can't attribute a running session for
+    /// certain, the responses it makes are never sent for any account; once
+    /// a new process of it is certain, only that process's count.
+    @Test func responsesMadeWhileUnsureAreNeverSent() async throws {
         let harness = Harness()
         await harness.start()
-        harness.sync.observeLive([harness.observation(CloudFixture.sessionA, entrypoint: "claude-desktop")],
-                                 liveIDs: [CloudFixture.sessionA])
+        let id = CloudFixture.sessionA
+        typealias L = CloudTranscriptLines
+        try harness.writeSession(id)
+        harness.sync.observeLive([harness.observation(id)], liveIDs: [id])
+        await harness.sync.syncNow()
+        func sent(_ index: Int) throws -> [String: Any] {
+            try #require((harness.body(harness.syncRequests[index])["sessions"] as? [[String: Any]])?.first)
+        }
+        #expect(try sent(0)["messageCount"] as? Int == 2)
+
+        // Unsure (a mirrored ~/.claude switching accounts); it goes on answering.
+        harness.clock.advance(60)
+        harness.sync.observeLive([], unsure: [id], liveIDs: [id])
+        try L.write([L.assistant(id: "u1", request: "ru1", session: id, input: 7, output: 7, at: CloudFixture.stamp(30)),
+                     L.assistant(id: "u2", request: "ru2", session: id, input: 7, output: 7, at: CloudFixture.stamp(31))],
+                    to: harness.transcript(id), append: true)
+        harness.clock.advance(60)
+        await harness.sync.syncNow()
+        for index in harness.syncRequests.indices {
+            #expect(try sent(index)["messageCount"] as? Int == 2, "request \(index)")
+            #expect((try sent(index)["tokens"] as? [String: Int])?["output"] == 55, "request \(index)")
+        }
+
+        // Certain again, in a new process: its own responses count.
+        var resumed = harness.observation(id)
+        resumed.processStartedAt = CloudFixture.base.addingTimeInterval(40)
+        resumed.lastActivityAt = CloudFixture.base.addingTimeInterval(50)
+        harness.sync.observeLive([resumed], liveIDs: [id])
+        try L.write([L.assistant(id: "c1", request: "rc1", session: id, input: 1, output: 1, at: CloudFixture.stamp(50))],
+                    to: harness.transcript(id), append: true)
+        harness.clock.advance(60)
+        await harness.sync.syncNow()
+        let last = try sent(harness.syncRequests.count - 1)
+        #expect(last["messageCount"] as? Int == 3)
+        #expect((last["tokens"] as? [String: Int])?["output"] == 56)
+        // Its stretch of nobody has responses: really split, so no cost.
+        #expect(try sent(0)["costUsd"] as? Double == 0.37)
+        #expect(last["costUsd"] as? Double == nil)
+    }
+
+    /// Regression (review): a session reported unsure only until the hub
+    /// placed it (Desktop's record found a moment after it started) was
+    /// never really split: its stretch of nobody holds no response, so it
+    /// is sent whole, with its cost.
+    @Test func aSessionPlacedAMomentLateKeepsItsCost() async throws {
+        let harness = Harness()
+        await harness.start()
+        let id = CloudFixture.sessionA
+        try harness.writeSession(id)
+        harness.sync.observeLive([], unsure: [id], liveIDs: [id])
+        var placed = harness.observation(id)
+        placed.processStartedAt = CloudFixture.base.addingTimeInterval(-5)
+        harness.sync.observeLive([placed], liveIDs: [id])
+        #expect(harness.sync.stores?.ledger.owners(of: id).count == 2)
+        await harness.sync.syncNow()
+        let request = try #require(harness.syncRequests.last)
+        let session = try #require((harness.body(request)["sessions"] as? [[String: Any]])?.first)
+        #expect(session["messageCount"] as? Int == 2)
+        #expect(session["costUsd"] as? Double == 0.37)
+    }
+
+    /// Regression (M3): a session Claude Desktop hosts is recorded as the
+    /// account the hub found Desktop's record of it under, and only then;
+    /// one the hub couldn't attribute (reported unsure) never is. Nothing
+    /// about Claude Desktop's folders decides it here any more.
+    @Test func desktopSessionsAreRecordedAsTheHubAttributesThem() async throws {
+        let harness = Harness()
+        await harness.start()
+        try harness.writeSession(CloudFixture.sessionA)
+        harness.sync.observeLive([], unsure: [CloudFixture.sessionA], liveIDs: [CloudFixture.sessionA])
+        await harness.sync.syncNow()
         #expect(harness.sync.stores?.ledger.count == 0)
-        // Two accounts in Claude Desktop: can't tell.
-        harness.switches.desktop = [CloudFixture.accountUuid, "9d2c7b1a-0000-4e5f-8a9b-1c2d3e4f5a6b"]
-        harness.clock.advance(120)
-        harness.sync.observeLive([harness.observation(CloudFixture.sessionA, entrypoint: "claude-desktop")],
-                                 liveIDs: [CloudFixture.sessionA])
-        #expect(harness.sync.stores?.ledger.count == 0)
-        harness.switches.desktop = [CloudFixture.accountUuid]
+        #expect(harness.syncRequests.isEmpty)
+        // Its record found: the hub attributes it, and it is recorded as that account's.
         harness.clock.advance(120)
         harness.sync.observeLive([harness.observation(CloudFixture.sessionA, entrypoint: "claude-desktop")],
                                  liveIDs: [CloudFixture.sessionA])
         #expect(harness.sync.stores?.ledger.entry(CloudFixture.sessionA)?.source == .desktop)
+        #expect(harness.sync.stores?.ledger.entry(CloudFixture.sessionA)?.accountKey == CloudFixture.accountKey)
+        // `local-agent` is Claude Desktop's too.
+        #expect(CloudSessionSource.from(entrypoint: "local-agent") == .desktop)
     }
 
     @Test func aFoldersOwnHistoryIsBackfilled() async throws {

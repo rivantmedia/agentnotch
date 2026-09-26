@@ -31,8 +31,18 @@ public protocol ClaudeSettingsHost: AnyObject {
     /// sign-in through the website's Supabase project) in an
     /// ASWebAuthenticationSession with callback scheme `agentnotch`, and
     /// return the `agentnotch://auth-callback…` URL it came back to. Throws
-    /// `CancellationError` when the user closed it.
+    /// `CancellationError` when the user closed it. Optional: a host that
+    /// doesn't implement it gets the default below.
     func presentWebsiteSignIn(_ url: URL) async throws -> URL
+}
+
+extension ClaudeSettingsHost {
+    /// No browser step: the sign-in fails with `ClaudeWebsiteSignInUnavailable`
+    /// (which the Cloud section shows), so a host written before the website
+    /// existed still conforms.
+    public func presentWebsiteSignIn(_ url: URL) async throws -> URL {
+        throw ClaudeWebsiteSignInUnavailable()
+    }
 }
 
 public struct ClaudeSettingsPane: View {
@@ -218,6 +228,10 @@ public struct ClaudeSettingsPane: View {
         }
         actions.openCloudPools = {
             guard !SealedMode.isOn, let url = hub.cloudPoolsURL else { return }
+            NSWorkspace.shared.open(url)
+        }
+        actions.openCloudSettings = {
+            guard !SealedMode.isOn, let url = hub.cloudSettingsURL else { return }
             NSWorkspace.shared.open(url)
         }
         actions.setAutoOpen = { value in setting { ClaudeControlSettings.autoOpen = value } }

@@ -323,6 +323,9 @@ struct SettingsPaneActions {
     var openCloudDashboard: () -> Void = {}
     /// "Share accounts…": the website's pools page (`<dashboard>/pools`).
     var openCloudPools: () -> Void = {}
+    /// The website's settings page (`<site>/settings`): removing summaries,
+    /// deleting synced data.
+    var openCloudSettings: () -> Void = {}
 
     var setAutoOpen: (AutoOpenPolicy) -> Void = { _ in }
     var setHoldOpen: (HoldOpenPolicy) -> Void = { _ in }

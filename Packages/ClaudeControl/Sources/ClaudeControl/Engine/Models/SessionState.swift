@@ -40,6 +40,9 @@ nonisolated struct SessionState: Equatable, Identifiable, Sendable {
     var configDirEnv: String?
     /// CLAUDE_CODE_ENTRYPOINT / registry entrypoint, e.g. `cli`, `claude-vscode`.
     var entrypoint: String?
+    /// Claude Desktop's id for the session, when Desktop hosts it: the
+    /// current process's registry entry's `hostSessionId`.
+    var hostSessionId: String?
 
     // MARK: - Session Details
 

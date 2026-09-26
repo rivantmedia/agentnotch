@@ -42,10 +42,18 @@ struct ClaudeCodeSettingsHost: View {
 /// `ClaudeSettingsHost` over Codenotch's preferences.
 @MainActor
 final class PreferencesClaudeSettingsHost: ClaudeSettingsHost {
-    private let preferences: Preferences
+    /// The website sign-in's browser step.
+    typealias SignInPresenter = @MainActor (URL) async throws -> URL
 
-    init(preferences: Preferences) {
+    private let preferences: Preferences
+    private let presentSignIn: SignInPresenter
+
+    /// `presentSignIn` is `CloudWebAuthSession.present`; tests pass their
+    /// own, to check this host's `presentWebsiteSignIn` is the one the pane
+    /// gets (not the protocol's default, which only says it can't).
+    init(preferences: Preferences, presentSignIn: @escaping SignInPresenter = { try await CloudWebAuthSession.present($0) }) {
         self.preferences = preferences
+        self.presentSignIn = presentSignIn
     }
 
     func nickname(ringID: String) -> String? {
@@ -76,8 +84,9 @@ final class PreferencesClaudeSettingsHost: ClaudeSettingsHost {
     }
 
     /// "Sign in with Google" in the Cloud section: the browser step, over
-    /// this settings window.
+    /// this settings window. Must stay the protocol's requirement exactly
+    /// (`SettingsHostSignInTests` checks it is the witness).
     func presentWebsiteSignIn(_ url: URL) async throws -> URL {
-        try await CloudWebAuthSession.present(url)
+        try await presentSignIn(url)
     }
 }

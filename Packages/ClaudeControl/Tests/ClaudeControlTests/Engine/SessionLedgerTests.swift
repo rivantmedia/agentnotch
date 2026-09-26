@@ -50,13 +50,220 @@ struct SessionLedgerTests {
         #expect(ledger.settle(liveIDs: [], now: start.addingTimeInterval(190))
                 == [CloudLedgerEntry.key(sessionId: CloudFixture.sessionA, accountKey: CloudFixture.accountKey)])
         #expect(ledger.entry(CloudFixture.sessionA)?.endedAt == start.addingTimeInterval(120))
-        // Still running but not attributable this time: not ended.
         ledger.observe(live: [Self.observation(lastActivity: start.addingTimeInterval(300))], liveIDs: [CloudFixture.sessionA],
                        accounts: [:], now: start.addingTimeInterval(300))
         #expect(ledger.entry(CloudFixture.sessionA)?.endedAt == nil)
-        ledger.observe(live: [], liveIDs: [CloudFixture.sessionA], accounts: [:], now: start.addingTimeInterval(320))
+        // Still running but not attributable this time: its account's part
+        // stops at its last activity (M2), and goes on once it is again.
+        let key = CloudLedgerEntry.key(sessionId: CloudFixture.sessionA, accountKey: CloudFixture.accountKey)
+        #expect(ledger.observe(live: [], liveIDs: [CloudFixture.sessionA], accounts: [:], now: start.addingTimeInterval(320))
+                == [key])
+        #expect(ledger.entry(key: key)?.endedAt == start.addingTimeInterval(300))
+        #expect(ledger.isUncounted(CloudFixture.sessionA))
         #expect(ledger.settle(liveIDs: [CloudFixture.sessionA], now: start.addingTimeInterval(900)).isEmpty)
+        ledger.observe(live: [Self.observation(lastActivity: start.addingTimeInterval(950))], liveIDs: [CloudFixture.sessionA],
+                       accounts: [:], now: start.addingTimeInterval(950))
         #expect(ledger.entry(CloudFixture.sessionA)?.endedAt == nil)
+        #expect(!ledger.isUncounted(CloudFixture.sessionA))
+    }
+
+    // MARK: - Unsure (M2)
+
+    /// Regression (M2): a session the hub can't attribute for certain any
+    /// more (a mirrored `~/.claude` switching accounts) stops counting for
+    /// its account from its last activity seen while it was certain; its
+    /// responses from then on are no one's until it is certain again, and
+    /// then its new process's account takes over from that process's start.
+    @Test func aSessionTheHubCantAttributeCountsForNoOne() throws {
+        let ledger = SessionLedger(fileURL: nil, persists: false, home: "/Users/me")
+        let start = CloudFixture.base
+        let personal = CloudFixture.account, work = CloudFixture.workAccount
+        let id = CloudFixture.sessionA
+        ledger.observe(live: [Self.observation(lastActivity: start.addingTimeInterval(600), account: personal)],
+                       liveIDs: [id], accounts: [:], now: start.addingTimeInterval(600))
+        // Unsure: its new responses are nobody's; its part ends where it was last certain.
+        let personalKey = CloudLedgerEntry.key(sessionId: id, accountKey: personal.accountKey)
+        #expect(ledger.observe(live: [], liveIDs: [id], unsure: [id], accounts: [:], now: start.addingTimeInterval(700))
+                == [personalKey])
+        let nobodyFrom = start.addingTimeInterval(600 + SessionLedger.uncountedAfter)
+        #expect(ledger.owners(of: id) == [SessionOwner(from: nil, accountKey: personal.accountKey),
+                                          SessionOwner(from: nobodyFrom, accountKey: "")])
+        #expect(ledger.entry(key: personalKey)?.endedAt == start.addingTimeInterval(600))
+        #expect(ledger.entry(id) == nil && ledger.isUncounted(id))
+        // Still unsure: nothing more changes.
+        #expect(ledger.observe(live: [], liveIDs: [id], unsure: [id], accounts: [:], now: start.addingTimeInterval(800)).isEmpty)
+        #expect(ledger.owners(of: id).count == 2)
+        // Certain again, in a new process as the other account: from its start.
+        let resumedAt = start.addingTimeInterval(1000)
+        ledger.observe(live: [Self.observation(lastActivity: start.addingTimeInterval(1100), account: work,
+                                               startedAt: resumedAt, processStartedAt: resumedAt)],
+                       liveIDs: [id], accounts: [:], now: start.addingTimeInterval(1100))
+        #expect(ledger.owners(of: id) == [SessionOwner(from: nil, accountKey: personal.accountKey),
+                                          SessionOwner(from: nobodyFrom, accountKey: ""),
+                                          SessionOwner(from: resumedAt, accountKey: work.accountKey)])
+        #expect(ledger.entry(id)?.accountKey == work.accountKey && ledger.entry(id)?.startedAt == resumedAt)
+        #expect(!ledger.isUncounted(id))
+
+        // An unsure session is never counted for any account, even when
+        // the hub reports it among the live ones by mistake.
+        let both = SessionLedger(fileURL: nil, persists: false, home: "/Users/me")
+        both.observe(live: [Self.observation(account: personal)], liveIDs: [id], unsure: [id], accounts: [:], now: start)
+        #expect(both.count == 0 && both.isUncounted(id))
+    }
+
+    /// Regression (M2): the same process losing and regaining certainty
+    /// (a moment when the registry couldn't say) loses nothing: its
+    /// responses in between were its own all along.
+    @Test func theSameProcessCertainAgainKeepsItsResponses() throws {
+        let ledger = SessionLedger(fileURL: nil, persists: false, home: "/Users/me")
+        let start = CloudFixture.base
+        let id = CloudFixture.sessionA
+        ledger.observe(live: [Self.observation(lastActivity: start.addingTimeInterval(100), processStartedAt: start)],
+                       liveIDs: [id], accounts: [:], now: start.addingTimeInterval(100))
+        ledger.observe(live: [], liveIDs: [id], unsure: [id], accounts: [:], now: start.addingTimeInterval(200))
+        #expect(ledger.owners(of: id).count == 2)
+        ledger.observe(live: [Self.observation(lastActivity: start.addingTimeInterval(300), processStartedAt: start)],
+                       liveIDs: [id], accounts: [:], now: start.addingTimeInterval(300))
+        #expect(ledger.owners(of: id) == [SessionOwner(from: nil, accountKey: CloudFixture.accountKey)])
+        #expect(ledger.entry(id)?.endedAt == nil && ledger.entry(id)?.lastActivityAt == start.addingTimeInterval(300))
+        #expect(ledger.count == 1)
+    }
+
+    /// Regression (M2): a session first seen unsure is no one's from its
+    /// start: when a certain process of it turns up, only that process's
+    /// responses are its account's; the backfill never adds it either.
+    @Test func aSessionFirstSeenUnsureCountsOnlyFromItsCertainProcess() throws {
+        let root = URL(fileURLWithPath: TestPaths.temporaryRoot("cloud-ledger-unsure"))
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent(SessionLedger.fileName)
+        let start = CloudFixture.base
+        let id = CloudFixture.sessionA
+        let ledger = SessionLedger(fileURL: file, persists: true, home: "/Users/me")
+        ledger.observe(live: [], liveIDs: [id], unsure: [id], accounts: [:], now: start.addingTimeInterval(100))
+        #expect(ledger.count == 0 && ledger.knows(id) && ledger.isUncounted(id))
+        #expect(ledger.owners(of: id) == [SessionOwner(from: nil, accountKey: "")])
+        // Remembered across a relaunch.
+        ledger.saveNow()
+        let reloaded = SessionLedger(fileURL: file, persists: true, home: "/Users/me")
+        #expect(reloaded.isUncounted(id))
+        // The backfill leaves it alone.
+        #expect(reloaded.record(backfill: [Self.backfilled(id)], accounts: [:]) == 0)
+        // A certain process of it: counted from that process's start.
+        let resumedAt = start.addingTimeInterval(500)
+        reloaded.observe(live: [Self.observation(lastActivity: start.addingTimeInterval(600), startedAt: resumedAt,
+                                                 processStartedAt: resumedAt)],
+                         liveIDs: [id], accounts: [:], now: start.addingTimeInterval(600))
+        #expect(reloaded.owners(of: id) == [SessionOwner(from: nil, accountKey: ""),
+                                            SessionOwner(from: resumedAt, accountKey: CloudFixture.accountKey)])
+        #expect(reloaded.entry(id)?.startedAt == resumedAt && !reloaded.isUncounted(id))
+        // A session nobody reported unsure, merely not attributed, isn't remembered.
+        reloaded.observe(live: [], liveIDs: [CloudFixture.sessionB], accounts: [:], now: start.addingTimeInterval(700))
+        #expect(!reloaded.knows(CloudFixture.sessionB))
+    }
+
+    /// Regression (review): a session the hub hasn't placed yet (its state
+    /// just made again by a hook, a folder not grouped yet) waits: a known
+    /// one isn't paused (no stretch of nobody, its part not ended), a new
+    /// one isn't remembered as no one's, and once placed nothing was split.
+    @Test func aSessionNotPlacedYetWaits() throws {
+        let ledger = SessionLedger(fileURL: nil, persists: false, home: "/Users/me")
+        let start = CloudFixture.base
+        let id = CloudFixture.sessionA
+        ledger.observe(live: [Self.observation(lastActivity: start.addingTimeInterval(100), processStartedAt: start)],
+                       liveIDs: [id], accounts: [:], now: start.addingTimeInterval(100))
+        #expect(ledger.observe(live: [], liveIDs: [id], waiting: [id], accounts: [:], now: start.addingTimeInterval(110)).isEmpty)
+        #expect(ledger.owners(of: id) == [SessionOwner(from: nil, accountKey: CloudFixture.accountKey)])
+        #expect(!ledger.isUncounted(id) && ledger.entry(id)?.endedAt == nil)
+        // Waiting longer than a missing session's grace: still running.
+        #expect(ledger.observe(live: [], liveIDs: [], waiting: [id], accounts: [:], now: start.addingTimeInterval(300)).isEmpty)
+        #expect(ledger.settle(liveIDs: [id], now: start.addingTimeInterval(400)).isEmpty)
+        #expect(ledger.entry(id)?.endedAt == nil)
+        // Placed: a new process of the same account. One owner, one part.
+        ledger.observe(live: [Self.observation(lastActivity: start.addingTimeInterval(500),
+                                               processStartedAt: start.addingTimeInterval(450))],
+                       liveIDs: [id], accounts: [:], now: start.addingTimeInterval(500))
+        #expect(ledger.owners(of: id) == [SessionOwner(from: nil, accountKey: CloudFixture.accountKey)])
+        #expect(ledger.count == 1 && ledger.entry(id)?.lastActivityAt == start.addingTimeInterval(500))
+        // A new session not placed yet isn't remembered at all.
+        ledger.observe(live: [], liveIDs: [CloudFixture.sessionB], waiting: [CloudFixture.sessionB], accounts: [:],
+                       now: start.addingTimeInterval(600))
+        #expect(!ledger.knows(CloudFixture.sessionB))
+        // Unsure wins over waiting.
+        ledger.observe(live: [], liveIDs: [id], unsure: [id], waiting: [id], accounts: [:], now: start.addingTimeInterval(700))
+        #expect(ledger.isUncounted(id))
+    }
+
+    /// Regression (review): a session that keeps losing its account (a new
+    /// process each time) is counted again whenever the hub is certain: the
+    /// cap on hand-overs never blocks one away from nobody. Stretches of
+    /// nobody are bounded on their own; past that, the session stays with
+    /// the account it ran as, as a capped session always did.
+    @Test func aSessionIsCountedAgainHoweverOftenItWasUnsure() throws {
+        let ledger = SessionLedger(fileURL: nil, persists: false, home: "/Users/me")
+        let id = CloudFixture.sessionA
+        var now = CloudFixture.base
+        func certain() {
+            now = now.addingTimeInterval(100)
+            ledger.observe(live: [Self.observation(lastActivity: now, startedAt: now, processStartedAt: now)],
+                           liveIDs: [id], accounts: [:], now: now)
+        }
+        func unsure() {
+            now = now.addingTimeInterval(100)
+            ledger.observe(live: [], liveIDs: [id], unsure: [id], accounts: [:], now: now)
+        }
+        func nobodyStretches() -> Int { ledger.owners(of: id).filter { $0.accountKey.isEmpty }.count }
+        certain()
+        for cycle in 1...(SessionLedger.maxOwners / 2) {
+            unsure()
+            #expect(ledger.isUncounted(id), "cycle \(cycle)")
+            certain()
+            #expect(!ledger.isUncounted(id), "cycle \(cycle)")
+            #expect(ledger.entry(id)?.endedAt == nil && ledger.entry(id)?.lastActivityAt == now, "cycle \(cycle)")
+        }
+        #expect(ledger.owners(of: id).count == 1 + SessionLedger.maxOwners)
+        // Bounded: at most `maxOwners` stretches of nobody, and never stuck in one.
+        for _ in 0..<(SessionLedger.maxOwners / 2 + 8) {
+            unsure()
+            certain()
+        }
+        #expect(nobodyStretches() == SessionLedger.maxOwners)
+        #expect(ledger.owners(of: id).count == 1 + 2 * SessionLedger.maxOwners)
+        #expect(!ledger.isUncounted(id) && ledger.entry(id)?.endedAt == nil)
+        unsure()
+        #expect(!ledger.isUncounted(id) && nobodyStretches() == SessionLedger.maxOwners)
+    }
+
+    /// A ledger written before `unattributed` existed still loads.
+    @Test func aLedgerFromBeforeUnsureSessionsLoads() throws {
+        let root = URL(fileURLWithPath: TestPaths.temporaryRoot("cloud-ledger-old"))
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent(SessionLedger.fileName)
+        let ledger = SessionLedger(fileURL: file, persists: true, home: "/Users/me")
+        ledger.observe(live: [Self.observation()], liveIDs: [CloudFixture.sessionA], accounts: [:], now: CloudFixture.base)
+        ledger.saveNow()
+        var object = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        object.removeValue(forKey: "unattributed")
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+        #expect(SessionLedger(fileURL: file, persists: true, home: "/Users/me").entry(CloudFixture.sessionA) != nil)
+    }
+
+    @Test func ownersWithoutEmptyOrRepeatedStretches() {
+        let t1 = CloudFixture.base, t2 = CloudFixture.base.addingTimeInterval(60)
+        let a = "a", b = "b"
+        #expect(SessionOwners.normalized([.init(from: nil, accountKey: a), .init(from: t1, accountKey: ""),
+                                          .init(from: t1, accountKey: a)]) == [.init(from: nil, accountKey: a)])
+        #expect(SessionOwners.normalized([.init(from: nil, accountKey: a), .init(from: t1, accountKey: ""),
+                                          .init(from: t2, accountKey: b)])
+                == [.init(from: nil, accountKey: a), .init(from: t1, accountKey: ""), .init(from: t2, accountKey: b)])
+        #expect(SessionOwners.normalized([.init(from: nil, accountKey: a), .init(from: t1, accountKey: a)])
+                == [.init(from: nil, accountKey: a)])
+    }
+
+    static func backfilled(_ id: String) -> CloudLedgerEntry {
+        CloudLedgerEntry(sessionId: id, identityId: CloudFixture.identityId, accountKey: CloudFixture.accountKey,
+                         projectName: "app", projectPath: "/Users/me/code/app", transcriptPath: nil, configDir: nil,
+                         source: .cli, startedAt: CloudFixture.base, lastActivityAt: CloudFixture.base, endedAt: nil,
+                         model: nil, costUsd: nil, title: nil, origin: .backfill)
     }
 
     /// Regression (review finding 22): capture paused (sync off) while a

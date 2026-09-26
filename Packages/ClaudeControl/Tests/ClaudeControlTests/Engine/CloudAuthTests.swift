@@ -129,6 +129,17 @@ struct CloudAuthTests {
         }
     }
 
+    /// Regression (M4): a host with no browser step (the protocol's default)
+    /// fails the sign-in with its reason, not as a cancellation.
+    @Test func aHostWithNoBrowserStepSaysSo() async {
+        let auth = CloudAuth(transport: FakeTransport { _ in .json(500, [:]) }, store: CloudSessionMemoryStore())
+        await #expect(throws: CloudAuthError.provider("This app can't open the website's sign-in.")) {
+            _ = try await auth.signIn(config: Self.config, website: "https://agentnotch.example.com") { _ in
+                throw ClaudeWebsiteSignInUnavailable()
+            }
+        }
+    }
+
     // MARK: - Refresh
 
     @Test func anExpiringTokenIsRefreshedOnceAndSavedFirst() async throws {

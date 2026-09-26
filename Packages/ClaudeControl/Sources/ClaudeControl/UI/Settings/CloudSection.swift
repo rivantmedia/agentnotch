@@ -4,8 +4,9 @@
 //
 //  The settings pane's "Cloud" section: the website sync goes to, signing
 //  in to it with Google, what sync sends and never sends, session summaries
-//  and what they cost, the last sync, and the way to the dashboard and to
-//  sharing accounts there. Nothing is uploaded until the user signs in and
+//  and what they cost, the last sync, and the way to the dashboard, to
+//  sharing accounts there and to its settings (removing summaries, deleting
+//  synced data). Nothing is uploaded until the user signs in and
 //  turns sync on; the switches do nothing else.
 //
 //  Signed out: the website field, then "Sign in with Google" (disabled
@@ -209,6 +210,18 @@ struct CloudSection: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Dashboard")
                 Caption(CloudSettingsCopy.dashboard)
+                if let settings = cloud.settingsURL {
+                    // Its link goes through the pane's action (which a
+                    // sealed run turns down), not straight to the browser.
+                    Text(CloudSettingsCopy.dataSettings(url: settings))
+                        .font(.caption)
+                        .foregroundStyle(.ink(.secondary))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .environment(\.openURL, OpenURLAction { _ in
+                            actions.openCloudSettings()
+                            return .handled
+                        })
+                }
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 6) {
@@ -237,6 +250,18 @@ nonisolated enum CloudSettingsCopy {
     /// Said once: the app's own sign-in to its website, not Claude's.
     static let fileNote = "The website sign-in is kept in a file only your user can read."
     static let dashboard = "Your sessions and usage from every Mac and account you sync. Share an account there with a code: everyone in its pool sees what it was used for."
+    /// Under the dashboard: where what was sent is taken off the website.
+    static let dataSettingsText = "Remove summaries or delete synced data in the website's Settings."
+    static let dataSettingsLink = "Settings"
+
+    /// `dataSettingsText` with "Settings" linking to `url` (`<site>/settings`).
+    static func dataSettings(url: URL) -> AttributedString {
+        var text = AttributedString(dataSettingsText)
+        if let range = text.range(of: dataSettingsLink, options: .backwards) {
+            text[range].link = url
+        }
+        return text
+    }
 
     /// The address as it would be saved, or nil when the app won't use it.
     static func normalizedWebsite(_ text: String) -> String? {

@@ -24,12 +24,14 @@
 //  ran, only the lines of the account's own stretches. At most 24,000
 //  characters: the start and the end of the session when it is longer.
 //
-//  The answer is scrubbed before it is kept (`scrub`): absolute paths under
-//  /Users, /home, /private, /Volumes, /opt, /var, /Library, /etc, /tmp and
-//  ~/ are cut to their last component (a bare /Users/<name> or /home/<name>
-//  becomes ~, so no user name is left), the same patterns are redacted, and
-//  it is cut to the contract's 2,000 characters. The instructions ask for
-//  no paths, names, hosts, URLs or credentials in the first place.
+//  The answer is scrubbed before it is kept (`scrub`): the same patterns
+//  are redacted, whitespace is folded, absolute paths under /Users, /home,
+//  /private, /Volumes, /System, /opt, /var, /Library, /etc, /tmp and ~/
+//  are cut to their last component, components with spaces included (a
+//  path ending at a home folder becomes ~, one ending at a volume …, so no
+//  user or volume name is left; the prose after a path stays), and it is
+//  cut to the contract's 2,000 characters. The instructions ask for no
+//  paths, names, hosts, URLs or credentials in the first place.
 //
 //  Off unless the user turned session summaries on (they spend the
 //  account's usage), and never sealed, before bootstrap, or in a run that
@@ -167,56 +169,243 @@ nonisolated enum SessionSummarizer {
 
     /// Whitespace folded to single spaces, cut to the contract's limit.
     static func oneParagraph(_ text: String) -> String {
-        let folded = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
-        return folded.clampedUTF16(CloudContract.Limit.summaryText)
+        foldingWhitespace(text).clampedUTF16(CloudContract.Limit.summaryText)
+    }
+
+    /// Every run of whitespace (newlines, tabs, no-break and other wide
+    /// spaces) as one plain space, none at either end. Pure.
+    static func foldingWhitespace(_ text: String) -> String {
+        text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 
     /// A summary as it may leave the Mac: likely secrets redacted
-    /// (`SessionExcerpt.redact`), absolute paths cut to their last
-    /// component (`shortenPaths`), whitespace folded, and at most the
-    /// contract's 2,000 characters. Pure; scrubbing twice changes nothing.
+    /// (`SessionExcerpt.redact`), whitespace folded, absolute paths cut to
+    /// their last component (`shortenPaths`), and at most the contract's
+    /// 2,000 characters. Whitespace is folded before paths are shortened: a
+    /// name split by a newline, a double or a no-break space is still one
+    /// name to them. Pure; scrubbing twice changes nothing.
     static func scrub(_ text: String) -> String {
-        oneParagraph(shortenPaths(SessionExcerpt.redact(text)))
+        oneParagraph(shortenPaths(foldingWhitespace(SessionExcerpt.redact(text))))
     }
 
     /// `/Users/jane/work/acme/.env` → `.env`: absolute paths under /Users,
-    /// /home, /private, /Volumes, /opt, /var, /Library, /etc and /tmp, and
-    /// `~/…`, cut to their last component (trailing punctuation kept
-    /// outside). A home folder itself (`/Users/jane`, `/home/jane`) becomes
-    /// `~`: its last component is the user's name. Pure.
-    static func shortenPaths(_ text: String) -> String {
-        let range = NSRange(text.startIndex..., in: text)
+    /// /home, /private, /Volumes, /System, /opt, /var, /Library, /etc and
+    /// /tmp, and `~/…`, cut to their last component (trailing punctuation
+    /// kept outside).
+    ///
+    /// No user's or volume's name survives, spaces and all, and the words
+    /// after a path stay words:
+    /// - A component may contain spaces (`/Volumes/Macintosh HD/…`,
+    ///   `/Users/Jane Doe/…`, `~/Library/Application Support/…`): the words
+    ///   after a space (up to four, the last one followed by a `/`) stay in
+    ///   the path when they look like the rest of a folder's name. That is
+    ///   when each starts with a capital letter or a digit, and, for a
+    ///   folder deeper than a user's or volume's name, the component before
+    ///   the space isn't a file's name (`api.ts to handle client/server`
+    ///   stays prose). A user's or volume's name may also go on in
+    ///   lowercase, by one word that isn't a joining one (`and`, `for`,
+    ///   `to`…), when the path clearly does after the `/` (`/home/jane
+    ///   doe/tmp/x.log`: another `/`, a file's name, or nothing; `/Users/jane
+    ///   and src/a.ts` stays prose).
+    ///   Never across a `.`, `,`, `;`, `:`, `!` or `?`, and never into a new
+    ///   `/…` or `~/…` path.
+    /// - A path that ends at a home folder (`/Users/jane`, `/home/jane`,
+    ///   `/Volumes/Data/Users/jane`) becomes `~`, one that ends at a volume
+    ///   (`/Volumes/Backup`) becomes `…`: their last component is the
+    ///   name. A name ending the path takes along the capitalised words (or
+    ///   numbers) right after it, up to three (`/Volumes/My Passport` → `…`,
+    ///   `/Users/Jane Doe` → `~`).
+    /// - `knownNames` (this Mac's volumes and home folders, see
+    ///   `LocalNames`) are recognised whole after `/Volumes/`, `/Users/` or
+    ///   `/home/`, whatever their case or spaces (`/Volumes/my backup` → `…`).
+    ///
+    /// Spaces are plain single spaces here (`scrub` folds the rest first).
+    /// Pure given `knownNames`; shortening twice changes nothing.
+    static func shortenPaths(_ text: String, knownNames: [String] = LocalNames.current()) -> String {
+        let text = joiningKnownNames(in: text, names: knownNames)
         var result = ""
         var cursor = text.startIndex
-        for match in pathPattern.matches(in: text, range: range) {
-            guard let found = Range(match.range, in: text) else { continue }
-            result += text[cursor..<found.lowerBound]
+        // Transparent bounds: the look-behind sees the text before `cursor`.
+        while cursor < text.endIndex,
+              let match = pathPattern.firstMatch(in: text, options: [.withTransparentBounds],
+                                                 range: NSRange(cursor..., in: text)),
+              let head = Range(match.range, in: text) {
+            result += text[cursor..<head.lowerBound]
+            var found = head
+            while let more = continuation(of: text[found], in: text) {
+                found = found.lowerBound..<more
+            }
             var path = String(text[found])
             var trailing = ""
             while let last = path.last, ".,;:!?)]}'\"`".contains(last), path.count > 1 {
                 trailing = String(last) + trailing
                 path.removeLast()
             }
-            while path.hasSuffix("/"), path.count > 1 { path.removeLast() }
-            let component = (path as NSString).lastPathComponent
-            if isHomeFolder(path) {
-                result += "~" + trailing
+            var endsInSlash = false
+            while path.hasSuffix("/"), path.count > 1 {
+                path.removeLast()
+                endsInSlash = true
+            }
+            var end = found.upperBound
+            if let named = namedFolder(path) {
+                // The name may go on past the space the path stopped at.
+                if trailing.isEmpty, !endsInSlash { end = endOfName(in: text, from: end) }
+                result += (named == .home ? "~" : "…") + trailing
             } else {
+                let component = (path as NSString).lastPathComponent
                 result += (component.isEmpty || component == "~" ? "…" : component) + trailing
             }
-            cursor = found.upperBound
+            cursor = end
         }
         result += text[cursor...]
-        return result
+        return result.replacingOccurrences(of: nameJoiner, with: " ")
     }
 
+    /// A path's start and first run of components: no whitespace, none of
+    /// `"'`<>()[]{}` (see `isPathCharacter`).
     private static let pathPattern = try! NSRegularExpression(
-        pattern: #"(?<![\w.~-])(?:~|/(?:Users|home|private|Volumes|opt|var|Library|etc|tmp))/[^\s"'`<>()\[\]{}]+"#)
+        pattern: #"(?<![\w.~-])(?:~|/(?:Users|home|private|Volumes|System|opt|var|Library|etc|tmp))/[^\s"'`<>()\[\]{}]+"#)
 
-    /// `/Users/<name>` or `/home/<name>` and nothing below it. Pure.
-    private static func isHomeFolder(_ path: String) -> Bool {
+    /// A character a path component may hold (the pattern's class).
+    private static func isPathCharacter(_ character: Character) -> Bool {
+        !character.isWhitespace && !"\"'`<>()[]{}".contains(character)
+    }
+
+    /// A character a word inside a path may hold: no `/`, and no
+    /// punctuation that ends a clause.
+    private static func isWordCharacter(_ character: Character) -> Bool {
+        isPathCharacter(character) && !"/,;!?".contains(character)
+    }
+
+    /// Where `path` (a part of `text` that ends just before a space) goes on
+    /// past that space: the end of the components after the next `/`. Nil
+    /// when the path ends there (see `shortenPaths`). Pure.
+    private static func continuation(of path: Substring, in text: String) -> String.Index? {
+        let space = path.endIndex
+        guard space < text.endIndex, text[space] == " ", let before = path.last, !".,;:!?".contains(before) else {
+            return nil
+        }
+        let isName = namedFolder(String(path)) != nil
+        let component = path.split(separator: "/", omittingEmptySubsequences: false).last ?? ""
+        if !isName, isFileName(component) { return nil }
+        // Up to four words, the last one followed by a `/`.
+        var words: [Substring] = []
+        var index = text.index(after: space)
+        while true {
+            guard index < text.endIndex, isWordCharacter(text[index]), text[index] != "~" else { return nil }
+            let start = index
+            while index < text.endIndex, isWordCharacter(text[index]) { index = text.index(after: index) }
+            let word = text[start..<index]
+            words.append(word)
+            guard index < text.endIndex else { return nil }
+            if text[index] == "/" { break }
+            guard text[index] == " ", words.count < 4, let last = word.last, !".:".contains(last) else { return nil }
+            index = text.index(after: index)
+        }
+        let slash = index
+        var end = text.index(after: slash)
+        while end < text.endIndex, isPathCharacter(text[end]) { end = text.index(after: end) }
+        let capitalised = words.allSatisfy { word in
+            word.unicodeScalars.first.map { CharacterSet.uppercaseLetters.contains($0) || CharacterSet.decimalDigits.contains($0) }
+                ?? false
+        }
+        // A user's or volume's name in lowercase: one more word, never a
+        // joining one (`/home/jane doe/…`, but `/Users/jane and src/…`).
+        let lowercaseName = isName && words.count == 1 && !joiningWords.contains(words[0].lowercased())
+            && goesOnAsAPath(text[text.index(after: slash)..<end])
+        guard capitalised || lowercaseName else { return nil }
+        return end
+    }
+
+    /// Words that join a path to what follows it in a sentence, never the
+    /// rest of a user's or volume's name.
+    private static let joiningWords: Set<String> = [
+        "a", "an", "and", "as", "at", "but", "by", "for", "from", "in", "inside", "into", "is", "of", "on", "onto",
+        "or", "over", "so", "than", "that", "the", "then", "to", "under", "via", "vs", "was", "were", "which",
+        "while", "with", "within", "without",
+    ]
+
+    /// `api.ts`, `com.acme.plist`, `v1.2`: a name, a dot and a short
+    /// extension of letters and digits (not a dot folder like `.config`). Pure.
+    private static func isFileName(_ component: Substring) -> Bool {
+        guard let dot = component.lastIndex(of: "."), dot > component.startIndex else { return false }
+        let pathExtension = component[component.index(after: dot)...]
+        return (1...10).contains(pathExtension.count) && pathExtension.allSatisfy { $0.isLetter || $0.isNumber }
+    }
+
+    /// What follows a `/` is clearly more of a path: another `/`, a file's
+    /// name, or nothing (the `/` ended it). Pure.
+    private static func goesOnAsAPath(_ rest: Substring) -> Bool {
+        var rest = rest
+        while let last = rest.last, ".,;:!?".contains(last) { rest.removeLast() }
+        return rest.isEmpty || rest.contains("/") || isFileName(rest)
+    }
+
+    private enum NamedFolder { case home, volume }
+
+    /// Whether the path ends at a user's home folder (`…/Users/<name>`,
+    /// `…/home/<name>`) or a volume (`…/Volumes/<name>`). Pure.
+    private static func namedFolder(_ path: String) -> NamedFolder? {
         let parts = path.split(separator: "/", omittingEmptySubsequences: false)
-        return parts.count == 3 && parts[0].isEmpty && (parts[1] == "Users" || parts[1] == "home") && !parts[2].isEmpty
+        guard parts.count >= 3, let name = parts.last, !name.isEmpty else { return nil }
+        switch parts[parts.count - 2] {
+        case "Users", "home": return .home
+        case "Volumes": return .volume
+        default: return nil
+        }
+    }
+
+    /// Where a user's or volume's name that ends a path ends: past up to
+    /// three more words that start with a capital letter or a digit (`My
+    /// Passport`, `Macintosh HD`, `Untitled 2`, `Jane Doe`), stopping at
+    /// punctuation. Pure.
+    private static func endOfName(in text: String, from start: String.Index) -> String.Index {
+        var end = start
+        for _ in 0..<3 {
+            var index = end
+            guard index < text.endIndex, text[index] == " " else { break }
+            index = text.index(after: index)
+            guard index < text.endIndex, let first = text[index].unicodeScalars.first,
+                  CharacterSet.uppercaseLetters.contains(first) || CharacterSet.decimalDigits.contains(first) else { break }
+            var wordEnd = index
+            while wordEnd < text.endIndex, !text[wordEnd].isWhitespace, !"\"'`<>()[]{}/.,;:!?".contains(text[wordEnd]) {
+                wordEnd = text.index(after: wordEnd)
+            }
+            end = wordEnd
+            if wordEnd < text.endIndex, text[wordEnd] != " " { break }
+        }
+        return end
+    }
+
+    /// Stands for a space inside a known name while the path is shortened
+    /// (a private-use character: never a path's own).
+    private static let nameJoiner = "\u{E000}"
+
+    /// `/Volumes/My Passport` → `/Volumes/My<joiner>Passport` for every
+    /// known name with a space in it, after `/Volumes/`, `/Users/` or
+    /// `/home/` and before the end, a `/`, whitespace or punctuation, so the
+    /// pattern takes the name whole. Longest names first. Pure.
+    private static func joiningKnownNames(in text: String, names: [String]) -> String {
+        let spaced = Set(names.map { $0.trimmingCharacters(in: .whitespaces) }.filter { $0.contains(" ") })
+        guard !spaced.isEmpty, text.contains("/") else { return text }
+        var result = text
+        for name in spaced.sorted(by: { $0.count != $1.count ? $0.count > $1.count : $0 < $1 }) {
+            let pattern = #"(?<=/Volumes/|/Users/|/home/)"# + NSRegularExpression.escapedPattern(for: name)
+                + #"(?=$|[/\s"'`<>()\[\]{}.,;:!?])"#
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { continue }
+            let range = NSRange(result.startIndex..., in: result)
+            var rebuilt = ""
+            var cursor = result.startIndex
+            for match in regex.matches(in: result, range: range) {
+                guard let found = Range(match.range, in: result) else { continue }
+                rebuilt += result[cursor..<found.lowerBound]
+                rebuilt += result[found].replacingOccurrences(of: " ", with: nameJoiner)
+                cursor = found.upperBound
+            }
+            rebuilt += result[cursor...]
+            result = rebuilt
+        }
+        return result
     }
 
     static func exitDescription(status: Int32, stderr: String) -> String {
@@ -457,6 +646,57 @@ nonisolated enum SessionSummarizer {
         private func cleanUpHandlers() {
             stdoutPipe.fileHandleForReading.readabilityHandler = nil
             stderrPipe.fileHandleForReading.readabilityHandler = nil
+        }
+    }
+}
+
+// MARK: - This Mac's names
+
+/// The names a summary's paths may carry on this Mac, so the scrub knows
+/// them whole (spaces and all): its volumes (`/Volumes`) and its users'
+/// home folders (`/Users`, and the engine's own home folder's name).
+/// Folder listings only; nothing in them is opened. Only while the engine
+/// runs for real: before bootstrap (tests, the snapshots tool) and when
+/// sealed, none, so text scrubbed there never depends on this Mac. Listed
+/// again at most once a minute.
+nonisolated enum LocalNames {
+    static let lifetime: TimeInterval = 60
+
+    static func current(now: Date = Date()) -> [String] {
+        guard AppIdentity.isFrozen, !AppIdentity.isSealed else { return [] }
+        return cache.names(now: now) {
+            list(volumes: "/Volumes", users: "/Users", home: AppIdentity.homeDirectory)
+        }
+    }
+
+    /// The names in `volumes` and `users` (hidden ones and `Shared` left
+    /// out) and the home folder's own. Pure apart from the listings.
+    static func list(volumes: String, users: String, home: String, fileManager: FileManager = .default) -> [String] {
+        var names = Set<String>()
+        for folder in [volumes, users] {
+            for name in (try? fileManager.contentsOfDirectory(atPath: folder)) ?? []
+            where !name.hasPrefix(".") && name != "Shared" {
+                names.insert(name)
+            }
+        }
+        let own = (home as NSString).lastPathComponent
+        if !own.isEmpty, own != "/" { names.insert(own) }
+        return names.sorted()
+    }
+
+    private static let cache = Cache()
+
+    private final class Cache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var listed: (at: Date, names: [String])?
+
+        func names(now: Date, list: () -> [String]) -> [String] {
+            lock.withLock {
+                if let listed, abs(now.timeIntervalSince(listed.at)) < LocalNames.lifetime { return listed.names }
+                let names = list()
+                listed = (now, names)
+                return names
+            }
         }
     }
 }

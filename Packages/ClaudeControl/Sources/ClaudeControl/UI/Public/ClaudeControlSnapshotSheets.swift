@@ -200,8 +200,8 @@ import SwiftUI
 
     static func settingsSheets(width: CGFloat) -> [Sheet] {
         [
-            // Narrower wraps more lines: at 400 the pane runs past 3300.
-            Sheet(name: "settings", width: width, height: .fixed(width < 480 ? 3400 : 3050),
+            // Narrower wraps more lines: at 400 the pane runs past 3400.
+            Sheet(name: "settings", width: width, height: .fixed(width < 480 ? 3500 : 3150),
                   view: AnyView(settings(UIFixtures.settings()))),
             Sheet(name: "settings-first-run", width: width, height: .fixed(1000),
                   view: AnyView(settings(UIFixtures.settingsFirstRun(), newAccount: .naming("research")))),
@@ -221,7 +221,7 @@ import SwiftUI
                   view: AnyView(cloudSettings(UIFixtures.cloudSignedOut()))),
             Sheet(name: "settings-cloud-website-set", width: width, height: .fixed(width < 480 ? 250 : 230),
                   view: AnyView(cloudSettings(UIFixtures.cloudWebsiteSet()))),
-            Sheet(name: "settings-cloud-signed-in", width: width, height: .fixed(width < 480 ? 540 : 470),
+            Sheet(name: "settings-cloud-signed-in", width: width, height: .fixed(width < 480 ? 620 : 530),
                   view: AnyView(cloudSettings(UIFixtures.cloudSignedIn()))),
         ]
     }

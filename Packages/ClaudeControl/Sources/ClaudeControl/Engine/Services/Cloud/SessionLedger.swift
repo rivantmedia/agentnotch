@@ -28,6 +28,21 @@
 //  remembered, signed-in accounts that the hub could attribute for certain
 //  are captured: an unsure one is never guessed onto an account.
 //
+//  While the hub can't attribute a running session for certain (a mirrored
+//  `~/.claude` around an account switch, a Claude Desktop session whose
+//  record isn't found), or it runs as an account the website may not hear
+//  of, its new responses count for no account: the session's owners get a
+//  stretch of nobody (""), from the last activity seen while it was
+//  certain, and the account's part ends there. Once it is certain again,
+//  its account takes over from then (from its process's start for a new
+//  process; for the same process, whose responses in between were its own
+//  all along, from where nobody began). A session first seen unsure is
+//  remembered as nobody's from its start (`unattributed`), so a later,
+//  certain process of it counts only its own responses. A session the hub
+//  simply hasn't placed yet (`waiting`: a folder not grouped yet, a Claude
+//  Desktop session whose registry entry hasn't been read) is neither: it
+//  runs on as it was, nothing paused, until the hub places it.
+//
 //  A part that stops being live is ended a minute later (the time it went
 //  away when that was seen while capturing, else its last activity), and
 //  comes back to life if it shows up again.
@@ -130,6 +145,19 @@ nonisolated enum SessionOwners {
         return result
     }
 
+    /// The same owners without a stretch that covers no time (one whose next
+    /// owner starts at the same moment) or that repeats the owner before it:
+    /// the owner at every moment is unchanged. Pure.
+    static func normalized(_ owners: [SessionOwner]) -> [SessionOwner] {
+        var result: [SessionOwner] = []
+        for owner in owners {
+            if let last = result.last, last.from == owner.from { result.removeLast() }
+            if let last = result.last, last.accountKey == owner.accountKey { continue }
+            result.append(owner)
+        }
+        return result
+    }
+
     /// Whether `date` lies in one of `stretches` (a nil date lies in none).
     static func contains(_ stretches: [(from: Date?, to: Date?)], _ date: Date?) -> Bool {
         guard let date else { return false }
@@ -183,9 +211,17 @@ nonisolated final class SessionLedger: @unchecked Sendable {
     /// Last activity moves with every hook event: the file is written at
     /// most this often (and when the app quits).
     static let writeDelay: TimeInterval = 10
-    /// Hand-overs kept per session at most: a session that keeps changing
-    /// hands (two windows running it at once) stops being split further.
+    /// Hand-overs between accounts kept per session at most: a session that
+    /// keeps changing hands (two windows running it at once) stops being
+    /// split further. Stretches of nobody are bounded on their own (by the
+    /// same number): a hand-over away from nobody is never refused, so a
+    /// session is never left counting for no one while the hub is certain.
     static let maxOwners = 32
+    /// Sessions first seen unsure kept at most (the oldest go first).
+    static let unattributedCapacity = 2_000
+    /// Nobody's stretch starts this long after the last certain activity
+    /// (transcript times have millisecond precision).
+    static let uncountedAfter: TimeInterval = 0.001
 
     nonisolated struct Contents: Codable, Equatable, Sendable {
         /// 2: one entry per session and account, project paths kept locally.
@@ -198,6 +234,10 @@ nonisolated final class SessionLedger: @unchecked Sendable {
         /// By session id: who ran it from when, for sessions more than one
         /// account ran (the others belong wholly to their one entry's account).
         var owners: [String: [SessionOwner]] = [:]
+        /// Sessions with no entry that were seen running while their account
+        /// couldn't be told, and since when: their responses so far are no
+        /// one's. (Optional: a ledger written before it still loads.)
+        var unattributed: [String: Date]?
     }
 
     private let lock = NSLock()
@@ -260,7 +300,13 @@ nonisolated final class SessionLedger: @unchecked Sendable {
 
     /// Whether any account's entry of the session is known.
     func knows(_ sessionId: String) -> Bool {
-        lock.withLock { !(keysOfSession[sessionId] ?? []).isEmpty }
+        lock.withLock { isKnown(sessionId) }
+    }
+
+    /// Whether the session was seen running with its account unknown, and
+    /// nobody's responses since are counted for any account.
+    func isUncounted(_ sessionId: String) -> Bool {
+        lock.withLock { currentOwner(sessionId) == "" }
     }
 
     /// Who ran the session from when: the kept owners of a session more
@@ -280,12 +326,21 @@ nonisolated final class SessionLedger: @unchecked Sendable {
     /// Entries (one per session and account).
     var count: Int { lock.withLock { contents.sessions.count } }
 
-    /// Lock held: the account that ran the session last.
+    /// Lock held: the account that ran the session last ("" for nobody:
+    /// its account couldn't be told).
     private func currentOwner(_ sessionId: String) -> String? {
         if let last = contents.owners[sessionId]?.last { return last.accountKey }
         let entries = (keysOfSession[sessionId] ?? []).compactMap { contents.sessions[$0] }
-        return entries.max { $0.lastActivityAt != $1.lastActivityAt ? $0.lastActivityAt < $1.lastActivityAt : $0.accountKey < $1.accountKey }?
-            .accountKey
+        if let last = entries.max(by: { $0.lastActivityAt != $1.lastActivityAt ? $0.lastActivityAt < $1.lastActivityAt : $0.accountKey < $1.accountKey }) {
+            return last.accountKey
+        }
+        return contents.unattributed?[sessionId] != nil ? "" : nil
+    }
+
+    /// Lock held: any entry, owner or unsure sighting of the session.
+    private func isKnown(_ sessionId: String) -> Bool {
+        !(keysOfSession[sessionId] ?? []).isEmpty || contents.owners[sessionId] != nil
+            || contents.unattributed?[sessionId] != nil
     }
 
     // MARK: - Live capture
@@ -293,11 +348,20 @@ nonisolated final class SessionLedger: @unchecked Sendable {
     /// Take the running sessions the hub attributed for certain, and the
     /// accounts they belong to. `liveIDs` is every session running now,
     /// attributed or not (one the hub can't attribute this time is still
-    /// running). Returns the keys of the entries that ended with this call.
+    /// running); `unsure` are those whose account the hub can't tell now;
+    /// `waiting` those it hasn't placed yet (a folder not grouped yet, a
+    /// Claude Desktop session whose registry entry hasn't been read): they
+    /// are running, and neither counted nor paused until it has.
+    /// A known session running but not among `live` (nor waiting) counts for
+    /// no account from now on (see the file's notes); an unknown one in
+    /// `unsure` is remembered as no one's. Returns the keys of the entries
+    /// that ended with this call.
     @discardableResult
-    func observe(live: [LiveSessionObservation], liveIDs: Set<String>, accounts: [String: CloudLedgerAccount],
-                 now: Date) -> [String] {
-        let live = live.filter { CloudKeys.isUUID($0.sessionId) && CloudKeys.isKey($0.accountKey) && !$0.cwd.isEmpty }
+    func observe(live: [LiveSessionObservation], liveIDs: Set<String>, unsure: Set<String> = [],
+                 waiting: Set<String> = [], accounts: [String: CloudLedgerAccount], now: Date) -> [String] {
+        let live = live.filter {
+            CloudKeys.isUUID($0.sessionId) && CloudKeys.isKey($0.accountKey) && !$0.cwd.isEmpty && !unsure.contains($0.sessionId)
+        }
         // Resolve new start directories before taking the lock.
         let newDirs = lock.withLock { Set(live.map(\.cwd)).subtracting(projectPaths.keys) }
         var resolved: [String: String] = [:]
@@ -322,14 +386,15 @@ nonisolated final class SessionLedger: @unchecked Sendable {
                 let key = CloudLedgerEntry.key(sessionId: observation.sessionId, accountKey: observation.accountKey)
                 var partStart: Date?
                 if let current = currentOwner(observation.sessionId), current != observation.accountKey {
-                    if (contents.owners[observation.sessionId]?.count ?? 1) >= Self.maxOwners { continue }
+                    // Away from nobody always: the hub is certain now.
+                    if !current.isEmpty, stretchCount(observation.sessionId, nobody: false) >= Self.maxOwners { continue }
                     partStart = handOver(observation.sessionId, from: current, to: observation, now: now)
                     changed = true
                 }
                 seenThisRun[key] = now
                 missingSince.removeValue(forKey: key)
                 let updated = merged(observation, into: contents.sessions[key], partStart: partStart,
-                                     isSplit: contents.owners[observation.sessionId] != nil)
+                                     isSplit: (contents.owners[observation.sessionId]?.count ?? 0) > 1)
                 openIDs.insert(key)
                 keysOfSession[observation.sessionId, default: []].insert(key)
                 if contents.sessions[key] != updated {
@@ -337,10 +402,87 @@ nonisolated final class SessionLedger: @unchecked Sendable {
                     changed = true
                 }
             }
-            let ended = endMissing(liveIDs: liveIDs.union(live.map(\.sessionId)), now: now)
+            // Running, but not as an account it may be counted for (a
+            // session not placed yet waits: nothing is known of it yet).
+            var ended: [String] = []
+            let counted = Set(live.map(\.sessionId))
+            let notPlaced = waiting.subtracting(unsure)
+            for sessionId in liveIDs.union(unsure).subtracting(counted).subtracting(notPlaced).sorted()
+            where CloudKeys.isUUID(sessionId) {
+                if isKnown(sessionId) {
+                    guard currentOwner(sessionId) != "", let stopped = stopCounting(sessionId, now: now) else { continue }
+                    ended += stopped
+                    changed = true
+                } else if unsure.contains(sessionId) {
+                    noteUnattributed(sessionId, now: now)
+                    changed = true
+                }
+            }
+            ended += endMissing(liveIDs: liveIDs.union(notPlaced).union(live.map(\.sessionId)), now: now)
             if !ended.isEmpty { changed = true }
             if changed { persist() }
             return ended
+        }
+    }
+
+    /// Lock held: the session's responses after its last activity seen
+    /// while its account was certain (`uncountedAfter` later, so a response
+    /// written at that very moment stays its account's; never before an
+    /// earlier hand-over) are no one's, and its account's part ends at that
+    /// activity. Returns that part's key if it was open; nil when nothing
+    /// changed: a session that already lost its account `maxOwners` times
+    /// stops being split further and stays with the account it ran as.
+    private func stopCounting(_ sessionId: String, now: Date) -> [String]? {
+        guard let current = currentOwner(sessionId), !current.isEmpty,
+              stretchCount(sessionId, nobody: true) < Self.maxOwners else { return nil }
+        let key = CloudLedgerEntry.key(sessionId: sessionId, accountKey: current)
+        var owners = contents.owners[sessionId] ?? [SessionOwner(from: nil, accountKey: current)]
+        var boundary = contents.sessions[key].map { $0.lastActivityAt.addingTimeInterval(Self.uncountedAfter) } ?? now
+        if let previous = owners.last?.from { boundary = max(boundary, previous) }
+        owners.append(SessionOwner(from: boundary, accountKey: ""))
+        setOwners(sessionId, owners)
+        var ended: [String] = []
+        if var entry = contents.sessions[key], entry.endedAt == nil {
+            entry.endedAt = entry.lastActivityAt
+            contents.sessions[key] = entry
+            if openIDs.contains(key) { ended.append(key) }
+        }
+        openIDs.remove(key)
+        missingSince.removeValue(forKey: key)
+        Self.logger.notice("A session's account can't be told now: its responses count for no account until it can")
+        return ended
+    }
+
+    /// Lock held: how many of the session's kept owners are nobody's
+    /// stretches (`nobody`), or accounts'.
+    private func stretchCount(_ sessionId: String, nobody: Bool) -> Int {
+        guard let owners = contents.owners[sessionId] else { return nobody ? 0 : 1 }
+        return owners.filter { $0.accountKey.isEmpty == nobody }.count
+    }
+
+    /// Lock held: a session the ledger has no entry of runs unsure.
+    private func noteUnattributed(_ sessionId: String, now: Date) {
+        var unattributed = contents.unattributed ?? [:]
+        guard unattributed[sessionId] == nil else { return }
+        unattributed[sessionId] = now
+        if unattributed.count > Self.unattributedCapacity {
+            let oldest = unattributed.sorted { $0.value != $1.value ? $0.value < $1.value : $0.key < $1.key }
+                .prefix(unattributed.count - Self.unattributedCapacity)
+            for (id, _) in oldest { unattributed.removeValue(forKey: id) }
+        }
+        contents.unattributed = unattributed
+    }
+
+    /// Lock held: keep the session's owners, without empty or repeated
+    /// stretches; a session back to one owner from its start that is its
+    /// only entry's needs none kept.
+    private func setOwners(_ sessionId: String, _ owners: [SessionOwner]) {
+        let owners = SessionOwners.normalized(owners)
+        if owners.count == 1, let only = owners.first, only.from == nil, !only.accountKey.isEmpty,
+           (keysOfSession[sessionId] ?? []).subtracting([CloudLedgerEntry.key(sessionId: sessionId, accountKey: only.accountKey)]).isEmpty {
+            contents.owners.removeValue(forKey: sessionId)
+        } else {
+            contents.owners[sessionId] = owners
         }
     }
 
@@ -368,7 +510,10 @@ nonisolated final class SessionLedger: @unchecked Sendable {
     /// Lock held: the session, last run as `current`, now runs as the
     /// observation's account. The old account's part ends when the new one
     /// began (its process's start, never before the old part's last
-    /// activity or an earlier hand-over, never after now). Returns that moment.
+    /// activity or an earlier hand-over, never after now). Returns that
+    /// moment. From nobody (`current` ""), the same rule: a new process
+    /// takes over from its start, the process that ran through the unsure
+    /// stretch from where it began (the stretch goes).
     private func handOver(_ sessionId: String, from current: String, to observation: LiveSessionObservation,
                           now: Date) -> Date {
         let oldKey = CloudLedgerEntry.key(sessionId: sessionId, accountKey: current)
@@ -377,14 +522,19 @@ nonisolated final class SessionLedger: @unchecked Sendable {
         if let old = contents.sessions[oldKey] { boundary = max(boundary, old.lastActivityAt) }
         if let previous = owners.last?.from { boundary = max(boundary, previous) }
         owners.append(SessionOwner(from: boundary, accountKey: observation.accountKey))
-        contents.owners[sessionId] = owners
+        setOwners(sessionId, owners)
+        contents.unattributed?.removeValue(forKey: sessionId)
         if var old = contents.sessions[oldKey], old.endedAt == nil {
             old.endedAt = max(boundary, old.lastActivityAt)
             contents.sessions[oldKey] = old
         }
         openIDs.remove(oldKey)
         missingSince.removeValue(forKey: oldKey)
-        Self.logger.notice("A session resumed under another account: counted per account from now on")
+        if current.isEmpty {
+            Self.logger.notice("A session's account is certain again: counted for it from now on")
+        } else {
+            Self.logger.notice("A session resumed under another account: counted per account from now on")
+        }
         return boundary
     }
 
@@ -471,7 +621,8 @@ nonisolated final class SessionLedger: @unchecked Sendable {
     func record(backfill found: [CloudLedgerEntry], accounts: [String: CloudLedgerAccount]) -> Int {
         lock.withLock {
             var added = 0
-            for entry in found where (keysOfSession[entry.sessionId] ?? []).isEmpty {
+            // A session seen unsure is never backfilled onto an account either.
+            for entry in found where !isKnown(entry.sessionId) {
                 var entry = entry
                 entry.origin = .backfill
                 contents.sessions[entry.key] = entry

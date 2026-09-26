@@ -1017,7 +1017,11 @@ actor SessionStore {
             if session.pid != entry.pid {
                 adopt(pid: entry.pid, into: &session)
             }
-            if session.entrypoint == nil { session.entrypoint = entry.entrypoint }
+            // Both the current process's: a session resumed in another host
+            // (Claude Desktop, the terminal) is that host's from now on, and
+            // one resumed outside Claude Desktop has no Desktop id.
+            if let entrypoint = entry.entrypoint, !entrypoint.isEmpty { session.entrypoint = entrypoint }
+            session.hostSessionId = entry.hostSessionId
             if session.accountId == nil { session.accountId = account }
             session.applyName(entry.name, isDerived: entry.isNameDerived)
 
@@ -1117,6 +1121,7 @@ actor SessionStore {
         adopt(pid: entry.pid, into: &session)
         session.accountId = AccountPaths.normalize(configDir)
         session.entrypoint = entry.entrypoint
+        session.hostSessionId = entry.hostSessionId
         session.applyName(entry.name, isDerived: entry.isNameDerived)
         session.lastEventAt = changedAt
         session.registryStatus = entry.status
