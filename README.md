@@ -8,7 +8,8 @@
 > of the README, down to the line that says so, is the fork's. Everything after that line
 > is upstream's README (unchanged, apart from the fork's paragraph under License) and
 > describes Codenotch itself: its download, update and "Claude from the OAuth token in the
-> keychain" notes do not apply to this fork.
+> keychain" notes do not apply to this fork, and its download buttons don't work here. This
+> fork's own are [Download](#download) and [Updates](#updates).
 
 ## What's different from Codenotch
 
@@ -40,18 +41,46 @@
   turn it on; see [Cloud sync](#cloud-sync-optional).
 - **Installs beside the official app.** It has its own bundle id
   (`com.rivantmedia.agentnotch`), preferences, log subsystem, keychain items and
-  `~/Library/Application Support/Agent Notch`. It never updates itself: Sparkle
-  is off, so an upstream build can't replace it. Codenotch's other providers (Codex, Cursor,
+  `~/Library/Application Support/Agent Notch`. Codenotch's other providers (Codex, Cursor,
   Ollama, …) work as upstream describes.
+- **Updates itself from this fork's own releases.** A downloaded copy checks this
+  repository's GitHub releases once a day and installs updates signed with the fork's own
+  key. It never reads upstream's feed, so an official Codenotch build can't replace it.
+  Copies built from source never update themselves. See [Updates](#updates).
 - **Builds without Xcode**, with the Command Line Tools only.
+
+## Download
+
+Download the disk image, `AgentNotch-<version>.dmg`, from the
+[latest release](https://github.com/rivantmedia/agentnotch/releases/latest). An Agent Notch
+website (`web/`) offers the same file on its **Download** page (`<website>/download`). It
+runs on macOS 15 or later, on Apple silicon and Intel (one universal app).
+
+1. **Open the disk image and drag Agent Notch to Applications**, then open it from there.
+   It can't update itself while it runs from the disk image or from Downloads.
+2. **Let macOS open it the first time.** Releases are signed without an Apple Developer ID
+   and aren't notarized, so macOS refuses the first open. Open System Settings › Privacy &
+   Security, scroll down and click **Open Anyway**. If macOS says the app is *damaged*, that
+   is the quarantine flag on the download rather than a bad file. Clear it once in Terminal:
+
+   ```sh
+   xattr -dr com.apple.quarantine "/Applications/Agent Notch.app"
+   ```
+
+   If a release is ever notarized, its release notes leave this step out.
+3. Go on with [First use](#first-use).
+
+From then on it [updates itself](#updates). A copy built from source, which every copy from
+before 1.0.0 is, never does: replace it by hand once, as [Updates](#updates) describes.
 
 ## Build and run (Command Line Tools only)
 
-You need macOS 15 or later and the Command Line Tools (`xcode-select --install`). They must
-include a macOS 26 SDK: `/Library/Developer/CommandLineTools/SDKs/MacOSX26.*.sdk`. The scripts
-pick that SDK themselves. With only the macOS 27 SDK the build fails, because SwiftUI's
-`@State` macro plugin for it ships with Xcode. The first build fetches the Swift packages,
-so it needs the network.
+To build it from source instead of downloading it, you need macOS 15 or later and the
+Command Line Tools (`xcode-select --install`). They must include a macOS 26 SDK:
+`/Library/Developer/CommandLineTools/SDKs/MacOSX26.*.sdk`. The scripts pick that SDK
+themselves. With only the macOS 27 SDK the build fails, because SwiftUI's `@State` macro
+plugin for it ships with Xcode. The first build fetches the Swift packages, so it needs the
+network.
 
 ```sh
 Scripts/spm-build-app.sh --release      # builds build/Agent Notch.app (ad-hoc signed)
@@ -59,11 +88,15 @@ ditto "build/Agent Notch.app" "/Applications/Agent Notch.app"
 open "/Applications/Agent Notch.app"
 ```
 
-- Without `--release` you get a debug build in the same place.
+- Without `--release` you get a debug build in the same place. The version is the one in
+  the repository's `VERSION` file.
 - `SIGN_IDENTITY="Apple Development: …" Scripts/spm-build-app.sh --release` signs with a
   stable identity. That keeps keychain "Always Allow" grants for the other providers
   across rebuilds (an ad-hoc signature is new on every build).
-- To update: quit the app, pull, build again and `ditto` again.
+- **A copy built from source never updates itself:** it carries no update feed. To update
+  it, quit the app, pull, build again and `ditto` again. Copying it over a downloaded
+  release in `/Applications` stops that copy's updates too; install a release over it to
+  get them back.
 - `Scripts/spm-test.sh` runs the Swift Testing suites (the `ClaudeControl` package, then the
   app's `Tests/ForkSPM`). Upstream's XCTest suite needs Xcode (`make test`).
 - `Scripts/spm-run-sealed.sh` opens a sealed copy for a few seconds, with sample data and
@@ -75,7 +108,8 @@ open "/Applications/Agent Notch.app"
 1. **Quit Superpowered Vibe Notch** if you use it. Both apps would keep rewriting the same
    `settings.json`, so this one won't turn on while it runs. Settings offers
    **Quit Superpowered Vibe Notch**.
-2. **Open the app.** The notch appears on the right edge of the screen. To move it to
+2. **Open the app** (from `/Applications`; a download needs the first-open step in
+   [Download](#download)). The notch appears on the right edge of the screen. To move it to
    another edge, use Settings › Appearance. To slide it along the edge, hold ⌥ and drag.
    The first launch opens Settings on **Claude Code**. Later, open Settings from the orb
    under the notch (a gear on hover) or from the menu bar item (**Settings…**).
@@ -119,12 +153,33 @@ open "/Applications/Agent Notch.app"
    - If a keychain prompt ever asks for Claude Code's credentials on this app's behalf,
      deny it: this app never needs them.
 
-### Upgrading
+### Updates
 
-- **Replace the old copy, don't keep both.** Launching a new build quits the older
-  instance (same bundle id), but an old `build/Agent Notch.app` launched again later would
-  quit the new one and put its own rules back. Quit the old app, then replace or delete every
-  old copy (`/Applications`, the fork's `build/`) before opening the new one.
+- **A downloaded copy updates itself.** About once a day it reads this repository's feed,
+  `https://github.com/rivantmedia/agentnotch/releases/latest/download/appcast.xml`. A newer
+  version downloads in the background and installs when Agent Notch quits, so it runs from
+  the next start. Every update is signed with the fork's own EdDSA key and checked before
+  it is unpacked; one that doesn't match is never installed. Upstream's feed is never read.
+- **Settings › General.** **Check now** checks at once. Switch off **Install updates
+  automatically** to stop the daily check and the background downloads; **Check now** still
+  works. The notes for each version are on its
+  [release page](https://github.com/rivantmedia/agentnotch/releases); the app shows no
+  What's New window.
+- **If macOS asks again after an update** for Automation (to reach your terminal) or for a
+  keychain item of another provider, allow it again. A release signed ad hoc has a new
+  signature each time, and macOS ties those grants to the signature.
+- **Copies built from source never update themselves**, and neither do sealed or
+  development copies: they carry no feed. There the switch is greyed out, and **Check now**
+  says where to download a release.
+- **Copies from before 1.0.0 need replacing once, by hand.** Every copy made before the
+  first release was built from source and has no feed. It shows upstream's version number
+  (such as 1.18.0); Agent Notch numbers its own releases from 1.0.0. Quit it, delete every
+  old copy (`/Applications`, the fork's `build/`), then install a release as in
+  [Download](#download). Preferences, accounts and the review queue carry over: the bundle
+  id and support folder are the same.
+- **Keep one copy.** Launching a copy quits the one already running (same bundle id), but
+  an old copy launched again later would quit the new one and put its own rules back. Delete
+  old copies rather than keeping them beside the new one.
 
 ### Coming from Superpowered Codenotch
 
@@ -314,8 +369,17 @@ from every Mac that syncs. Nothing leaves this Mac until you sign in and turn sy
   - a Claude login token, keychain item or credential file (`.credentials.json`,
     `sessions/*.key`);
   - a network request of its own for Claude.
-- **Network:** only with [cloud sync](#cloud-sync-optional), and only to the website you set
-  there and its Supabase project: to sign in, and to sync once you turn sync on.
+- **Network:** only for these two things.
+  - With [cloud sync](#cloud-sync-optional), to the website you set there and its Supabase
+    project: to sign in, and to sync once you turn sync on.
+  - In a downloaded copy, for [updates](#updates): about once a day, a request for
+    `https://github.com/rivantmedia/agentnotch/releases/latest/download/appcast.xml` (GitHub
+    redirects it to its file host) and, when there is a newer version, the download of its
+    zip from the same release. They name only the app and its version (Sparkle's usual
+    User-Agent); Sparkle's system profiling, which would add details of this Mac, stays off.
+    Switch off **Install updates automatically** in Settings › General to stop them;
+    **Check now** then checks only when you click it. A copy built from source makes no
+    update request.
 - **Reads:**
   - each config folder's `.claude.json` (Claude Parallel Profiles' stores included): only
     the signed-in identity and Claude Code's cached usage figures; the rest of the file is
@@ -380,8 +444,9 @@ from every Mac that syncs. Nothing leaves this Mac until you sign in and turn sy
   whichever account you last used into it), and an untracked account's sessions there are
   hidden, their permission prompts left to the terminal.
 - **Removing the app.** Turn the hooks off first (and **Sign out…** under *Cloud*, if you
-  signed in), then quit. Delete the app and
-  `~/Library/Application Support/Agent Notch`, then run
+  signed in), then quit. Delete the app,
+  `~/Library/Application Support/Agent Notch` and
+  `~/Library/Caches/com.rivantmedia.agentnotch` (where updates are downloaded), then run
   `defaults delete com.rivantmedia.agentnotch`.
 
 ### Claude Parallel Profiles
@@ -443,9 +508,14 @@ keeps its hooks and usage check. This app follows that layout:
   installed hook scripts follow `AGENTNOTCH_SOCKET` only when `AGENTNOTCH_DEV=1` is set too.
   `AGENTNOTCH_WEB_URL=<url>` sets the cloud sync website for one run (https, or http to this
   Mac; ignored when sealed). Session summaries never run in a `--no-install` run.
+- **No updates outside releases.** A debug or `--release` build, a sealed run and a `.dev`
+  copy carry no update feed, so they never check for updates or replace themselves with a
+  release. Only the release workflow's builds update themselves (see [Releases](#releases)).
 - **Website.** `web/` is the cloud sync website; its README covers setting up Supabase,
   Google sign-in, the database and Vercel. The app and the site agree on
-  [`web/contract/`](web/contract/README.md): both test against its JSON fixtures.
+  [`web/contract/`](web/contract/README.md): both test against its JSON fixtures. Its
+  `/download` page offers the latest release's files
+  ([`web/README.md`](web/README.md#downloads)).
 - **Sealed-only switches** (ignored in a live run): `AGENTNOTCH_OPEN_PANEL_ON_LAUNCH=<route>`,
   `AGENTNOTCH_PANEL_CLOSE_AFTER=<seconds>`, `AGENTNOTCH_PANEL_SELF_TEST=1`,
   `AGENTNOTCH_SEALED_SWITCH_OFF=<ring id>`, `AGENTNOTCH_SEALED_CAPTURE=<dir>` (timeline PNGs) and
@@ -467,7 +537,107 @@ keeps its hooks and usage check. This app follows that layout:
   https://github.com/vinzdg/codenotch`) or `UPSTREAM_REF=<commit>`.
   `Packages/ClaudeControl/Scripts/embed-scripts.sh --check` confirms the embedded hook
   scripts match the `.py` files.
+
+  On GitHub, `.github/workflows/fork.yml` runs the first two, the test suites and a build
+  for every push to `main` and every pull request, and checks that the debug and sealed
+  builds carry no update feed.
 - **Licences.** See [License](#license) at the end: Codenotch is MIT; `Packages/ClaudeControl` is Apache-2.0, derived from Superpowered Vibe Notch and Vibe Notch.
+
+### Releases
+
+Releases are published to this repository's
+[GitHub releases](https://github.com/rivantmedia/agentnotch/releases) by
+`.github/workflows/release.yml` (the *Release* workflow). Installed copies update from there.
+
+- **Version.** The root `VERSION` file (one line, `major.minor.patch`; the first release is
+  1.0.0) is the app's version. `Scripts/spm-build-app.sh` writes it as both
+  `CFBundleShortVersionString` and `CFBundleVersion`, which is what Sparkle compares.
+  `project.yml`'s version numbers stay upstream's and only move with a merge.
+- **Releasing.** Raise `VERSION` and push the commit to `main`. A push to `main` that changes
+  the update key (`Scripts/sparkle-public-ed-key.txt`) starts it too, which is how the first
+  release goes out; on a version that is out already, that run does nothing. Runs wait their
+  turn, one at a time in the order they started, and none is cancelled. The workflow runs the
+  Fork workflow's checks first, then, on a macOS 26 runner with Xcode 26.6,
+  `Scripts/release-build.sh`. It creates the release `agentnotch-v<VERSION>`, titled
+  "Agent Notch <VERSION>", as a draft with three files: `AgentNotch-<VERSION>.dmg` (the
+  download), `AgentNotch-<VERSION>.zip` (the update) and `appcast.xml` (the feed). The notes
+  are the install steps plus GitHub's list of changes. Once every file is uploaded whole it
+  publishes the release as the latest, so `releases/latest/download/appcast.xml` never points
+  at a release without its files. Tags start with `agentnotch-v` because upstream's `v1.x`
+  tags are in every clone that fetches upstream.
+- **What stops a release.** A `VERSION` below the latest `agentnotch-v*` release
+  (installed copies would never take it), a draft it didn't make, a tag for that version at
+  another commit, or an update key other than the one the latest release was built with
+  (see below). A version that is released already gives a green run with nothing to do; a
+  draft an interrupted run left is replaced.
+- **Only from `main`.** Every run, a dry run too, fails on any other branch before it builds
+  anything: the job holds the update key, and only `main`'s code may run with it.
+- **Dry run.** Actions › Release › Run workflow on `main`, with *Dry run* ticked, makes the
+  same files and keeps them as the run's artifact, `AgentNotch-<VERSION>-dry-run`. Nothing is
+  published, and the problems in *What stops a release* are only warnings. A manual run
+  without it publishes, like a push.
+- **The update key, once.** Every update is signed with one Ed25519 key.
+  1. On your own Mac, run `Scripts/release-make-keys.sh --update-key ~/agentnotch-keys` (a
+     folder outside the repository; one inside it is refused). It makes the key with
+     CryptoKit, never in the Keychain. The private key goes to
+     `~/agentnotch-keys/sparkle-ed-private-key.txt` (0600, never printed) and the public key
+     into `Scripts/sparkle-public-ed-key.txt`.
+  2. Set the `SPARKLE_ED_PRIVATE_KEY` secret (see *Secrets*).
+  3. Commit `Scripts/sparkle-public-ed-key.txt` and push it to `main`. That push starts the
+     Release workflow, which publishes the current `VERSION` unless it is out already.
+
+  Keep a copy of the private key somewhere safe: installed copies take only updates signed
+  with it. If a run already stopped for want of the key, re-running it won't help when the
+  key file was missing, because a re-run checks out the same commit: push the key file, or,
+  if it is on `main` already, start Actions › Release › Run workflow on `main` with *Dry run*
+  unticked. When only the secret was missing, set it and re-run that run.
+
+  `--rotate` replaces a committed key, but then every installed copy, however it is signed,
+  stops updating and has to be reinstalled by hand: each checks an update against the key it
+  shipped with before unpacking it. So the workflow publishes with a key other than the
+  latest release's only from a manual run with *Publish although the update key changed*
+  ticked.
+- **A signing identity, optionally.** Without one, releases are signed ad hoc, with a new
+  signature each time, so macOS forgets the app's Automation permission and keychain
+  "Always Allow" grants at every update. `--signing-cert <dir>` makes a self-signed code
+  signing certificate ("Agent Notch Release Signing", or `--cert-name <name>`) as a p12 with
+  a random password. Every release is then signed by the same identity and keeps those
+  grants. Gatekeeper still refuses the first open: only a notarized Developer ID build
+  avoids that.
+- **Secrets.** They are secrets of the repository's `release` environment, whose only
+  deployment branch is `main`, so no other branch's code can read them (a repository secret
+  reaches a run from any branch). The script prints the commands that make the environment,
+  once, and set each secret with
+  `gh secret set <NAME> --env release -R rivantmedia/agentnotch < <file>`. It runs them only
+  with `--set-secrets`. Delete any repository-level copy of these secrets
+  (`gh secret delete <NAME> -R rivantmedia/agentnotch`): `--set-secrets` warns about one but
+  never deletes it. You can also give the environment a required reviewer in Settings ›
+  Environments, so every run waits for your approval.
+  - `SPARKLE_ED_PRIVATE_KEY`, required. Without it, or without a committed public key, the
+    release job (dry runs included) fails with these setup steps in its run summary.
+  - `MACOS_SIGNING_P12_BASE64` and `MACOS_SIGNING_P12_PASSWORD`, optional: the self-signed
+    identity, or a Developer ID. It is imported into a temporary keychain that is deleted
+    afterwards.
+  - `APPLE_NOTARY_API_KEY_P8_BASE64`, `APPLE_NOTARY_API_KEY_ID` and
+    `APPLE_NOTARY_API_ISSUER_ID`, optional: an App Store Connect API key, all three or none,
+    and only with a Developer ID Application identity. The app is then signed for the
+    hardened runtime (`spm-build-app.sh --hardened-runtime`), notarized and stapled, and so
+    is the disk image; the release notes leave the first-open steps out.
+- **Only release builds carry the feed.** `release-build.sh` builds with
+  `Scripts/spm-build-app.sh --release --universal --with-updates`. `--with-updates` writes
+  the feed and the public key into the Info.plist, and is refused unless the bundle id is
+  exactly `com.rivantmedia.agentnotch` and the key file holds a valid key. Every other build
+  has no feed or key and automatic checks off. The app also turns updates on only for that
+  bundle id, feed and key, never sealed or under test (`Fork.updatesEnabled`), and always
+  reads its own feed, whatever the defaults say.
+- **Trying it on your Mac.** `release-build.sh` does everything but publish. Try it with a
+  throwaway key: `release-make-keys.sh --update-key <scratch folder>`, then
+  `release-build.sh --host-arch --out <scratch folder> --ed-key-file <its private key>`,
+  both with `AGENTNOTCH_UPDATE_PUBLIC_KEY_FILE=<scratch file>` so the committed key file is
+  left alone. `--host-arch` builds for this Mac's architecture only: the Command Line Tools
+  have no x86_64 Swift compatibility libraries, so a universal build needs Xcode 26, and
+  the workflow refuses `--host-arch`. Never open the `app/Agent Notch.app` it leaves in the
+  output folder: it has the real bundle id and the feed, so it would update itself.
 
 *The rest of this README is upstream Codenotch's.*
 

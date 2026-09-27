@@ -21,14 +21,19 @@ across several accounts**:
   summaries written by Claude Code, and account pooling on the website. Off until the user signs
   in and turns sync on.
 - Works with the **Claude Parallel Profiles** VS Code extension (see below).
+- **Downloads and self-updates** from the fork's own GitHub Releases (rivantmedia/agentnotch):
+  the release workflow (a push to main that changes `VERSION` or the update key) publishes
+  `AgentNotch-<V>.dmg`, the Sparkle zip and `appcast.xml`; release builds update themselves
+  through Sparkle (EdDSA-signed, the fork's feed only, never upstream's); the website's
+  `/download` page links the latest release.
 
 The app was called **Superpowered Codenotch** until it was renamed; the engine still treats
 hook entries, status line wrappers and backups under that name as its own (`AppIdentity.former*`,
 `HookInstaller.removeFormerNameFiles`), so an install replaces them in place. Keep those names.
 
 The Claude code was ported from an earlier fork of Vibe Notch ("Superpowered Vibe Notch", SPVN,
-now retired). The README's first half is the user-facing fork documentation: build, first use,
-privacy, development switches. Read it before changing behaviour.
+now retired). The README's first half is the user-facing fork documentation: download, build,
+first use, updates, privacy, development switches, releases. Read it before changing behaviour.
 
 ## Layout
 
@@ -36,7 +41,7 @@ privacy, development switches. Read it before changing behaviour.
 |---|---|
 | `Sources/` | Upstream Codenotch (Swift 5, minimal concurrency checking). Keep edits here to the listed seams. |
 | `Sources/ClaudeBridge/` | Fork-only glue in the app module. It copies fields and calls AppKit, and **holds no logic**: providers/rings (`ClaudeUsageProvider`, `ClaudeProviderSync`, `ClaudeRingMigrator`), session feed, ring decoration/badges, resting marks, attention reactions, panel window/controller, settings host, the website sign-in's browser step (`CloudWebAuthSession`: `ASWebAuthenticationSession`, callback scheme `agentnotch`, over the settings window), sealed demo, snapshots. |
-| `Sources/App/Fork.swift` | Fork identity: bundle id `com.rivantmedia.agentnotch`, support folder, keychain-service remap, default registration (weekly ring outside), and `Fork.rebranded`, which puts "Agent Notch" into upstream's "Codenotch" copy (seam R1). |
+| `Sources/App/Fork.swift` | Fork identity: bundle id `com.rivantmedia.agentnotch`, support folder, keychain-service remap, default registration (weekly ring outside), and `Fork.rebranded`, which puts "Agent Notch" into upstream's "Codenotch" copy (seam R1). Updates: `updateFeedURL` (`…/releases/latest/download/appcast.xml`, also written by `spm-build-app.sh`; `UpdatesTests` pins both), `releasesPageURL`, the gate `updatesEnabled` (pure `updatesEnabled(info:bundleID:sealed:underTest:)`: not sealed, not under test, exact bundle id, Info.plist `SUFeedURL` == the feed, `SUPublicEDKey` strict base64 of 32 bytes), and `showsUpstreamReleaseNotes = false` / `showWhatsNewIfNeeded` (upstream's What's New notes are keyed by upstream's versions; never shown). |
 | `Packages/ClaudeControl/` | Local SwiftPM package (Apache-2.0 + `NOTICE`), **all Claude logic**, one module `ClaudeControl`. |
 | `…/Sources/ClaudeControl/Engine/` | Must never import SwiftUI (checked by `check-seams.sh`). `Public/` holds the facade `ClaudeControlHub`, `ClaudeControlConfiguration`, summaries, projections, ring migration and account inspection. `Services/` holds hooks, session pipeline, accounts, usage, notifications, window/tmux focus, and `Cloud/` (website sign-in, session ledger, transcript token scanner, usage history, session summaries, `CloudSync`; the hub's side is `Public/ClaudeControlHub+Cloud.swift`). `Core/` holds `DevFlags`, `ClaudeControlSettings`, `AccountPaths`, `SealedMode`. `Geometry/` holds panel placement and ring-badge layout. `Scripts/` holds the generated `EmbeddedScripts.swift`. |
 | `…/Sources/ClaudeControl/UI/` | SwiftUI: sessions panel, chat, settings pane (its Cloud section is `Settings/CloudSection.swift`), theme tokens (`ClaudeControlTheme`). |
@@ -47,16 +52,23 @@ privacy, development switches. Read it before changing behaviour.
 | `Tests/ForkSPM/` | Swift Testing tests for app-side fork code (the bridge). |
 | `Tests/ClaudeBridgeTests.swift`, the rest of `Tests/` | XCTest (upstream + bridge). Needs Xcode; runs in CI only. |
 | `Scripts/spm-*.sh`, `check-seams.sh`, `fork-seams.txt`, `verify-token-free.sh`, `cloud-contract-e2e.sh` | Fork tooling (below). |
-| `project.yml`, `Makefile` | Upstream's xcodegen/Xcode path, kept working (the local package is wired into both). |
+| `VERSION` | Fork-owned, one line `major.minor.patch` (first release 1.0.0). The app's only version source: `spm-build-app.sh` writes it as `CFBundleShortVersionString` **and** `CFBundleVersion` (Sparkle compares the latter). `project.yml`'s `MARKETING_VERSION`/`CURRENT_PROJECT_VERSION` stay upstream's (the Xcode path and `WhatsNewTests` read them). A push to main that changes it releases. |
+| `Scripts/release-build.sh`, `release-make-keys.sh`, `release-ed25519.swift`, `sparkle-public-ed-key.txt`, `AgentNotch.entitlements` | Release pipeline. `release-build.sh`: everything the workflow does except publishing (build `--release --universal --with-updates`, optional p12 import into a temporary keychain + notarization, dmg, Sparkle zip, `sign_update`, CryptoKit check against the committed key, `appcast.xml`, `release-info.env`) into `--out` (default `build/release`). `release-make-keys.sh`: the maintainer's one-time key setup (`--update-key`, `--signing-cert`, `--rotate`, `--set-secrets`: makes the `release` environment, main only, and sets its secrets). `release-ed25519.swift`: CryptoKit generate/public/verify. `sparkle-public-ed-key.txt`: committed public key (header only until the maintainer runs the key script). The entitlements file (Apple Events only) is for `--hardened-runtime`. |
+| `.github/workflows/fork.yml`, `release.yml` | Fork CI (push to main, PRs, dispatch, and `workflow_call` from Release; concurrency group `${{ github.workflow }}-${{ github.ref }}`; also checks debug/sealed builds carry no feed) and the Release workflow (below). Upstream's workflows run only in `vinzdg/codenotch`, except `windows-package.yml` on a manual dispatch: never ship its output (the upstream Windows port reads Claude's login token). |
+| `project.yml`, `Makefile` | Upstream's xcodegen/Xcode path, kept working (the local package is wired into both). Not the fork's release path: `make appcast` stays refused (its recipe publishes upstream's hivinz.com feed). |
 | `web/` | The cloud sync website: Next.js (T3: tRPC, Prisma, Tailwind, TypeScript) on Supabase (Postgres, Auth with Google). Its own README covers setup and checks (`npm test`, `npm run typecheck`). `web/.env` holds real values and stays untracked; `.env.example` has placeholders. |
 | `web/contract/` | The **fixed** app⇄website API (`README.md` + JSON fixtures both sides test against: field names, key derivation, limits, error shape). Change a fixture only together with both sides. |
+| `web/src/app/download/` (`page.tsx`, `loading.tsx`, `[platform]/route.ts`), `web/src/lib/releases.ts`, `web/src/server/releases.ts` | The website's public download page. `lib/releases.ts` is pure (release pick, asset classifier: dmg > pkg > zip for Mac, future Windows/Linux names, never `codenotch`/appcast/signatures; `isReleaseDownloadUrl`; User-Agent platform); `server/releases.ts` fetches `GET /repos/<RELEASES_REPO>/releases?per_page=5` (default `rivantmedia/agentnotch`, optional `GITHUB_RELEASES_TOKEN`, recommended on Vercel, whose shared outbound addresses share GitHub's 60 unauthenticated requests an hour; 5-minute Next cache of 200s only; never throws). `/download/<mac\|windows\|linux>` 302s only to `https://github.com/<repo>/releases/download/…` (`private, no-store`). Tests never call GitHub. |
 
 **Public API rule:** `ClaudeControl`'s public surface is the bridge contract (`Tests/ClaudeControlTests/PublicContractTests.swift` pins it). Add members freely; don't rename or remove them without updating the bridge and that test.
 
 ## Build, test, run (this Mac has only the Command Line Tools — no Xcode)
 
 ```sh
-Scripts/spm-build-app.sh [--release]      # → build/Agent Notch.app (ad-hoc signed; SIGN_IDENTITY=… for a stable identity)
+Scripts/spm-build-app.sh [--release]      # → build/Agent Notch.app (ad-hoc signed; SIGN_IDENTITY=… for a stable identity); version = VERSION; no feed
+Scripts/spm-build-app.sh --release --universal --with-updates [--hardened-runtime]   # release flags; only release-build.sh passes them
+AGENTNOTCH_UPDATE_PUBLIC_KEY_FILE=<scratch file> Scripts/release-make-keys.sh --update-key <scratch dir>   # throwaway key pair
+AGENTNOTCH_UPDATE_PUBLIC_KEY_FILE=<scratch file> Scripts/release-build.sh --host-arch --out <scratch> --ed-key-file <seed>   # release minus publishing
 Scripts/spm-test.sh                        # Swift Testing: ClaudeControl package, then Tests/ForkSPM
 Scripts/spm-test.sh ClaudeControl --filter <SuiteName>   # one package suite
 Scripts/spm-test.sh app                    # only Tests/ForkSPM
@@ -72,6 +84,24 @@ Packages/ClaudeControl/Scripts/embed-scripts.sh [--check]
   against the macOS 27 SDK fails: SwiftUI's `@State` became a macro whose plugin ships only with
   Xcode. Likewise `#Preview` and XCTest are unavailable here. Swift Testing works, via the extra
   plugin/rpath flags `spm-test.sh` passes.
+- **Build flags for releases.**
+  - `--universal` builds arm64 and x86_64 one at a time (slices in
+    `.build/agentnotch-slices/<config>/<arch>`) and joins them with lipo. It stops early here:
+    the Command Line Tools ship the Swift compatibility libraries for arm64 only. Xcode 26 can
+    build it (the workflow pins Xcode 26.6). Local trials use `release-build.sh --host-arch`,
+    which is refused on GitHub Actions.
+  - Every build embeds the Swift back-deployment libraries the executable loads through
+    `@rpath` (`libswiftCompatibilitySpan.dylib`, for macOS 15) and drops build-machine
+    `LC_RPATH`s. Signing goes inside-out, never `codesign --deep`.
+  - `--with-updates` writes `SUFeedURL`, `SUPublicEDKey`, `SUEnableAutomaticChecks`,
+    `SUAutomaticallyUpdate`, `SUScheduledCheckInterval` 86400 and
+    `SUVerifyUpdateBeforeExtraction`. It exits 2 unless the bundle id is exactly
+    `com.rivantmedia.agentnotch` and the key file holds a valid 32-byte key. The key file is
+    `Scripts/sparkle-public-ed-key.txt`, or `AGENTNOTCH_UPDATE_PUBLIC_KEY_FILE` for tests. Every
+    other build strips all `SU*` keys and sets `SUEnableAutomaticChecks` false.
+  - `--hardened-runtime` (Developer ID only; exit 2 with ad hoc) adds the hardened runtime,
+    `--timestamp` and `Scripts/AgentNotch.entitlements`.
+  - `SIGN_KEYCHAIN` names a keychain that isn't on the search list.
 - `check-seams.sh` and `verify-token-free.sh` compare against the merge-base with `upstream/main`.
   Without that remote, set `UPSTREAM_REF=642d329` (the upstream commit the fork is based on).
 - `cloud-contract-e2e.sh` runs three steps and stops at the first failure: the Swift test
@@ -90,7 +120,11 @@ Packages/ClaudeControl/Scripts/embed-scripts.sh [--check]
   - `spm-build-app.sh` builds with no new kinds of warnings;
   - both check scripts;
   - `embed-scripts.sh --check`;
-  - a sealed run on the affected edges.
+  - a sealed run on the affected edges;
+  - for release pipeline changes: actionlint on both workflows and shellcheck on the scripts
+    (neither is installed here: download the binaries into the scratchpad), `bash -n`, and a
+    `release-build.sh --host-arch` run into a scratch folder with a throwaway key (never open
+    its app). The first universal build happens on CI; the maintainer starts dry runs.
 
 ## Safety rules (the maintainer's real setup is live on this Mac)
 
@@ -121,11 +155,27 @@ Packages/ClaudeControl/Scripts/embed-scripts.sh [--check]
   turn both off, and a new sign-in starts with them off. Nothing is captured while signed out or
   with sync off. Sync sends names and numbers only: never file paths, prompts or replies (a
   summary is scrubbed of absolute paths and key-like text before it leaves).
+- **Releases.** Never publish a release, push a tag or commit, set or delete a secret
+  (`gh secret set`, `release-make-keys.sh --set-secrets`), change the `release` environment
+  (`gh api … environments`) or start the Release workflow from a session or a test;
+  read-only `gh … -R rivantmedia/agentnotch` is fine (always pass `-R`: a bare `gh` here resolves
+  to upstream). Never read, print or copy the update private key (`sparkle-ed-private-key.txt`,
+  the `SPARKLE_ED_PRIVATE_KEY` secret) or the signing p12 and its password. Never overwrite the
+  committed `Scripts/sparkle-public-ed-key.txt`: key-script and release-build trials set
+  `AGENTNOTCH_UPDATE_PUBLIC_KEY_FILE` to a scratch file and use throwaway keys in scratch
+  folders outside the repo.
+- **No feed outside releases.** Dev, sealed and `.dev` builds must never carry the feed or key
+  (`--with-updates` is for `release-build.sh` only), so no copy on this Mac can check the feed or
+  replace the maintainer's installed app. Never launch a `--with-updates` bundle (e.g.
+  `<out>/app/Agent Notch.app` from `release-build.sh`, or anything from a release download): it
+  has the real bundle id and would update itself. Delete such scratch bundles when done.
 
 ## Working with upstream
 
-- The only remote is `upstream` (vinzdg/codenotch, which moves fast: roughly 200 commits a week).
-  `main` = upstream `642d329` + the fork.
+- Remotes: `origin` = rivantmedia/agentnotch (the fork; releases are published there) and
+  `upstream` = vinzdg/codenotch (moves fast: roughly 200 commits a week). `main` = upstream
+  `642d329` + the fork. Upstream's `v1.x` and `preview` tags come in with every fetch of
+  upstream, which is why the fork's tags are `agentnotch-v<V>`.
 - To merge upstream:
   1. `git fetch upstream && git merge upstream/main`.
   2. Run `Scripts/check-seams.sh`. Every `SEAM` line it reports missing must be re-applied by hand
@@ -133,6 +183,12 @@ Packages/ClaudeControl/Scripts/embed-scripts.sh [--check]
   3. Run the full definition of done.
 - **Upstream files the fork edits** (all tagged `// Fork:`, listed in `Scripts/fork-seams.txt`):
   - `AppDelegate`, `Log`, `Updater`, `StatusItemSummary`;
+  - the fork's own updates (UPD): `Updater` (`feedURLString(for:)` always returns
+    `Fork.updateFeedURL`; the two copy lines name `Fork.releasesPageURL`; the five
+    `// Fork: updates off` guards stay), `AppDelegate` (`updater.start()` at launch; What's New
+    through `Fork.showWhatsNewIfNeeded`), `SettingsView` (the "Install updates automatically"
+    toggle is `.disabled(!Fork.updatesEnabled)`), and `Tests/UpdaterOutcomeTests.swift` (ALLOW;
+    the stalled-check copy names the releases page, never hivinz.com);
   - `UsageStore` (the `replaceProviders`/`ingest` block, U6);
   - `ProviderRing` (U7);
   - `NotchRootView`, `NotchViewModel`, `NotchWindowController` (U8–U10);
@@ -151,9 +207,16 @@ Packages/ClaudeControl/Scripts/embed-scripts.sh [--check]
   Codenotch phone app and upstream's Windows build (`Fork.upstreamProductPhrases`), and never
   inside interpolated user data. `check-seams.sh` fails on a new `"…Codenotch…"` literal outside
   `L10n.t`: after a merge, route it through `L10n.t` (or `Text(verbatim: Fork.displayName)`).
-- Sparkle auto-update is **off** (no feed keys). `FORBID` rules in `fork-seams.txt` keep it off
-  and keep `pkill -x Codenotch` out of the Makefile, so the fork can never install upstream
-  builds over itself or kill the official app.
+- **Sparkle runs only in release builds, from the fork's own feed.** `project.yml` and
+  `Sources/Info.plist` carry no feed or key (`FORBID SUFeedURL`/`SUPublicEDKey` there, and
+  `hivinz.com` in `Updater.swift` and `spm-build-app.sh`); only `spm-build-app.sh
+  --with-updates` injects them into the built bundle, and `Updater` hands Sparkle
+  `Fork.updateFeedURL` over any Info.plist or defaults value, so an upstream merge can't point
+  the app at upstream's feed (which would install the official Codenotch over it). `make
+  appcast` stays refused and `FORBID` keeps `pkill -x Codenotch` out of the Makefile, so the
+  fork never publishes upstream's feed or kills the official app. Upstream's What's New notes
+  are never shown (`Fork.showsUpstreamReleaseNotes`); release notes live on the fork's
+  releases.
 - **Upstream's rules still apply to upstream-style code** (see `CONTRIBUTING.md`):
   - comments explain *why*;
   - user-visible strings go through `L10n.t(…)` in upstream code (the fork's own UI is English-only);
@@ -272,6 +335,75 @@ Packages/ClaudeControl/Scripts/embed-scripts.sh [--check]
 - **Sealed:** `hub.cloud` is a signed-in fixture and every cloud action is a no-op; the bridge's
   browser step refuses to open.
 
+## Releases and updates
+
+- **Contract** (the app gate, `release-build.sh`, `release.yml` and the website's classifier all
+  depend on it; change them together):
+  - tag `agentnotch-v<V>`, title `Agent Notch <V>`;
+  - assets `AgentNotch-<V>.dmg` (UDZO, volume "Agent Notch", `/Applications` link),
+    `AgentNotch-<V>.zip` (the Sparkle enclosure, `ditto -c -k --sequesterRsrc --keepParent`) and
+    `appcast.xml`;
+  - the feed, fixed in the app: `https://github.com/rivantmedia/agentnotch/releases/latest/download/appcast.xml`;
+  - the appcast has one item: `sparkle:version` = `shortVersionString` = V,
+    `minimumSystemVersion` 15.0, `releaseNotesLink` `…/releases/tag/agentnotch-v<V>`, and an
+    enclosure `…/releases/download/agentnotch-v<V>/AgentNotch-<V>.zip` with length and
+    `sparkle:edSignature`. `hardwareRequirements` arm64 appears only with `--host-arch`.
+  - Never name a fork asset `Codenotch.dmg`: the README's upstream half links
+    `releases/latest/download/Codenotch.dmg` relatively.
+- **`release.yml`.**
+  - Triggers: a push to main that changes `VERSION` or `Scripts/sparkle-public-ed-key.txt` (the
+    first release goes out on the key commit), or `workflow_dispatch` (inputs `dry_run` and
+    `rotate_update_key`, labelled "Publish although the update key changed…"). Top-level
+    `contents: read`. Concurrency group `release` with `queue: max` and no cancelling: runs
+    queue first in, first out, dry runs in the same group, because `fork.yml`'s group
+    (`Release-<ref>` inside a Release run) cancels in progress.
+  - Job `checks` is `fork.yml` (`workflow_call`). Job `release` runs only in
+    rivantmedia/agentnotch, on macos-26 with `Xcode_26.6`, with `contents: write` and
+    `environment: release`, whose only deployment branch is main and which holds every secret.
+  - The plan step first fails any ref other than main, dry runs included. Then an already
+    published version is a green skip (a key-only push on a released version lands here), and
+    its own leftover draft is replaced. A foreign draft, the tag at another commit, a `VERSION`
+    below the latest `agentnotch-v*` release (`sort -V`), or a committed update key other than
+    the one at the latest release's tag (read through the contents API; unreadable is an error
+    too) is an error, the key one unless `rotate_update_key` is set. In a dry run each of these
+    is only a warning.
+  - With no `SPARKLE_ED_PRIVATE_KEY` or no committed public key, it fails with setup steps in
+    the run summary (the environment commands; a missing key file means pushing it to main,
+    since a re-run checks out the same commit; a missing secret alone means re-running).
+  - Otherwise it runs `release-build.sh` and creates a draft with the three assets. The notes
+    carry install steps (Gatekeeper/`xattr` only when not notarized) and the updates line,
+    plus `--generate-notes` from the previous tag. It checks each uploaded size, then
+    publishes with `--draft=false --latest`, then gives a warning-only check that the live
+    feed serves V.
+  - A dry run uploads the artifact `AgentNotch-<V>-dry-run` and publishes nothing.
+- **Secrets** (the maintainer makes them with `release-make-keys.sh`, never a session), all in
+  the `release` environment; a repository-level copy reaches every branch and should be deleted:
+  - `SPARKLE_ED_PRIVATE_KEY`: required; the base64 of the 32-byte seed.
+  - `MACOS_SIGNING_P12_BASE64` and `MACOS_SIGNING_P12_PASSWORD`: optional. A Developer ID, or
+    the self-signed identity from `--signing-cert`; a stable identity keeps TCC Automation and
+    keychain grants across updates.
+  - `APPLE_NOTARY_API_KEY_P8_BASE64`, `APPLE_NOTARY_API_KEY_ID` and
+    `APPLE_NOTARY_API_ISSUER_ID`: optional, all three or none, Developer ID only.
+  - Rotating the update key strands every install, whatever its code signature: with
+    `SUVerifyUpdateBeforeExtraction`, Sparkle checks the zip's EdDSA signature against the
+    installed app's `SUPublicEDKey` before unpacking it, and its only fallback needs the archive
+    itself to carry a Developer ID signature of the installed app's team, which a zip never
+    does. `release-make-keys.sh` refuses to rotate without `--rotate`.
+- **App side.**
+  - `Fork.updatesEnabled` gates everything. `updater.start()` runs at launch in the non-sealed
+    path (tests return earlier), and `feedURLString(for:)` pins the feed.
+  - With updates off, the General pane's toggle is disabled and Check now shows the "built
+    from source … Download the latest release from <releases page>" copy. The caption under
+    the toggle still says updates install in the background; it was left alone to keep the
+    seam to one line.
+  - Sparkle keeps its settings as `SU*` keys in the app's defaults domain, and its downloads in
+    `~/Library/Caches/com.rivantmedia.agentnotch/org.sparkle-project.Sparkle`. With the gate
+    closed it makes no controller, so no feed request is sent.
+- **Website:** `/download` and `/download/<platform>` (see Layout). Windows and Linux read "Not
+  available yet" until a release carries a matching asset (Windows `.exe`, `.msi`,
+  `.msix`/`.appx`; Linux `.AppImage`, `.deb`, `.rpm`; or an archive whose name says the
+  platform: `assetKind` in `web/src/lib/releases.ts`).
+
 ## Claude Parallel Profiles compatibility
 
 The maintainer runs the VS Code extension **Claude Parallel Profiles** (source in the sibling
@@ -310,3 +442,7 @@ Full list in the README's Development section and in `Engine/Core/DevFlags.swift
   aside, not deleted. Session summaries never run in a `--no-install` run.
 - **Sealed-only:** `AGENTNOTCH_OPEN_PANEL_ON_LAUNCH`, `AGENTNOTCH_PANEL_SELF_TEST`, `AGENTNOTCH_SNAPSHOT_CLAUDE`,
   `AGENTNOTCH_SEALED_SWITCH_OFF`, `AGENTNOTCH_SEALED_CAPTURE`.
+- **Updates:** no runtime switch. A copy updates itself only when it was built with
+  `--with-updates` (`Fork.updatesEnabled`). Build and release scripts take
+  `AGENTNOTCH_UPDATE_PUBLIC_KEY_FILE` (a throwaway public key file for tests) and
+  `SIGN_KEYCHAIN`.
