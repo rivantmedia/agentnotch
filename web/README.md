@@ -329,6 +329,16 @@ The rules are `src/lib/releases.ts`; the fetch is `src/server/releases.ts`.
   On Vercel, or any host whose outbound addresses are shared, other sites use the same
   allowance. A refusal isn't cached, so the buttons fall back to GitHub's releases page until
   the limit resets. Set `GITHUB_RELEASES_TOKEN` there.
+- **Refresh on release.** Right after publishing, the release workflow clears that cache, so a
+  new release shows at once: its `website` job posts its GitHub OIDC token to
+  `/api/releases/refresh`, which accepts only a token meant for this site (the origin of
+  `NEXT_PUBLIC_SITE_URL`) that names this repository, `main`, `release.yml` and the `release`
+  environment (`src/server/releases-refresh.ts`). No secret is shared. The job posts to the
+  repository variable `WEBSITE_URL`, or `https://agentnotch.rivant.in` when it isn't set; its
+  origin must be `NEXT_PUBLIC_SITE_URL`'s. A failed refresh is only a warning, and the 5 minutes
+  still apply. Running the Release workflow on `main` by hand refreshes too. Self-hosted on more
+  than one instance, the refresh clears only the one that answered, unless they share a cache
+  handler.
 - **The buttons** link to `/download/<platform>`, which redirects (302, never cached) to the
   file, and only to a file under `https://github.com/<repo>/releases/download/`. They are plain
   links, not `next/link`, which would prefetch the redirect. The landing page and the header

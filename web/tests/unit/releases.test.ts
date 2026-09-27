@@ -489,7 +489,10 @@ describe("fetchLatestRelease", () => {
     expect(call!.url).toBe(
       `https://api.github.com/repos/${REPO}/releases?per_page=5`,
     );
-    expect(call!.init.next).toEqual({ revalidate: 300 });
+    expect(call!.init.next).toEqual({
+      revalidate: 300,
+      tags: ["github-releases"],
+    });
     expect(call!.init.signal).toBeInstanceOf(AbortSignal);
     expect(call!.init.headers).toEqual({
       Accept: "application/vnd.github+json",

@@ -119,8 +119,9 @@ const TOKEN_ERRORS = [
 /**
  * null for a token that is bad; TokenCheckUnavailable for anything that stopped the check itself
  * (a key-set timeout, a failed or malformed fetch, or an unknown key id while jose won't refetch).
+ * Also used for the Release workflow's tokens (verify-release-run.ts).
  */
-function rejectOrUnavailable(
+export function rejectOrUnavailable(
   error: unknown,
   context: { keySetWasCurrent: boolean },
 ): null {

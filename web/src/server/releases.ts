@@ -19,6 +19,11 @@ import {
 } from "~/lib/releases";
 
 export const RELEASES_REVALIDATE_SECONDS = 300;
+/**
+ * The Data Cache tag on GitHub's answer. The Release workflow clears it once it has published
+ * (POST /api/releases/refresh), so a new release shows at once instead of within the 5 minutes.
+ */
+export const RELEASES_CACHE_TAG = "github-releases";
 
 // Five releases hold the latest published one unless drafts and prereleases pile up above it.
 // Each carries its notes, and Next skips caching an answer over about 2 MB.
@@ -66,7 +71,10 @@ export async function fetchLatestRelease({
       {
         headers,
         // Explicit, so it is cached even on these dynamic pages, and with a token.
-        next: { revalidate: RELEASES_REVALIDATE_SECONDS },
+        next: {
+          revalidate: RELEASES_REVALIDATE_SECONDS,
+          tags: [RELEASES_CACHE_TAG],
+        },
         signal: AbortSignal.timeout(timeoutMs),
       },
     );

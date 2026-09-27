@@ -9,9 +9,10 @@ export async function middleware(request: NextRequest) {
 export const config = {
   matcher: [
     /*
-     * Everything except static files, images and the Mac app's API (/api/app/*), which takes
-     * bearer tokens only and never reads or sets the website's cookies.
+     * Everything except static files, images, the Mac app's API (/api/app/*) and the Release
+     * workflow's refresh (/api/releases/*), which take bearer tokens only and never read or set
+     * the website's cookies.
      */
-    "/((?!_next/static|_next/image|favicon.ico|api/app/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|api/app/|api/releases/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
   ],
 };

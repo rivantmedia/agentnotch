@@ -374,3 +374,64 @@ jobs:
             sleep 10
           done
           echo "::warning::$feed does not serve $VERSION yet; check the Releases page."
+
+  # The website caches GitHub's list of releases for 5 minutes, so /download
+  # would go on offering the previous release (or none) for that long. This
+  # clears that cache. It runs after every run that isn't a dry run, a run that
+  # found its VERSION out already too, so starting Release on main by hand also
+  # refreshes the website.
+  #
+  # The job proves who is asking with its OIDC token, meant for the website and
+  # naming this repository, main, this workflow and the release environment
+  # (which only main can deploy to); the website checks it against GitHub's keys,
+  # so no secret is shared with it. A job of its own, so no step that builds or
+  # signs can mint such a token, and one that never fails the run: the cache
+  # expires by itself anyway.
+  website:
+    name: Refresh the website's download page
+    needs: release
+    if: needs.release.result == 'success' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    permissions:
+      id-token: write
+    environment: release
+    steps:
+      - name: Refresh
+        env:
+          # The website's address: its origin must be NEXT_PUBLIC_SITE_URL's.
+          WEBSITE: ${{ vars.WEBSITE_URL || 'https://agentnotch.rivant.in' }}
+        run: |
+          set -u
+          warn() { echo "::warning::$1 /download shows the latest release within 5 minutes anyway."; exit 0; }
+          # The origin, as the website reads NEXT_PUBLIC_SITE_URL's: lowercase
+          # scheme and host, no path, no default port.
+          origin="$(python3 - "$WEBSITE" <<'PY'
+          import sys, urllib.parse as u
+          p = u.urlsplit(sys.argv[1].strip())
+          default = {"https": 443, "http": 80}.get(p.scheme.lower())
+          if default and p.hostname:
+              port = f":{p.port}" if p.port and p.port != default else ""
+              print(f"{p.scheme.lower()}://{p.hostname}{port}")
+          PY
+          )" || origin=""
+          [[ -n "$origin" ]] || warn "WEBSITE ($WEBSITE) isn't a web address."
+          audience="$(jq -rn --arg a "$origin" '$a | @uri')"
+          if ! answer="$(curl -fsS --connect-timeout 10 --max-time 30 \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL:-}&audience=$audience")"; then
+            warn "GitHub gave no OIDC token."
+          fi
+          token="$(jq -r '.value // empty' <<< "$answer" 2>/dev/null || true)"
+          [[ -n "$token" ]] || warn "GitHub's OIDC answer had no token."
+          echo "::add-mask::$token"
+          body="$RUNNER_TEMP/refresh.json"
+          rm -f "$body"
+          status="$(curl -sS -o "$body" -w '%{http_code}' --connect-timeout 10 --max-time 30 \
+            -X POST -H "Authorization: Bearer $token" "$origin/api/releases/refresh" || true)"
+          if [[ "$status" == 200 ]]; then
+            echo "$origin/download refreshed"
+          else
+            warn "$origin/api/releases/refresh answered ${status:-nothing}: $(head -c 300 "$body" 2>/dev/null || true)."
+          fi
