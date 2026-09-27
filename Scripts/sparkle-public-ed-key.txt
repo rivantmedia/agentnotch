@@ -12,3 +12,4 @@
 # before unpacking it (SUVerifyUpdateBeforeExtraction), so the script refuses
 # to replace it without --rotate, and the Release workflow refuses to publish
 # with a key other than the latest release's unless a manual run says so.
+55iKOY/r3Z27KdS9aRn9224nmfsDSFc8X1isXMh9Tjs=
