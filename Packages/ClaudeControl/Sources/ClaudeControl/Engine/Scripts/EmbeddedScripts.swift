@@ -447,8 +447,8 @@ assistant message, with the session's status line JSON on stdin. It:
   installed this wrapper (saved next to this file in
   agentnotch-statusline.previous.json) with the same stdin;
 - while that runs, forwards a small subset (rate limits, context window,
-  model, cost, name) to Agent Notch.app over its Unix socket,
-  fire-and-forget;
+  model, cost, name, and the Claude Code process's pid) to Agent Notch.app
+  over its Unix socket, fire-and-forget;
 - then passes the previous command's output and exit code straight through.
   No previous command -> no output.
 
@@ -490,6 +490,22 @@ def as_dict(value):
     return value if isinstance(value, dict) else {}
 
 
+def claude_pid():
+    """PID of the Claude Code process from CLAUDE_PID, which Claude Code puts
+    in the environment of the commands it runs; None when it doesn't. The
+    rate limits in the status line belong to that process (the app tells a
+    re-run from news per process). No parent-pid fallback: this runs under a
+    shell."""
+    raw = os.environ.get("CLAUDE_PID")
+    if not raw:
+        return None
+    try:
+        pid = int(raw)
+    except ValueError:
+        return None
+    return pid if 0 < pid <= 2147483647 else None
+
+
 def build_message(raw):
     """The StatusLine event for the app, or None if stdin isn't a JSON object."""
     try:
@@ -507,6 +523,7 @@ def build_message(raw):
         "transcript_path": data.get("transcript_path"),
         "cwd": data.get("cwd"),
         "config_dir_env": os.environ.get("CLAUDE_CONFIG_DIR"),
+        "pid": claude_pid(),
         "status_line": {
             "rate_limits": data.get("rate_limits"),
             "context_window": {

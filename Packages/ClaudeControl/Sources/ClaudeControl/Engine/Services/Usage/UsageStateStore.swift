@@ -5,9 +5,11 @@
 //  What the usage store must remember across launches, in
 //  `<support>/usage-state.json`: per account, when Claude Code was last
 //  asked (so a relaunch doesn't probe early), the failure backoff (so a
-//  rate-limited account stays paused), and the last full reading (so the
-//  rings don't start empty). Nothing in it is a secret; the file is still
-//  written 0600 like everything else in the engine's folder.
+//  rate-limited account stays paused), the last full reading (so the
+//  rings don't start empty), and what each running Claude Code process last
+//  said in its status line (so a relaunch doesn't take its old numbers for
+//  news). Nothing in it is a secret; the file is still written 0600 like
+//  everything else in the engine's folder.
 //
 
 import Foundation
@@ -23,10 +25,21 @@ nonisolated struct UsageState: Codable, Equatable, Sendable {
         var nextAttemptAt: Date?
         /// The newest full reading (probe, `.claude.json` or Claude Desktop).
         var lastFullReading: AccountUsage?
+        /// The status line records of the account's Claude Code processes.
+        var statusLines: [StatusLine]?
 
         var isEmpty: Bool {
             lastProbeAt == nil && failureCount == 0 && nextAttemptAt == nil && lastFullReading == nil
+                && (statusLines ?? []).isEmpty
         }
+    }
+
+    /// One Claude Code process's status line record, under its key (pid and
+    /// start time), for the next run (see `UsageStore.restoreStatusLines`).
+    nonisolated struct StatusLine: Codable, Equatable, Sendable {
+        var folder: String
+        var key: String
+        var readings: UsageStore.StatusLineReadings
     }
 
     static let currentVersion = 1

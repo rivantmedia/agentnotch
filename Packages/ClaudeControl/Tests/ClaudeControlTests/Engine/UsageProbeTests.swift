@@ -220,11 +220,22 @@ struct UsageStoreLogicTests {
         UsageWindow(utilization: utilization, resetsAt: now.addingTimeInterval(3600), duration: duration)
     }
 
+    /// A weekly window that resets `resetIn` from `now`.
+    private func week(_ utilization: Double, resetIn: TimeInterval = 3 * 86400) -> UsageWindow {
+        UsageWindow(utilization: utilization, resetsAt: now.addingTimeInterval(resetIn), duration: UsageWindow.weeklyDuration)
+    }
+
+    /// A status line reading that arrived `at` seconds from `now`, taken
+    /// after `after` seconds from `now` when that is known.
+    private func reading(_ window: UsageWindow, at: TimeInterval, after: TimeInterval? = nil) -> UsageStore.Reading {
+        UsageStore.Reading(window, at: now.addingTimeInterval(at), notBefore: after.map { now.addingTimeInterval($0) })
+    }
+
     @Test func statusLineAloneMakesUsage() {
         let merged = UsageStore.merge(
             accountId: "a",
             full: nil,
-            statusFiveHour: (window(20), now),
+            statusFiveHour: reading(window(20), at: 0),
             statusSevenDay: nil
         )
         #expect(merged?.fiveHour == window(20))
@@ -249,8 +260,8 @@ struct UsageStoreLogicTests {
         let merged = UsageStore.merge(
             accountId: "a",
             full: full,
-            statusFiveHour: (window(25), now.addingTimeInterval(60)),
-            statusSevenDay: (window(20, UsageWindow.weeklyDuration), now.addingTimeInterval(-60))
+            statusFiveHour: reading(window(25), at: 60),
+            statusSevenDay: reading(window(20, UsageWindow.weeklyDuration), at: -60)
         )
         #expect(merged?.fiveHour == window(25))
         #expect(merged?.sevenDay == window(30, UsageWindow.weeklyDuration))
@@ -263,7 +274,7 @@ struct UsageStoreLogicTests {
 
     @Test func statusLineFillsAWindowTheSnapshotLacks() {
         let full = AccountUsage(accountId: "a", fiveHour: nil, sevenDay: window(30, UsageWindow.weeklyDuration), source: .cache, updatedAt: now)
-        let merged = UsageStore.merge(accountId: "a", full: full, statusFiveHour: (window(7), now.addingTimeInterval(-600)), statusSevenDay: nil)
+        let merged = UsageStore.merge(accountId: "a", full: full, statusFiveHour: reading(window(7), at: -600), statusSevenDay: nil)
         #expect(merged?.fiveHour == window(7))
         #expect(merged?.source == .cache)
         #expect(merged?.updatedAt == now)
@@ -277,24 +288,28 @@ struct UsageStoreLogicTests {
         let merged = UsageStore.merge(
             accountId: "a",
             full: full,
-            statusFiveHour: (window(40), now.addingTimeInterval(60)),
-            statusSevenDay: (window(28, UsageWindow.weeklyDuration), now.addingTimeInterval(60))
+            statusFiveHour: reading(window(40), at: 60),
+            statusSevenDay: reading(window(28, UsageWindow.weeklyDuration), at: 60)
         )
         #expect(merged?.fiveHour == window(55))
         #expect(merged?.sevenDay == window(30, UsageWindow.weeklyDuration))
         #expect(merged?.source == .probe)
         #expect(merged?.updatedAt == now)
+        // Even one that changed, when the change may predate the probe.
+        let straddling = UsageStore.merge(accountId: "a", full: full, statusFiveHour: reading(window(40), at: 60, after: -30),
+                                          statusSevenDay: nil)
+        #expect(straddling?.fiveHour == window(55))
     }
 
     @Test func aNewerWindowWinsEvenWhenLower() {
         let expired = UsageWindow(utilization: 80, resetsAt: now.addingTimeInterval(-600), duration: UsageWindow.sessionDuration)
         let fresh = UsageWindow(utilization: 5, resetsAt: now.addingTimeInterval(4 * 3600), duration: UsageWindow.sessionDuration)
         let full = AccountUsage(accountId: "a", fiveHour: expired, source: .cache, updatedAt: now)
-        let merged = UsageStore.merge(accountId: "a", full: full, statusFiveHour: (fresh, now.addingTimeInterval(-60)), statusSevenDay: nil)
+        let merged = UsageStore.merge(accountId: "a", full: full, statusFiveHour: reading(fresh, at: -60), statusSevenDay: nil)
         #expect(merged?.fiveHour == fresh)
         // ... and an older window never beats a newer one, whenever it arrived.
         let reversed = AccountUsage(accountId: "a", fiveHour: fresh, source: .probe, updatedAt: now)
-        #expect(UsageStore.merge(accountId: "a", full: reversed, statusFiveHour: (expired, now.addingTimeInterval(60)), statusSevenDay: nil)?.fiveHour == fresh)
+        #expect(UsageStore.merge(accountId: "a", full: reversed, statusFiveHour: reading(expired, at: 60), statusSevenDay: nil)?.fiveHour == fresh)
     }
 
     @Test func sameWindowToleratesRounding() {
@@ -305,21 +320,194 @@ struct UsageStoreLogicTests {
         #expect(UsageStore.isSameWindow(endpoint, statusLine))
         #expect(!UsageStore.isSameWindow(endpoint, nextWindow))
         #expect(!UsageStore.isSameWindow(endpoint, UsageWindow(utilization: 1, resetsAt: nil, duration: UsageWindow.sessionDuration)))
+        // A later reading a rounding step lower is no reset: the higher stays.
+        let full = AccountUsage(accountId: "a", fiveHour: endpoint, source: .probe, updatedAt: now)
+        #expect(UsageStore.merge(accountId: "a", full: full, statusFiveHour: reading(statusLine, at: -60), statusSevenDay: nil)?.fiveHour == statusLine)
     }
 
     @Test func repeatedReadingsKeepTheirTime() {
-        let first = (window: window(20), at: now)
+        let first = UsageStore.advance(nil, fiveHour: window(20), sevenDay: nil, receivedAt: now, startedAt: nil)
+        #expect(first.fiveHour == reading(window(20), at: 0))
         // The same numbers again (an idle session re-rendering): not news.
-        #expect(UsageStore.combine(stored: first, new: (window(20), now.addingTimeInterval(300))).at == now)
-        // Lower within the same window: another session's stale view.
-        #expect(UsageStore.combine(stored: first, new: (window(15), now.addingTimeInterval(300))).window == window(20))
+        let repeated = UsageStore.advance(first, fiveHour: window(20), sevenDay: nil, receivedAt: now.addingTimeInterval(300), startedAt: nil)
+        #expect(repeated.fiveHour == first.fiveHour)
+        #expect(repeated.lastReportAt == now.addingTimeInterval(300))
+        // A small step back (a response that started before the last one
+        // ended after it): the higher reading stays, with its time.
+        let stepBack = UsageStore.advance(repeated, fiveHour: window(20 - UsageStore.resetDropMinimum), sevenDay: nil,
+                                          receivedAt: now.addingTimeInterval(350), startedAt: nil)
+        #expect(stepBack.fiveHour == first.fiveHour)
+        #expect(stepBack.lastReportAt == now.addingTimeInterval(350))
+        // Different numbers, even lower by a reset: the process's own newer
+        // response, taken after the report before.
+        let lower = UsageStore.advance(stepBack, fiveHour: window(12), sevenDay: week(40), receivedAt: now.addingTimeInterval(400), startedAt: nil)
+        #expect(lower.fiveHour == reading(window(12), at: 400, after: 350))
+        #expect(lower.sevenDay == reading(week(40), at: 400, after: 350))
+        // A reset time that lost its fraction of a second (a relaunch) is the same.
+        var rounded = window(12)
+        rounded.resetsAt = Date(timeIntervalSince1970: rounded.resetsAt!.timeIntervalSince1970.rounded(.down) + 0.4)
+        #expect(UsageStore.advance(lower, fiveHour: rounded, sevenDay: week(40), receivedAt: now.addingTimeInterval(450), startedAt: nil).fiveHour
+            == lower.fiveHour)
+        #expect(!UsageStore.isRepeat(window(15), window(16)))
+        // A window the line leaves out keeps what it had.
+        #expect(UsageStore.advance(lower, fiveHour: nil, sevenDay: week(40), receivedAt: now.addingTimeInterval(500), startedAt: nil).fiveHour == lower.fiveHour)
+    }
+
+    /// Claude Code has no rate limits before a process's first API
+    /// response, so a process's first report is newer than the process.
+    @Test func aFirstReportIsNewerThanItsProcess() {
+        let first = UsageStore.advance(nil, fiveHour: nil, sevenDay: week(3), receivedAt: now, startedAt: now.addingTimeInterval(-60))
+        #expect(first.sevenDay == reading(week(3), at: 0, after: -60))
+        // A start time that isn't before the report is no bound.
+        let odd = UsageStore.advance(nil, fiveHour: nil, sevenDay: week(3), receivedAt: now, startedAt: now)
+        #expect(odd.sevenDay?.notBefore == nil)
+    }
+
+    @Test func readingsInUnknownOrderKeepTheOldRules() {
+        // Lower within the same window from a process whose data may be older: the higher stays.
+        #expect(UsageStore.mostCurrent([reading(window(20), at: 0), reading(window(15), at: 300)])?.window == window(20))
         // Higher: fresh.
-        let higher = UsageStore.combine(stored: first, new: (window(25), now.addingTimeInterval(300)))
-        #expect(higher.window == window(25) && higher.at == now.addingTimeInterval(300))
+        #expect(UsageStore.mostCurrent([reading(window(20), at: 0), reading(window(25), at: 300)])?.window == window(25))
         // No reset times to compare: arrival order decides.
-        let bare = (window: UsageWindow(utilization: 20, resetsAt: nil, duration: UsageWindow.sessionDuration), at: now)
-        let later = UsageStore.combine(stored: bare, new: (UsageWindow(utilization: 10, resetsAt: nil, duration: UsageWindow.sessionDuration), now.addingTimeInterval(1)))
-        #expect(later.window.utilization == 10)
+        let bare = { (value: Double) in UsageWindow(utilization: value, resetsAt: nil, duration: UsageWindow.sessionDuration) }
+        #expect(UsageStore.mostCurrent([reading(bare(20), at: 0), reading(bare(10), at: 1)])?.window == bare(10))
+        #expect(UsageStore.mostCurrent([]) == nil)
+    }
+
+    // MARK: Early resets
+
+    /// Anthropic reset the week early and kept the reset time: the probe
+    /// after it reads low, a status line from before it still says high.
+    @Test func aLaterSnapshotWinsAfterAnEarlyReset() {
+        // The reset time kept, moved a day later (inside the same-window
+        // tolerance), or moved two days earlier.
+        let shifts: [TimeInterval] = [0, 86400, -2 * 86400]
+        for shift in shifts {
+            let resetIn = 3 * 86400 + shift
+            let after = AccountUsage(accountId: "a", sevenDay: week(3, resetIn: resetIn), source: .probe, updatedAt: now)
+            let merged = UsageStore.merge(accountId: "a", full: after, statusFiveHour: nil,
+                                          statusSevenDay: reading(week(62), at: -600, after: -900))
+            #expect(merged?.sevenDay == week(3, resetIn: resetIn), "reset moved by \(Int(shift)) s")
+            #expect(merged?.source == .probe)
+        }
+    }
+
+    /// ...and the other way round: the reading kept from before the reset
+    /// (usage-state.json, an old cache) loses to a status line taken after it.
+    @Test func aLaterStatusLineWinsOverAnOlderSnapshot() {
+        let before = AccountUsage(accountId: "a", sevenDay: week(62), source: .cache, updatedAt: now)
+        // A process that changed after the snapshot, or started after it.
+        let merged = UsageStore.merge(accountId: "a", full: before, statusFiveHour: nil,
+                                      statusSevenDay: reading(week(3), at: 120, after: 60))
+        #expect(merged?.sevenDay == week(3))
+        #expect(merged?.updatedAt == now.addingTimeInterval(120))
+        // One that may have been taken before it (a re-run, a straddling change) doesn't.
+        #expect(UsageStore.merge(accountId: "a", full: before, statusFiveHour: nil,
+                                 statusSevenDay: reading(week(3), at: 120))?.sevenDay == week(62))
+        #expect(UsageStore.merge(accountId: "a", full: before, statusFiveHour: nil,
+                                 statusSevenDay: reading(week(3), at: 120, after: -60))?.sevenDay == week(62))
+    }
+
+    /// Two sessions: A keeps working through the reset, B went idle before
+    /// it and keeps re-rendering its old numbers.
+    @Test func anIdleSessionsOldNumbersDontOutliveTheReset() {
+        var a = UsageStore.advance(nil, fiveHour: nil, sevenDay: week(61), receivedAt: now, startedAt: nil)
+        let b = UsageStore.advance(nil, fiveHour: nil, sevenDay: week(62), receivedAt: now.addingTimeInterval(10), startedAt: nil)
+        a = UsageStore.advance(a, fiveHour: nil, sevenDay: week(61), receivedAt: now.addingTimeInterval(20), startedAt: nil)
+        func shown() -> UsageWindow? {
+            UsageStore.combinedStatus(["/w": UsageStore.readings(["pid:1": a, "pid:2": b], \.sevenDay)],
+                                      defaultFolder: "/h/.claude", mirrorsDefault: false)?.window
+        }
+        #expect(shown() == week(62))
+        // The reset; A's next response reads 3%.
+        a = UsageStore.advance(a, fiveHour: nil, sevenDay: week(3), receivedAt: now.addingTimeInterval(600), startedAt: nil)
+        #expect(shown() == week(3))
+        // B re-renders the same old numbers: still 3%.
+        let bAgain = UsageStore.advance(b, fiveHour: nil, sevenDay: week(62), receivedAt: now.addingTimeInterval(700), startedAt: nil)
+        #expect(UsageStore.combinedStatus(["/w": [a.sevenDay!], "/v": [bAgain.sevenDay!]],
+                                          defaultFolder: "/h/.claude", mirrorsDefault: false)?.window == week(3))
+        // Usage grows again after the reset.
+        a = UsageStore.advance(a, fiveHour: nil, sevenDay: week(4), receivedAt: now.addingTimeInterval(800), startedAt: nil)
+        #expect(UsageStore.combinedStatus(["/w": [a.sevenDay!], "/v": [bAgain.sevenDay!]],
+                                          defaultFolder: "/h/.claude", mirrorsDefault: false)?.window == week(4))
+    }
+
+    /// A reset that moves the reset time earlier: the reading known to be
+    /// later still wins, though its window resets first.
+    @Test func aResetThatMovesTheResetTimeEarlierIsFollowed() {
+        let before = reading(week(62, resetIn: 5 * 86400), at: 0, after: -60)
+        let after = reading(week(1, resetIn: 2 * 86400), at: 600, after: 300)
+        #expect(UsageStore.mostCurrent([before, after]) == after)
+        #expect(UsageStore.mostCurrent([after, before]) == after)
+        // Order unknown: the later reset still wins, as before.
+        #expect(UsageStore.mostCurrent([before, reading(week(1, resetIn: 2 * 86400), at: 600)]) == before)
+    }
+
+    @Test func supersedesIsStrictAndNeverMutual() {
+        let snapshot = UsageStore.Reading(week(3), at: now, notBefore: now)
+        // A point in time doesn't supersede itself, nor a reading from the same moment.
+        #expect(!UsageStore.supersedes(snapshot, snapshot))
+        #expect(!UsageStore.supersedes(snapshot, reading(week(62), at: 0)))
+        #expect(UsageStore.supersedes(snapshot, reading(week(62), at: -1)))
+        // The reading with the latest arrival is never out; a later one a
+        // point lower is no reset, so the higher stays.
+        let readings = [snapshot, reading(week(62), at: -1), reading(week(5), at: 30, after: -10), reading(week(4), at: 60, after: 30)]
+        #expect(UsageStore.mostCurrent(readings) == reading(week(5), at: 30, after: -10))
+        for x in readings {
+            for y in readings where UsageStore.supersedes(x, y) {
+                #expect(!UsageStore.supersedes(y, x))
+            }
+        }
+    }
+
+    @Test func statusLineKeyIsTheProcessWhenKnown() {
+        #expect(UsageStore.statusLineKey(sessionId: "s1", processId: 4242) == "pid:4242")
+        #expect(UsageStore.statusLineKey(sessionId: "s1", processId: nil) == "session:s1")
+    }
+
+    /// A response that started before a probe and ended after it: its
+    /// process reports numbers a little older than the probe's, as news.
+    /// Only a reset-sized drop overrides the higher reading.
+    @Test func aSmallDropIsNoResetEvenWhenLater() {
+        let probe = AccountUsage(accountId: "a", sevenDay: week(42), source: .probe, updatedAt: now)
+        #expect(UsageStore.merge(accountId: "a", full: probe, statusFiveHour: nil,
+                                 statusSevenDay: reading(week(40), at: 60, after: 30))?.sevenDay == week(42))
+        #expect(UsageStore.merge(accountId: "a", full: probe, statusFiveHour: nil,
+                                 statusSevenDay: reading(week(42 - UsageStore.resetDropMinimum), at: 60, after: 30))?.sevenDay == week(42))
+        #expect(UsageStore.merge(accountId: "a", full: probe, statusFiveHour: nil,
+                                 statusSevenDay: reading(week(36), at: 60, after: 30))?.sevenDay == week(36))
+    }
+
+    /// The snapshot and every process's reading are weighed together: one
+    /// process known to be newer than the snapshot puts it out, even when
+    /// another process's reading is what shows.
+    @Test func theSnapshotAndEveryStatusLineAreWeighedTogether() {
+        let full = AccountUsage(accountId: "a", sevenDay: week(10), source: .probe, updatedAt: now)
+        let lines = [reading(week(5), at: 100, after: -50), reading(week(3), at: 60, after: 30)]
+        #expect(UsageStore.merge(accountId: "a", full: full, statusFiveHour: [], statusSevenDay: lines)?.sevenDay == week(5))
+        #expect(UsageStore.winningStatus(lines, over: UsageStore.Reading(week(10), of: full)) == lines[0])
+        // Neither line alone is known newer than the snapshot... than 5 is.
+        #expect(UsageStore.winningStatus([lines[0]], over: UsageStore.Reading(week(10), of: full)) == nil)
+    }
+
+    /// A snapshot is known newer only than its `takenAfter` (a probe's
+    /// launch, a margin for Claude Desktop's date), never after its `updatedAt`.
+    @Test func aSnapshotIsDatedFromItsTakenAfter() {
+        var snapshot = AccountUsage(accountId: "a", sevenDay: week(3), source: .probe, updatedAt: now)
+        #expect(UsageStore.Reading(week(3), of: snapshot) == UsageStore.Reading(week(3), at: now, notBefore: now))
+        snapshot.takenAfter = now.addingTimeInterval(-5)
+        #expect(UsageStore.Reading(week(3), of: snapshot).notBefore == now.addingTimeInterval(-5))
+        snapshot.takenAfter = now.addingTimeInterval(5)
+        #expect(UsageStore.Reading(week(3), of: snapshot).notBefore == now)
+        // A probe's answer came after its launch.
+        let answer = UsageStore.interpretProbeAnswer(ParsedUsage(sevenDay: week(3)), accountId: "a", now: now, cachedCopy: nil,
+                                                     launchedAt: now.addingTimeInterval(-4))
+        #expect(answer.snapshot?.takenAfter == now.addingTimeInterval(-4))
+        // A status line that arrived while the probe ran is not known older than it.
+        let during = reading(week(62), at: -2, after: -30)
+        let probe = UsageStore.Reading(week(3), of: answer.snapshot!)
+        #expect(!UsageStore.supersedes(probe, during))
+        #expect(UsageStore.supersedes(probe, reading(week(62), at: -5)))
     }
 
     @Test func cachePollKeepsTheProbesVerdict() {

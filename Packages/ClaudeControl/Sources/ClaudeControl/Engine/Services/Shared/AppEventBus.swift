@@ -45,6 +45,9 @@ nonisolated struct StatusLineUpdate: Sendable, Equatable {
     let costUSD: Double?
     let sessionName: String?
     let claudeCodeVersion: String?
+    /// The Claude Code process (`CLAUDE_PID`), when its environment names it.
+    /// Rate limits are per process, not per session.
+    var processId: Int? = nil
 }
 
 /// A place in the opened notch panel that another component wants to show,

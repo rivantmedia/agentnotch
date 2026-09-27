@@ -225,16 +225,20 @@ struct PPFix_AttributionTests {
     @Test func ownFoldersReplaceAReadingThatCameThroughTheDefault() {
         let now = Date()
         func reading(_ value: Double, reset: TimeInterval, at: TimeInterval) -> UsageStore.Reading {
-            (UsageWindow(utilization: value, resetsAt: now.addingTimeInterval(reset), duration: UsageWindow.sessionDuration),
-             now.addingTimeInterval(at))
+            UsageStore.Reading(UsageWindow(utilization: value, resetsAt: now.addingTimeInterval(reset), duration: UsageWindow.sessionDuration),
+                               at: now.addingTimeInterval(at))
         }
         let viaDefault = reading(70, reset: 4 * 3600, at: 10)
         let own = reading(12, reset: 3600, at: 20)
-        #expect(UsageStore.combinedStatus(["/h/.claude": viaDefault, "/h/w": own], defaultFolder: "/h/.claude", mirrorsDefault: true)?.window.utilization == 12)
-        #expect(UsageStore.combinedStatus(["/h/.claude": reading(70, reset: 4 * 3600, at: 30), "/h/w": own],
+        #expect(UsageStore.combinedStatus(["/h/.claude": [viaDefault], "/h/w": [own]], defaultFolder: "/h/.claude", mirrorsDefault: true)?.window.utilization == 12)
+        #expect(UsageStore.combinedStatus(["/h/.claude": [reading(70, reset: 4 * 3600, at: 30)], "/h/w": [own]],
                                           defaultFolder: "/h/.claude", mirrorsDefault: true)?.window.utilization == 70)
+        // Per process: only the ~/.claude readings the own folders came after are out.
+        #expect(UsageStore.combinedStatus(["/h/.claude": [reading(90, reset: 4 * 3600, at: 10), reading(80, reset: 4 * 3600, at: 30)],
+                                           "/h/w": [own]],
+                                          defaultFolder: "/h/.claude", mirrorsDefault: true)?.window.utilization == 80)
         // Without the extension, the most current reading wins, as always.
-        #expect(UsageStore.combinedStatus(["/h/.claude": viaDefault, "/h/w": own], defaultFolder: "/h/.claude", mirrorsDefault: false)?.window.utilization == 70)
+        #expect(UsageStore.combinedStatus(["/h/.claude": [viaDefault], "/h/w": [own]], defaultFolder: "/h/.claude", mirrorsDefault: false)?.window.utilization == 70)
     }
 
     /// The hub and the socket server read the same rule off the main thread.

@@ -113,6 +113,7 @@ nonisolated struct StatusLineScriptTests {
             "AGENTNOTCH_SOCKET": socket,
             "AGENTNOTCH_DEV": "1",
             "CLAUDE_CONFIG_DIR": "/Users/u/.claude-work",
+            "CLAUDE_PID": "4242",
         ]
         let input = Pipe()
         let output = Pipe()
@@ -150,6 +151,8 @@ nonisolated struct StatusLineScriptTests {
         #expect(message["transcript_path"] as? String == "/Users/u/.claude-work/projects/-Users-u-proj/sess-1.jsonl")
         #expect(message["cwd"] as? String == "/Users/u/proj")
         #expect(message["config_dir_env"] as? String == "/Users/u/.claude-work")
+        // The Claude Code process, whose rate limits these are.
+        #expect(message["pid"] as? Int == 4242)
 
         let statusLine = try #require(message["status_line"] as? [String: Any])
         #expect(Set(statusLine.keys) == ["rate_limits", "context_window", "model", "cost", "session_name", "version"])
@@ -331,5 +334,7 @@ nonisolated struct StatusLineScriptTests {
         let object = try JSONSerialization.jsonObject(with: message) as? [String: Any]
         #expect(object?["event"] as? String == "StatusLine")
         #expect(object?["session_id"] as? String == "sess-1")
+        // No CLAUDE_PID in this environment: no pid, and no guess.
+        #expect(object?["pid"] is NSNull)
     }
 }

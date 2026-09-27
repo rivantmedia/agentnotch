@@ -126,6 +126,7 @@ struct HookEventDecodingTests {
             "cwd": "/Users/me/proj",
             "transcript_path": "/Users/me/.claude/projects/-Users-me-proj/abc.jsonl",
             "config_dir_env": NSNull(),
+            "pid": 4242,
             "status_line": [
                 "rate_limits": [
                     "five_hour": ["used_percentage": 42.5, "resets_at": 1_800_000_000],
@@ -156,6 +157,7 @@ struct HookEventDecodingTests {
         #expect(update.costUSD == 1.25)
         #expect(update.sessionName == "Fix login")
         #expect(update.claudeCodeVersion == "2.1.280")
+        #expect(update.processId == 4242)
         #expect(statusLine.configDirEnv == nil)
     }
 
@@ -166,6 +168,16 @@ struct HookEventDecodingTests {
         }
         #expect(statusLine.update.fiveHour == nil)
         #expect(statusLine.update.contextUsedPercent == nil)
+        // No pid (an older wrapper, or no CLAUDE_PID): keyed by session instead.
+        #expect(statusLine.update.processId == nil)
+        // 2^63 once trapped converting to Int; above pid_t's range is no pid either.
+        for bad: Any in [NSNull(), 0, -3, "x", true, 9_223_372_036_854_775_808.0, UInt64(1) << 63, Int(Int32.max) + 1] {
+            guard case .statusLine(let other)? = try decode(["event": "StatusLine", "session_id": "abc", "pid": bad, "status_line": [:]]) else {
+                Issue.record("not a status line")
+                return
+            }
+            #expect(other.update.processId == nil, "pid \(bad)")
+        }
     }
 
     @Test func permissionResponseEncodesNewShape() throws {

@@ -30,9 +30,11 @@
 //     right before and after the probe; an answer from a folder that changed
 //     hands meanwhile is thrown away. An identity with no run folder is not
 //     probed; its passive data shows with its age.
-//  Per window the most current reading wins (see `isMoreCurrent`); model-scoped
-//  limits and extra usage come from the latest full snapshot (a cache, Claude
-//  Desktop or the probe). A fresh reading from any source holds off the probe.
+//  Per window the most current reading wins: one known to have been taken
+//  after the others, even when lower (an early reset), else the likeliest
+//  (see `mostCurrent`); model-scoped limits and extra usage come from the
+//  latest full snapshot (a cache, Claude Desktop or the probe). A fresh
+//  reading from any source holds off the probe.
 //
 //  Probes run one at a time, at most every 5 minutes per account on their own
 //  schedule (the usage endpoint answers 429 to tighter polling), with
@@ -95,8 +97,14 @@ final class UsageStore: ObservableObject {
     /// A seeded probe answer dated by `.claude.json` within this long of the
     /// probe is Claude Code's own fresh cache, not a fallback.
     nonisolated static let seededFreshWindow: TimeInterval = 90
-    /// Persisted state is written this long after the last change.
+    /// Persisted state is written this long after the last change...
     nonisolated static let stateSaveDelay: TimeInterval = 2
+    /// ...or this long after one that only a status line brought.
+    nonisolated static let statusLineSaveDelay: TimeInterval = 30
+    /// Claude Desktop's readings are dated by the server's `Date:` (whole
+    /// seconds, the server's clock) or the cache file: known newer only than
+    /// this much before that.
+    nonisolated static let externalClockAllowance: TimeInterval = 60
     /// A check thrown away because its folder changed hands is tried again
     /// after this long at the earliest.
     nonisolated static let discardRetryDelay: TimeInterval = 60
@@ -121,8 +129,29 @@ final class UsageStore: ObservableObject {
         return DevFlags.usageProbeOnDevRun
     }
 
-    /// A status line window and when the app last saw it change.
-    typealias Reading = (window: UsageWindow, at: Date)
+    /// A reading of one window and what is known of when it was taken: after
+    /// `notBefore` (when known), at `at` at the latest. A full snapshot's
+    /// time is its `updatedAt` (from its `takenAfter`); a status line's is
+    /// dated by `advance`.
+    nonisolated struct Reading: Codable, Equatable, Sendable {
+        var window: UsageWindow
+        /// The latest the data can be from.
+        var at: Date
+        /// The data is newer than this; nil when that is unknown.
+        var notBefore: Date?
+
+        init(_ window: UsageWindow, at: Date, notBefore: Date? = nil) {
+            self.window = window
+            self.at = at
+            self.notBefore = notBefore
+        }
+
+        /// A full snapshot's window, taken when the snapshot was.
+        init(_ window: UsageWindow, of snapshot: AccountUsage) {
+            self.init(window, at: snapshot.updatedAt,
+                      notBefore: min(snapshot.takenAfter ?? snapshot.updatedAt, snapshot.updatedAt))
+        }
+    }
 
     /// One probe to run: the account and the folders Claude Code's binary is
     /// looked for next to.
@@ -138,6 +167,10 @@ final class UsageStore: ObservableObject {
 
     /// When a session's Claude Code process started (from the session list).
     typealias SessionStart = @MainActor (String) -> Date?
+    /// When a process started, from the kernel; nil when it isn't running.
+    typealias ProcessStart = @MainActor (Int) -> Date?
+    /// The Claude Code process a session's hooks name (from the session list).
+    typealias SessionProcess = @MainActor (String) -> Int?
 
     // MARK: - Dependencies
 
@@ -151,6 +184,8 @@ final class UsageStore: ObservableObject {
     private let clock: () -> Date
     private let refreshWaitLimit: TimeInterval
     private let sessionStartedAt: SessionStart
+    private let processStartedAt: ProcessStart
+    private let sessionProcessId: SessionProcess
 
     /// Claude Desktop's cache, when the host provides one.
     private var externalSource: (any ClaudeExternalUsageSource)? {
@@ -164,13 +199,16 @@ final class UsageStore: ObservableObject {
 
     /// Latest full snapshot (cache, Claude Desktop or probe) per account.
     private var fullSnapshots: [String: AccountUsage] = [:]
-    /// A folder's most current status line windows, with when they last changed.
-    struct StatusLineReadings {
+    /// What one Claude Code process last said in its status line: its
+    /// windows, dated by `advance`, and when it last reported.
+    nonisolated struct StatusLineReadings: Codable, Equatable, Sendable {
+        var lastReportAt: Date
         var fiveHour: Reading?
         var sevenDay: Reading?
     }
-    /// Per account, per folder the sessions ran in.
-    private var statusLine: [String: [String: StatusLineReadings]] = [:]
+    /// Per account, per folder the sessions ran in, per Claude Code process
+    /// (`statusLineKey`).
+    private var statusLine: [String: [String: [String: StatusLineReadings]]] = [:]
     /// Who each folder ran as when last seen (a reading from a folder that
     /// changed hands since is dropped).
     private var identityOfFolder: [String: String] = [:]
@@ -202,6 +240,8 @@ final class UsageStore: ObservableObject {
     private var schedulerTask: Task<Void, Never>?
     private var probeTask: Task<Void, Never>?
     private var saveTask: Task<Void, Never>?
+    /// When the pending `saveTask` writes.
+    private var saveDueAt: Date?
     private var cachePollInFlight = false
 
     /// - Parameters:
@@ -220,7 +260,9 @@ final class UsageStore: ObservableObject {
         automaticProbes: Bool? = nil,
         refreshWaitLimit: TimeInterval = UsageStore.refreshWaitLimit,
         clock: @escaping () -> Date = { Date() },
-        sessionStartedAt: SessionStart? = nil
+        sessionStartedAt: SessionStart? = nil,
+        processStartedAt: ProcessStart? = nil,
+        sessionProcessId: SessionProcess? = nil
     ) {
         self.registry = registry ?? .shared
         self.configReader = configReader
@@ -233,6 +275,10 @@ final class UsageStore: ObservableObject {
         self.clock = clock
         self.sessionStartedAt = sessionStartedAt ?? { id in
             ClaudeSessionMonitor.shared.instances.first { $0.sessionId == id }?.pidStartedAt
+        }
+        self.processStartedAt = processStartedAt ?? { pid in ProcessInspector.startDate(pid: pid) }
+        self.sessionProcessId = sessionProcessId ?? { id in
+            ClaudeSessionMonitor.shared.instances.first { $0.sessionId == id }?.pid
         }
     }
 
@@ -300,6 +346,7 @@ final class UsageStore: ObservableObject {
     func saveStateNow() {
         saveTask?.cancel()
         saveTask = nil
+        saveDueAt = nil
         stateStore.saveNow(persistedState())
     }
 
@@ -331,24 +378,42 @@ final class UsageStore: ObservableObject {
     /// An account's status line window over every folder its sessions ran
     /// in (see `combinedStatus`).
     private func statusReading(_ accountId: String, _ window: KeyPath<StatusLineReadings, Reading?>) -> Reading? {
-        guard let folders = statusLine[accountId] else { return nil }
-        return Self.combinedStatus(folders.compactMapValues { $0[keyPath: window] },
-                                   defaultFolder: AccountRegistry.defaultConfigDir(home: registry.homePath),
-                                   mirrorsDefault: registry.mirrorsDefault)
+        Self.mostCurrent(statusCandidates(accountId, window))
     }
 
-    /// The most current reading of a window over the folders an account's
-    /// sessions ran in. While Claude Parallel Profiles mirrors accounts into
-    /// `~/.claude`, a reading that came through `~/.claude` counts only
-    /// until one from the account's own folders (its VS Code windows,
-    /// standalone folders) arrives after it. Pure.
-    nonisolated static func combinedStatus(_ byFolder: [String: Reading], defaultFolder: String, mirrorsDefault: Bool) -> Reading? {
+    /// The status line readings of an account's window that count (see
+    /// `statusCandidates(_:defaultFolder:mirrorsDefault:)`).
+    private func statusCandidates(_ accountId: String, _ window: KeyPath<StatusLineReadings, Reading?>) -> [Reading] {
+        guard let folders = statusLine[accountId] else { return [] }
+        return Self.statusCandidates(folders.mapValues { Self.readings($0, window) },
+                                     defaultFolder: AccountRegistry.defaultConfigDir(home: registry.homePath),
+                                     mirrorsDefault: registry.mirrorsDefault)
+    }
+
+    /// One window of a folder's processes, in a fixed order. Pure.
+    nonisolated static func readings(_ processes: [String: StatusLineReadings],
+                                     _ window: KeyPath<StatusLineReadings, Reading?>) -> [Reading] {
+        processes.sorted { $0.key < $1.key }.compactMap { $0.value[keyPath: window] }
+    }
+
+    /// The readings of a window from the folders an account's sessions ran
+    /// in (one per Claude Code process) that count, in a fixed order. While
+    /// Claude Parallel Profiles mirrors accounts into `~/.claude`, a reading
+    /// that came through `~/.claude` counts only until one from the
+    /// account's own folders (its VS Code windows, standalone folders)
+    /// arrives after it. Pure.
+    nonisolated static func statusCandidates(_ byFolder: [String: [Reading]], defaultFolder: String, mirrorsDefault: Bool) -> [Reading] {
         var readings = byFolder
         if mirrorsDefault, let viaDefault = readings[defaultFolder],
-           let newestOwn = readings.filter({ $0.key != defaultFolder }).map(\.value.at).max(), newestOwn >= viaDefault.at {
-            readings.removeValue(forKey: defaultFolder)
+           let newestOwn = readings.filter({ $0.key != defaultFolder }).flatMap(\.value).map(\.at).max() {
+            readings[defaultFolder] = viaDefault.filter { $0.at > newestOwn }
         }
-        return readings.sorted { $0.key < $1.key }.reduce(nil) { stored, entry in combine(stored: stored, new: entry.value) }
+        return readings.sorted { $0.key < $1.key }.flatMap(\.value)
+    }
+
+    /// The most current of those readings (see `mostCurrent`). Pure.
+    nonisolated static func combinedStatus(_ byFolder: [String: [Reading]], defaultFolder: String, mirrorsDefault: Bool) -> Reading? {
+        mostCurrent(statusCandidates(byFolder, defaultFolder: defaultFolder, mirrorsDefault: mirrorsDefault))
     }
 
     /// How old a reading may get before it shows as stale, for the current
@@ -470,22 +535,29 @@ final class UsageStore: ObservableObject {
             return
         }
 
-        var readings = statusLine[accountId]?[folderId] ?? StatusLineReadings()
-        if let window = update.fiveHour {
-            readings.fiveHour = Self.combine(stored: readings.fiveHour, new: (window, update.receivedAt))
-        }
-        if let window = update.sevenDay {
-            readings.sevenDay = Self.combine(stored: readings.sevenDay, new: (window, update.receivedAt))
-        }
-        statusLine[accountId, default: [:]][folderId] = readings
+        let processId = trustedProcessId(update)
+        let startedAt = processId.flatMap(processStartedAt)
+        let process = Self.statusLineKey(sessionId: update.sessionId, processId: processId, startedAt: startedAt)
+        let previous = statusLine[accountId]?[folderId]?[process]
+        let readings = Self.advance(previous, fiveHour: update.fiveHour, sevenDay: update.sevenDay,
+                                    receivedAt: update.receivedAt, startedAt: previous == nil ? startedAt : nil)
+        statusLine[accountId, default: [:]][folderId, default: [:]][process] = readings
         publish(accountId)
-        // For the history: the windows this line brought (not a repeat).
-        var taken: [CloudSyncRequest.UsageWindow] = []
-        if let window = update.fiveHour, readings.fiveHour?.at == update.receivedAt, window.utilization.isFinite {
-            taken.append(.init(id: UsageRingWindows.sessionID, utilization: window.utilization, resetsAt: window.resetsAt))
+        if readings.fiveHour != previous?.fiveHour || readings.sevenDay != previous?.sevenDay {
+            // Kept for the next run, so a relaunch doesn't take a process's
+            // old numbers for news; not urgent.
+            scheduleSave(after: Self.statusLineSaveDelay)
         }
-        if let window = update.sevenDay, readings.sevenDay?.at == update.receivedAt, window.utilization.isFinite {
-            taken.append(.init(id: UsageRingWindows.weeklyID, utilization: window.utilization, resetsAt: window.resetsAt))
+        // For the history: the windows this line brought (not a repeat) that
+        // the account now shows, as the old per-folder rule did for a folder.
+        var taken: [CloudSyncRequest.UsageWindow] = []
+        if let reading = readings.fiveHour, reading.at == update.receivedAt, reading.window.utilization.isFinite,
+           isShown(reading, accountId: accountId, \.fiveHour, \.fiveHour) {
+            taken.append(.init(id: UsageRingWindows.sessionID, utilization: reading.window.utilization, resetsAt: reading.window.resetsAt))
+        }
+        if let reading = readings.sevenDay, reading.at == update.receivedAt, reading.window.utilization.isFinite,
+           isShown(reading, accountId: accountId, \.sevenDay, \.sevenDay) {
+            taken.append(.init(id: UsageRingWindows.weeklyID, utilization: reading.window.utilization, resetsAt: reading.window.resetsAt))
         }
         if !taken.isEmpty {
             observations.send(UsageObservation(identityId: accountId, source: .statusLine,
@@ -511,14 +583,51 @@ final class UsageStore: ObservableObject {
         return abs(left.timeIntervalSince(right)) < min(lhs.duration, rhs.duration) / 4
     }
 
-    /// Whether `candidate` is a more current reading of a window than `other`.
+    /// A reading of the same window known to be later, but lower, counts
+    /// only when lower by more than this many points (what the website's
+    /// chart takes for a reset too). A smaller drop is rounding (the usage
+    /// endpoint's 9 against a status line's 9.4), or a response that started
+    /// before the other reading and ended after it: Claude Code takes a
+    /// response's rate limits from its headers but applies them when it
+    /// ends, so a process's new numbers can be older than its last report.
+    nonisolated static let resetDropMinimum: Double = 5
+
+    /// Whether `candidate` is known to have been taken after `other`, and so
+    /// wins whatever its numbers say. Usage can come down within a window:
+    /// Anthropic resets limits early and keeps the reset time (Claude Code's
+    /// own `/limit-reset` keeps "your weekly reset day"), and only the
+    /// reading after the reset is right. Not, though, for a reading of a
+    /// window that had already reset when it was taken (the usage endpoint
+    /// can still answer with the ended window): that says nothing about a
+    /// later one. Nor for a small drop (`isSmallDrop`). Pure.
+    nonisolated static func supersedes(_ candidate: Reading, _ other: Reading) -> Bool {
+        guard let notBefore = candidate.notBefore, notBefore >= other.at, candidate.at > other.at else { return false }
+        if let reset = candidate.window.resetsAt, reset <= notBefore,
+           let otherReset = other.window.resetsAt, otherReset > reset {
+            return false
+        }
+        return !isSmallDrop(from: other.window, to: candidate.window)
+    }
+
+    /// `lower` is the same window as `higher`, lower by no more than
+    /// `resetDropMinimum`: rounding or a late response, not a reset. Pure.
+    nonisolated static func isSmallDrop(from higher: UsageWindow, to lower: UsageWindow) -> Bool {
+        guard isSameWindow(higher, lower) else { return false }
+        let drop = higher.utilization - lower.utilization
+        return drop > 0 && drop <= resetDropMinimum
+    }
+
+    /// Whether `candidate` is a more current reading of a window than `other`
+    /// when neither is known to have been taken after the other (see
+    /// `supersedes`).
     ///
     /// Arrival time alone can't decide: a status line re-run (a permission-mode
     /// change, a `refreshInterval` tick, an idle session) repeats whatever that
     /// session's last API response said, possibly hours ago. So the data decides
     /// first: a later reset means a newer window, and within one window usage
-    /// only grows, so the higher reading is the more recent. Arrival time breaks
-    /// ties and covers readings without a reset time.
+    /// only grows short of an early reset, so the higher reading is the likelier
+    /// the more recent. Arrival time breaks ties and covers readings without a
+    /// reset time.
     nonisolated static func isMoreCurrent(_ candidate: Reading, than other: Reading) -> Bool {
         if let candidateReset = candidate.window.resetsAt, let otherReset = other.window.resetsAt {
             if !isSameWindow(candidate.window, other.window) {
@@ -531,13 +640,114 @@ final class UsageStore: ObservableObject {
         return candidate.at > other.at
     }
 
-    /// Fold a new status line reading into the stored one. A reading equal to
-    /// the stored one keeps the stored time, so a session repeating stale rate
-    /// limits neither looks fresh nor holds off the probe. Pure.
-    nonisolated static func combine(stored: Reading?, new: Reading) -> Reading {
-        guard let stored else { return new }
-        if stored.window == new.window { return stored }
-        return isMoreCurrent(new, than: stored) ? new : stored
+    /// The most current of several readings of a window: any known to have
+    /// been taken before another is out, and `isMoreCurrent` picks among the
+    /// rest, whose order is unknown (of two even that can't tell apart, the
+    /// one listed first). The latest `at` is never out, so a non-empty list
+    /// always has an answer. Pure.
+    nonisolated static func mostCurrent(_ readings: [Reading]) -> Reading? {
+        mostCurrentIndex(readings).map { readings[$0] }
+    }
+
+    /// Where in `readings` the most current one is (see `mostCurrent`). Pure.
+    nonisolated static func mostCurrentIndex(_ readings: [Reading]) -> Int? {
+        readings.indices
+            .filter { index in !readings.contains { supersedes($0, readings[index]) } }
+            .reduce(nil) { best, index in
+                guard let best else { return index }
+                return isMoreCurrent(readings[index], than: readings[best]) ? index : best
+            }
+    }
+
+    /// A Claude Code process's status line record after it reported
+    /// `fiveHour`/`sevenDay` at `receivedAt`. Its rate limits are its own
+    /// latest API response's (one set per process, replaced by each newer
+    /// response, even a lower one; none before its first response), and a
+    /// status line re-run repeats them however old. So:
+    /// - the same window again is no news: the reading keeps its time, so a
+    ///   process repeating stale rate limits neither looks fresh nor holds
+    ///   off the probe;
+    /// - a different one came from a response applied after the previous
+    ///   report (its numbers may still be older: see `resetDropMinimum`), so
+    ///   a small drop (`isSmallDrop`) is not taken, and the higher reading
+    ///   keeps its time;
+    /// - a process's first report is newer than the process (`startedAt`,
+    ///   from the kernel), when that is known. Pure.
+    nonisolated static func advance(
+        _ record: StatusLineReadings?,
+        fiveHour: UsageWindow?,
+        sevenDay: UsageWindow?,
+        receivedAt: Date,
+        startedAt: Date?
+    ) -> StatusLineReadings {
+        let notBefore = (record?.lastReportAt ?? startedAt).flatMap { $0 < receivedAt ? $0 : nil }
+        func next(_ stored: Reading?, _ window: UsageWindow?) -> Reading? {
+            guard let window else { return stored }
+            if let stored, isRepeat(stored.window, window) || isSmallDrop(from: stored.window, to: window) { return stored }
+            return Reading(window, at: receivedAt, notBefore: notBefore)
+        }
+        return StatusLineReadings(
+            lastReportAt: max(record?.lastReportAt ?? receivedAt, receivedAt),
+            fiveHour: next(record?.fiveHour, fiveHour),
+            sevenDay: next(record?.sevenDay, sevenDay)
+        )
+    }
+
+    /// The same numbers again. Reset times within a second are the same
+    /// (`usage-state.json` keeps whole seconds; Claude Code sends whole
+    /// seconds). Pure.
+    nonisolated static func isRepeat(_ lhs: UsageWindow, _ rhs: UsageWindow) -> Bool {
+        guard lhs.utilization == rhs.utilization, lhs.duration == rhs.duration else { return false }
+        switch (lhs.resetsAt, rhs.resetsAt) {
+        case (nil, nil): return true
+        case let (left?, right?): return abs(left.timeIntervalSince(right)) < 1
+        default: return false
+        }
+    }
+
+    /// Whose status line an update is: the Claude Code process's when it is
+    /// known (rate limits belong to the process, and outlive a `/clear` into
+    /// a new session), with its start time when that is known (a pid is
+    /// reused), else the session's. Pure.
+    nonisolated static func statusLineKey(sessionId: String, processId: Int?, startedAt: Date? = nil) -> String {
+        guard let processId else { return "session:\(sessionId)" }
+        guard let startedAt else { return "\(processKeyPrefix)\(processId)" }
+        return "\(processKeyPrefix)\(processId)@\(Int(startedAt.timeIntervalSince1970))"
+    }
+
+    nonisolated static let processKeyPrefix = "pid:"
+
+    /// A Claude Code process not heard from for this long is forgotten: its
+    /// weekly window has reset since.
+    nonisolated static let statusLineRetention: TimeInterval = UsageWindow.weeklyDuration
+
+    /// Forget the processes not heard from for `statusLineRetention`.
+    private func pruneStatusLine(now: Date) {
+        for (accountId, folders) in statusLine {
+            let kept = folders
+                .mapValues { $0.filter { now.timeIntervalSince($0.value.lastReportAt) < Self.statusLineRetention } }
+                .filter { !$0.value.isEmpty }
+            guard kept != folders else { continue }
+            statusLine[accountId] = kept.isEmpty ? nil : kept
+            publish(accountId)
+        }
+    }
+
+    /// Whether `reading` is what the account shows for the window now.
+    private func isShown(_ reading: Reading, accountId: String,
+                         _ window: KeyPath<StatusLineReadings, Reading?>,
+                         _ fullWindow: KeyPath<AccountUsage, UsageWindow?>) -> Bool {
+        let snapshot = fullSnapshots[accountId].flatMap { full in full[keyPath: fullWindow].map { Reading($0, of: full) } }
+        return Self.winningStatus(statusCandidates(accountId, window), over: snapshot) == reading
+    }
+
+    /// The status line's Claude Code process, unless the session's hooks
+    /// name another one: a `CLAUDE_PID` inherited from a Claude Code that
+    /// started this one would mix two processes' rate limits.
+    private func trustedProcessId(_ update: StatusLineUpdate) -> Int? {
+        guard let pid = update.processId.flatMap(ProcessID.valid) else { return nil }
+        if let hooks = sessionProcessId(update.sessionId), hooks != pid { return nil }
+        return pid
     }
 
     /// Recompute the published usage for one account from its sources.
@@ -545,34 +755,46 @@ final class UsageStore: ObservableObject {
         let merged = Self.merge(
             accountId: accountId,
             full: fullSnapshots[accountId],
-            statusFiveHour: statusReading(accountId, \.fiveHour),
-            statusSevenDay: statusReading(accountId, \.sevenDay)
+            statusFiveHour: statusCandidates(accountId, \.fiveHour),
+            statusSevenDay: statusCandidates(accountId, \.sevenDay)
         )
         if usage[accountId] != merged {
             usage[accountId] = merged
         }
     }
 
-    /// The most current reading wins per window (`isMoreCurrent`); scoped
-    /// limits, extra usage and plan come from the full snapshot.
-    /// `updatedAt`/`source` describe the newest reading used. Pure.
+    /// `merge` with one status line reading per window. Pure.
     nonisolated static func merge(
         accountId: String,
         full: AccountUsage?,
         statusFiveHour: Reading?,
         statusSevenDay: Reading?
     ) -> AccountUsage? {
-        guard full != nil || statusFiveHour != nil || statusSevenDay != nil else { return nil }
+        merge(accountId: accountId, full: full,
+              statusFiveHour: statusFiveHour.map { [$0] } ?? [],
+              statusSevenDay: statusSevenDay.map { [$0] } ?? [])
+    }
+
+    /// The most current reading wins per window, the full snapshot's and the
+    /// status lines' together (`mostCurrent`: one status line known to be
+    /// newer than the snapshot is enough, whichever of them shows); scoped
+    /// limits, extra usage and plan come from the full snapshot.
+    /// `updatedAt`/`source` describe the newest reading used. Pure.
+    nonisolated static func merge(
+        accountId: String,
+        full: AccountUsage?,
+        statusFiveHour: [Reading],
+        statusSevenDay: [Reading]
+    ) -> AccountUsage? {
+        guard full != nil || !statusFiveHour.isEmpty || !statusSevenDay.isEmpty else { return nil }
 
         var result = full ?? AccountUsage(accountId: accountId, source: .statusLine, updatedAt: .distantPast)
         var newest = full?.updatedAt ?? .distantPast
         var newestSource = full?.source ?? .statusLine
 
-        func take(_ reading: Reading?, current: UsageWindow?) -> UsageWindow? {
-            guard let reading else { return current }
-            if let current, let full, !isMoreCurrent(reading, than: (current, full.updatedAt)) {
-                return current
-            }
+        func take(_ readings: [Reading], current: UsageWindow?) -> UsageWindow? {
+            let snapshot = current.flatMap { window in full.map { Reading(window, of: $0) } }
+            guard let reading = winningStatus(readings, over: snapshot) else { return current }
             if reading.at > newest {
                 newest = reading.at
                 newestSource = .statusLine
@@ -584,6 +806,15 @@ final class UsageStore: ObservableObject {
         result.updatedAt = newest
         result.source = newestSource
         return result
+    }
+
+    /// The status line reading that wins a window over the full snapshot's
+    /// (see `mostCurrent`), nil when the snapshot's stays (it goes first: of
+    /// two readings nothing tells apart, it is kept) or there is none. Pure.
+    nonisolated static func winningStatus(_ readings: [Reading], over snapshot: Reading?) -> Reading? {
+        let candidates = (snapshot.map { [$0] } ?? []) + readings
+        guard let index = mostCurrentIndex(candidates), snapshot == nil || index > 0 else { return nil }
+        return candidates[index]
     }
 
     /// Keep `snapshot` as the account's full snapshot if it is newer than
@@ -610,6 +841,7 @@ final class UsageStore: ObservableObject {
 
     /// One pass of the regular cycle: caches, Claude Desktop, then the schedule.
     func pollCycle() async {
+        pruneStatusLine(now: clock())
         await pollCaches()
         await pollExternal(only: nil, force: false)
         scheduleProbes()
@@ -727,7 +959,8 @@ final class UsageStore: ObservableObject {
             guard due else { continue }
             lastExternalPollAt[id] = now
             let reading = await source.reading(organizationUuid: organization, now: now)
-            if let reading, let snapshot = UsageRingWindows.accountUsage(from: reading, accountId: id) {
+            if let reading, var snapshot = UsageRingWindows.accountUsage(from: reading, accountId: id) {
+                snapshot.takenAfter = reading.observedAt.addingTimeInterval(-Self.externalClockAllowance)
                 externalMisses.remove(id)
                 observe(snapshot, source: .desktop)
                 acceptFullSnapshot(snapshot)
@@ -790,11 +1023,11 @@ final class UsageStore: ObservableObject {
     private func adoptFolderKeyedState() {
         for (id, folders) in statusLine where registry.identity(id: id) == nil {
             guard let identityId = registry.identityId(for: id) else { continue }
-            for (folder, readings) in folders {
-                var merged = statusLine[identityId]?[folder] ?? StatusLineReadings()
-                if let reading = readings.fiveHour { merged.fiveHour = Self.combine(stored: merged.fiveHour, new: reading) }
-                if let reading = readings.sevenDay { merged.sevenDay = Self.combine(stored: merged.sevenDay, new: reading) }
-                statusLine[identityId, default: [:]][folder] = merged
+            for (folder, processes) in folders {
+                // A process heard from under both keeps its latest record.
+                statusLine[identityId, default: [:]][folder, default: [:]].merge(processes) { mine, moved in
+                    moved.lastReportAt > mine.lastReportAt ? moved : mine
+                }
             }
             statusLine.removeValue(forKey: id)
             publish(identityId)
@@ -989,6 +1222,7 @@ final class UsageStore: ObservableObject {
                 configDirs: allRunDirs,
                 workingDirectory: AppIdentity.supportDirectory.appendingPathComponent("usage-probe", isDirectory: true)
             )
+            let launchedAt = self.clock()
             let outcome = await runner(request)
             // A possibly seeded answer is dated from the copy Claude Code
             // keeps in `.claude.json`, read after the probe; and the folder
@@ -1005,7 +1239,7 @@ final class UsageStore: ObservableObject {
             if case .usage(let parsed) = outcome, parsed.isPossiblySeeded {
                 cachedCopy = after.config?.matchingCachedUsage
             }
-            self.finishProbe(accountId: accountId, outcome: outcome, cachedCopy: cachedCopy)
+            self.finishProbe(accountId: accountId, outcome: outcome, cachedCopy: cachedCopy, launchedAt: launchedAt)
         }
     }
 
@@ -1045,16 +1279,19 @@ final class UsageStore: ObservableObject {
 
     /// What a probe's usage answer means: the snapshot to keep (dated by
     /// when Claude Code fetched it, never "now" for an answer that may be its
-    /// hour-old fallback), and whether the probe counts as rate limited for
-    /// the backoff. Pure.
+    /// hour-old fallback; a fresh one was fetched after `launchedAt`), and
+    /// whether the probe counts as rate limited for the backoff. Pure.
     nonisolated static func interpretProbeAnswer(
         _ parsed: ParsedUsage,
         accountId: String,
         now: Date,
-        cachedCopy: CachedUsageSnapshot?
+        cachedCopy: CachedUsageSnapshot?,
+        launchedAt: Date? = nil
     ) -> (snapshot: AccountUsage?, rateLimited: Bool) {
         guard parsed.isPossiblySeeded else {
-            return (parsed.accountUsage(accountId: accountId, source: .probe, updatedAt: now), false)
+            var snapshot = parsed.accountUsage(accountId: accountId, source: .probe, updatedAt: now)
+            snapshot.takenAfter = launchedAt.map { min($0, now) }
+            return (snapshot, false)
         }
         guard let cachedCopy, cachedCopy.usage.hasSameWindows(as: parsed) else {
             // Can't be dated: the cache poll takes the file's own copy.
@@ -1072,7 +1309,8 @@ final class UsageStore: ObservableObject {
         return "Usage check paused (too many requests), retrying in \(minutes) min"
     }
 
-    private func finishProbe(accountId: String, outcome: UsageProbe.Outcome, cachedCopy: CachedUsageSnapshot?) {
+    private func finishProbe(accountId: String, outcome: UsageProbe.Outcome, cachedCopy: CachedUsageSnapshot?,
+                             launchedAt: Date? = nil) {
         let now = clock()
         probeTask = nil
         probingAccountId = nil
@@ -1080,7 +1318,8 @@ final class UsageStore: ObservableObject {
 
         switch outcome {
         case .usage(let parsed):
-            let answer = Self.interpretProbeAnswer(parsed, accountId: accountId, now: now, cachedCopy: cachedCopy)
+            let answer = Self.interpretProbeAnswer(parsed, accountId: accountId, now: now, cachedCopy: cachedCopy,
+                                                   launchedAt: launchedAt)
             if let snapshot = answer.snapshot {
                 // A seeded answer dated from `.claude.json` is that cache's reading.
                 observe(snapshot, source: snapshot.source == .probe ? .probe : .claudeJson)
@@ -1209,33 +1448,83 @@ final class UsageStore: ObservableObject {
                 }
             }
         }
+        restoreStatusLines(byIdentity)
         if !state.accounts.isEmpty {
             Self.logger.info("Restored usage state for \(state.accounts.count) account(s)")
         }
+    }
+
+    /// The last run's status line records, in folders still the account's
+    /// (a mirrored `~/.claude`'s by who its sessions started as, like
+    /// `ingest`). Each is keyed by its process's pid and start time: a
+    /// process still running goes on from its record (its old numbers stay
+    /// a repeat), and an ended one's readings still count until retention
+    /// ends, as they would have without the relaunch.
+    private func restoreStatusLines(_ saved: [String: UsageState.Account]) {
+        let now = clock()
+        let defaultFolder = AccountRegistry.defaultConfigDir(home: registry.homePath)
+        for (id, account) in saved where registry.identity(id: id) != nil {
+            var restored = 0
+            for line in account.statusLines ?? [] {
+                guard Self.isProcessKeyWithStart(line.key),
+                      now.timeIntervalSince(line.readings.lastReportAt) < Self.statusLineRetention,
+                      registry.identity(forFolderId: line.folder)?.id == id
+                        || (line.folder == defaultFolder && registry.mirrorsDefault) else { continue }
+                statusLine[id, default: [:]][line.folder, default: [:]][line.key] = line.readings
+                restored += 1
+            }
+            if restored > 0 { publish(id) }
+        }
+    }
+
+    /// A process's key that names its start time too (see `statusLineKey`). Pure.
+    nonisolated static func isProcessKeyWithStart(_ key: String) -> Bool {
+        key.hasPrefix(processKeyPrefix) && key.contains("@")
     }
 
     /// The state worth keeping, as it stands.
     private func persistedState() -> UsageState {
         var state = UsageState()
         let ids = Set(lastProbeAt.keys).union(failureCount.keys).union(nextAttemptAt.keys).union(fullSnapshots.keys)
+            .union(statusLine.keys)
         for id in ids {
             let account = UsageState.Account(
                 lastProbeAt: lastProbeAt[id],
                 failureCount: failureCount[id] ?? 0,
                 nextAttemptAt: nextAttemptAt[id],
-                lastFullReading: fullSnapshots[id]
+                lastFullReading: fullSnapshots[id],
+                statusLines: savedStatusLines(id)
             )
             if !account.isEmpty { state.accounts[id] = account }
         }
         return state
     }
 
-    private func scheduleSave() {
-        guard started, saveTask == nil else { return }
+    /// An identity's process records worth keeping: those whose process is
+    /// known by pid and start time (see `restoreStatusLines`).
+    private func savedStatusLines(_ accountId: String) -> [UsageState.StatusLine]? {
+        guard registry.identity(id: accountId) != nil, let folders = statusLine[accountId] else { return nil }
+        let lines = folders.sorted { $0.key < $1.key }.flatMap { folder, processes in
+            processes.sorted { $0.key < $1.key }
+                .filter { Self.isProcessKeyWithStart($0.key) }
+                .map { UsageState.StatusLine(folder: folder, key: $0.key, readings: $0.value) }
+        }
+        return lines.isEmpty ? nil : lines
+    }
+
+    /// Save after `delay`, or sooner if a save is already due sooner (a
+    /// probe's backoff must not wait behind a status line's 30 s).
+    private func scheduleSave(after delay: TimeInterval = UsageStore.stateSaveDelay) {
+        guard started else { return }
+        let due = Date().addingTimeInterval(delay)
+        if saveTask != nil, let pending = saveDueAt, pending <= due { return }
+        saveTask?.cancel()
+        saveDueAt = due
         saveTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(Self.stateSaveDelay))
+            try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled, let self else { return }
             self.saveTask = nil
+            self.saveDueAt = nil
             self.stateStore.save(self.persistedState())
         }
     }

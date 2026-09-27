@@ -116,6 +116,11 @@ nonisolated struct AccountUsage: Codable, Hashable, Sendable {
     var source: UsageSource
     /// When the underlying data was fetched by Claude Code (not when the app read it).
     var updatedAt: Date
+    /// When the data is known to be newer than, when that is earlier than
+    /// `updatedAt`: a probe's launch (its answer came some time before it
+    /// finished), a margin for Claude Desktop's server-clock date. Nil means
+    /// exactly `updatedAt`.
+    var takenAfter: Date?
 
     init(
         accountId: String,
@@ -125,7 +130,8 @@ nonisolated struct AccountUsage: Codable, Hashable, Sendable {
         extraUsage: ExtraUsage? = nil,
         subscriptionType: String? = nil,
         source: UsageSource,
-        updatedAt: Date
+        updatedAt: Date,
+        takenAfter: Date? = nil
     ) {
         self.accountId = accountId
         self.fiveHour = fiveHour
@@ -135,6 +141,7 @@ nonisolated struct AccountUsage: Codable, Hashable, Sendable {
         self.subscriptionType = subscriptionType
         self.source = source
         self.updatedAt = updatedAt
+        self.takenAfter = takenAfter
     }
 
     /// Data older than this is shown as stale, at the default probe interval.

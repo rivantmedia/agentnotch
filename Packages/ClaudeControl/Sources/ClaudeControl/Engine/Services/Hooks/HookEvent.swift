@@ -534,7 +534,8 @@ nonisolated struct StatusLineMessage: Sendable {
             modelDisplayName: JSONValue.string(model?["display_name"]),
             costUSD: JSONValue.double(cost?["total_cost_usd"]),
             sessionName: JSONValue.string(statusLine["session_name"]),
-            claudeCodeVersion: JSONValue.string(statusLine["version"])
+            claudeCodeVersion: JSONValue.string(statusLine["version"]),
+            processId: JSONValue.int(json["pid"]).flatMap(ProcessID.valid)
         )
     }
 }
@@ -681,8 +682,9 @@ nonisolated enum JSONValue {
     }
 
     static func int(_ raw: Any?) -> Int? {
+        // Double(Int.max) rounds up to 2^63, which Int(_:) traps on: strictly below it.
         guard let value = UsageParser.number(raw),
-              value >= Double(Int.min), value <= Double(Int.max) else { return nil }
+              value >= Double(Int.min), value < Double(Int.max) else { return nil }
         return Int(value)
     }
 }

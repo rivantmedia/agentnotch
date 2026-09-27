@@ -43,7 +43,10 @@ private final class UsageFixture {
     /// answered, and on a busy machine running the whole suite the fake
     /// probe's hops can take longer than a few seconds. Tests of the limit
     /// itself pass their own.
-    func makeStore(desktopOn: Bool = true, waitLimit: TimeInterval = 30) -> UsageStore {
+    /// The processes status lines name are made up: their start times come
+    /// from `processStarts`, never from the kernel.
+    func makeStore(desktopOn: Bool = true, waitLimit: TimeInterval = 30,
+                   processStarts: [Int: Date] = [:], hookPids: [String: Int] = [:]) -> UsageStore {
         UsageStore(
             registry: registry,
             configReader: ClaudeGlobalConfigReader(),
@@ -52,7 +55,10 @@ private final class UsageFixture {
             readsExternalUsage: { desktopOn },
             probeRunner: { [probe] request in await probe.run(request) },
             automaticProbes: true,
-            refreshWaitLimit: waitLimit
+            refreshWaitLimit: waitLimit,
+            sessionStartedAt: { _ in nil },
+            processStartedAt: { processStarts[$0] },
+            sessionProcessId: { hookPids[$0] }
         )
     }
 
@@ -603,5 +609,326 @@ private struct UsageBodies {
             sevenDay: UsageWindow(utilization: 10, resetsAt: now.addingTimeInterval(86400), duration: 604_800),
             isPossiblySeeded: seeded
         )
+    }
+}
+
+// MARK: - Early resets
+
+/// Anthropic resets the weekly limit early and keeps its reset time: what is
+/// read after the reset must replace what was read before it, whichever
+/// source is higher.
+@Suite(.serialized)
+struct A3_EarlyResetTests {
+    private func line(_ fixture: UsageFixture, weekly: Double, process: Int, session: String? = nil,
+                      at: Date) -> StatusLineUpdate {
+        StatusLineUpdate(
+            sessionId: session ?? "s\(process)", transcriptPath: nil, configDirEnv: fixture.configDir.path,
+            accountId: fixture.configDir.path, receivedAt: at, fiveHour: nil, sevenDay: week(fixture, weekly),
+            contextUsedPercent: nil, contextWindowSize: nil, modelId: nil, modelDisplayName: nil,
+            costUSD: nil, sessionName: nil, claudeCodeVersion: nil, processId: process)
+    }
+
+    /// The fixture's weekly window (`UsageFixture.body` resets it in 3 days).
+    private func week(_ fixture: UsageFixture, _ utilization: Double) -> UsageWindow {
+        UsageWindow(utilization: utilization, resetsAt: fixture.now.addingTimeInterval(3 * 86400), duration: UsageWindow.weeklyDuration)
+    }
+
+    @Test func aCheckAfterTheResetReplacesTheStatusLinesOldNumbers() async throws {
+        let fixture = try UsageFixture()
+        try fixture.writeGlobalConfig()
+        let store = fixture.makeStore(desktopOn: false)
+        var seen: [UsageObservation] = []
+        let subscription = store.observations.sink { seen.append($0) }
+        defer { subscription.cancel() }
+
+        // Before the reset: 62% of the week, from a terminal session.
+        store.ingest(line(fixture, weekly: 62, process: 101, at: Date().addingTimeInterval(-600)))
+        #expect(store.usage[fixture.id]?.sevenDay?.utilization == 62)
+
+        // The reset; the next check reads 3%, same reset time.
+        fixture.probe.answer(.usage(ParsedUsage(sevenDay: week(fixture, 3))))
+        await store.refresh(accountId: fixture.id, reason: .forced)
+        #expect(fixture.probe.count == 1)
+        #expect(store.usage[fixture.id]?.sevenDay?.utilization == 3)
+
+        // The session, idle, re-renders its old numbers: still 3%, and
+        // nothing for the history.
+        seen.removeAll()
+        store.ingest(line(fixture, weekly: 62, process: 101, at: Date()))
+        #expect(store.usage[fixture.id]?.sevenDay?.utilization == 3)
+        #expect(seen.isEmpty)
+
+        // Its next response after the reset: shown and recorded, though the
+        // process said more before.
+        store.ingest(line(fixture, weekly: 4, process: 101, at: Date().addingTimeInterval(1)))
+        #expect(store.usage[fixture.id]?.sevenDay?.utilization == 4)
+        let recorded = try #require(seen.first { $0.source == .statusLine })
+        #expect(recorded.windows.first { $0.id == UsageRingWindows.weeklyID }?.utilization == 4)
+    }
+
+    /// Without any check: a session working through the reset brings the
+    /// ring down, and another session's older numbers don't bring it back.
+    @Test func aWorkingSessionBringsTheRingDownByItself() throws {
+        let fixture = try UsageFixture()
+        let store = fixture.makeStore(desktopOn: false)
+        let start = Date().addingTimeInterval(-900)
+        store.ingest(line(fixture, weekly: 60, process: 101, at: start))
+        store.ingest(line(fixture, weekly: 62, process: 202, at: start.addingTimeInterval(10)))
+        store.ingest(line(fixture, weekly: 60, process: 101, at: start.addingTimeInterval(20)))
+        #expect(store.usage[fixture.id]?.sevenDay?.utilization == 62)
+
+        store.ingest(line(fixture, weekly: 3, process: 101, at: start.addingTimeInterval(600)))
+        #expect(store.usage[fixture.id]?.sevenDay?.utilization == 3)
+        store.ingest(line(fixture, weekly: 62, process: 202, at: start.addingTimeInterval(700)))
+        #expect(store.usage[fixture.id]?.sevenDay?.utilization == 3)
+        // A new session in the same process (`/clear`) is still that process.
+        store.ingest(line(fixture, weekly: 62, process: 202, session: "after-clear", at: start.addingTimeInterval(800)))
+        #expect(store.usage[fixture.id]?.sevenDay?.utilization == 3)
+    }
+
+    /// After a relaunch the reading kept from before the reset shows until
+    /// something known to be newer arrives: a session that started after it.
+    @Test func aSessionStartedAfterTheReadingReplacesIt() async throws {
+        let fixture = try UsageFixture()
+        // Claude Code's own cache, from before the reset: 10% of the week.
+        try fixture.writeGlobalConfig(cachedSession: 20, fetchedAt: fixture.now.addingTimeInterval(-3600))
+        let starts = [101: fixture.now.addingTimeInterval(-7200), 202: fixture.now.addingTimeInterval(-1800)]
+        let store = UsageStore(registry: fixture.registry, configReader: ClaudeGlobalConfigReader(),
+                               stateStore: fixture.stateStore, externalSource: nil, readsExternalUsage: { false },
+                               probeRunner: { _ in .failed("no probes here") }, automaticProbes: false,
+                               sessionStartedAt: { _ in nil }, processStartedAt: { starts[$0] },
+                               sessionProcessId: { _ in nil })
+        await store.pollCycle()
+        #expect(store.usage[fixture.id]?.sevenDay?.utilization == 10)
+
+        // A session older than that reading can't tell which came first.
+        store.ingest(line(fixture, weekly: 3, process: 101, session: "old", at: Date()))
+        #expect(store.usage[fixture.id]?.sevenDay?.utilization == 10)
+        // One started after it can: Claude Code has no rate limits before a
+        // process's first response.
+        store.ingest(line(fixture, weekly: 3, process: 202, session: "new", at: Date()))
+        #expect(store.usage[fixture.id]?.sevenDay?.utilization == 3)
+    }
+
+    /// The history gets what the ring shows: another process's lagging,
+    /// lower numbers are not sent, and neither is a stale first report.
+    @Test func onlyWhatTheRingShowsIsRecorded() throws {
+        let fixture = try UsageFixture()
+        let store = fixture.makeStore(desktopOn: false)
+        var seen: [UsageObservation] = []
+        let subscription = store.observations.sink { seen.append($0) }
+        defer { subscription.cancel() }
+        let start = Date().addingTimeInterval(-600)
+
+        store.ingest(line(fixture, weekly: 45, process: 101, at: start))
+        #expect(seen.count == 1)
+        // Another process, its numbers a little behind: not shown, not sent.
+        store.ingest(line(fixture, weekly: 43, process: 202, at: start.addingTimeInterval(5)))
+        #expect(store.usage[fixture.id]?.sevenDay?.utilization == 45)
+        #expect(seen.count == 1)
+        // Shown again when it moves ahead.
+        store.ingest(line(fixture, weekly: 46, process: 202, at: start.addingTimeInterval(10)))
+        #expect(seen.last?.windows.first?.utilization == 46)
+    }
+
+    /// A relaunch keeps what each running process said, so an idle one
+    /// re-rendering its pre-reset numbers is still a repeat.
+    @Test func aRelaunchRemembersWhatEachProcessSaid() async throws {
+        let fixture = try UsageFixture()
+        try fixture.writeGlobalConfig()
+        let started = Date().addingTimeInterval(-3600)
+        let store = fixture.makeStore(desktopOn: false, processStarts: [101: started])
+        store.ingest(line(fixture, weekly: 62, process: 101, at: Date().addingTimeInterval(-600)))
+        fixture.probe.answer(.usage(ParsedUsage(sevenDay: week(fixture, 3))))
+        await store.refresh(accountId: fixture.id, reason: .forced)
+        #expect(store.usage[fixture.id]?.sevenDay?.utilization == 3)
+        store.saveStateNow()
+
+        // The next run, the same process still running: a repeat, not news.
+        let next = fixture.makeStore(desktopOn: false, processStarts: [101: started])
+        var seen: [UsageObservation] = []
+        let subscription = next.observations.sink { seen.append($0) }
+        defer { subscription.cancel() }
+        next.restoreState()
+        #expect(next.usage[fixture.id]?.sevenDay?.utilization == 3)
+        next.ingest(line(fixture, weekly: 62, process: 101, at: Date()))
+        #expect(next.usage[fixture.id]?.sevenDay?.utilization == 3)
+        #expect(seen.isEmpty)
+
+        // A new process that got the same pid is another process: its line is news.
+        let reused = fixture.makeStore(desktopOn: false, processStarts: [101: started.addingTimeInterval(30)])
+        let reusedSubscription = reused.observations.sink { seen.append($0) }
+        defer { reusedSubscription.cancel() }
+        reused.restoreState()
+        reused.ingest(line(fixture, weekly: 62, process: 101, at: Date()))
+        #expect(seen.contains { $0.source == .statusLine })
+    }
+
+    /// The reading that brought the ring down comes back after a relaunch
+    /// even when its process has ended since, rather than the older
+    /// snapshot from before the reset.
+    @Test func anEndedProcesssReadingOutlivesARelaunch() async throws {
+        let fixture = try UsageFixture()
+        // Claude Code's own cache, from before the reset: 10% of the week.
+        try fixture.writeGlobalConfig(cachedSession: 20, fetchedAt: fixture.now.addingTimeInterval(-3600))
+        func makeStore(_ starts: [Int: Date]) -> UsageStore {
+            UsageStore(registry: fixture.registry, configReader: ClaudeGlobalConfigReader(), stateStore: fixture.stateStore,
+                       externalSource: nil, readsExternalUsage: { false }, probeRunner: { _ in .failed("no probes here") },
+                       automaticProbes: false, sessionStartedAt: { _ in nil }, processStartedAt: { starts[$0] },
+                       sessionProcessId: { _ in nil })
+        }
+        let store = makeStore([101: fixture.now.addingTimeInterval(-1800)])
+        await store.pollCycle()
+        #expect(store.usage[fixture.id]?.sevenDay?.utilization == 10)
+        store.ingest(line(fixture, weekly: 3, process: 101, at: Date()))
+        #expect(store.usage[fixture.id]?.sevenDay?.utilization == 3)
+        store.saveStateNow()
+
+        // The next run; the process has ended.
+        let next = makeStore([:])
+        next.restoreState()
+        #expect(next.usage[fixture.id]?.sevenDay?.utilization == 3)
+        await next.pollCycle()
+        #expect(next.usage[fixture.id]?.sevenDay?.utilization == 3)
+    }
+
+    @Test func savedRecordsComeBackOnlyToTheirAccountsFoldersWithinAWeek() throws {
+        let fixture = try UsageFixture()
+        let side = try fixture.addSideAccount()
+        let folder = AccountPaths.normalize(fixture.configDir.path)
+        let key = "pid:101@1700000000"
+        func record(_ weekly: Double, age: TimeInterval) -> UsageStore.StatusLineReadings {
+            let at = Date().addingTimeInterval(-age)
+            return UsageStore.StatusLineReadings(lastReportAt: at, fiveHour: nil, sevenDay: UsageStore.Reading(week(fixture, weekly), at: at))
+        }
+        func restored(_ line: UsageState.StatusLine) -> Double? {
+            var state = UsageState()
+            state.accounts[fixture.id] = UsageState.Account(statusLines: [line])
+            fixture.stateStore.saveNow(state)
+            let store = fixture.makeStore(desktopOn: false)
+            store.restoreState()
+            return store.usage[fixture.id]?.sevenDay?.utilization
+        }
+        #expect(restored(.init(folder: folder, key: key, readings: record(30, age: 60))) == 30)
+        // Not heard from for a week: its window has reset since.
+        #expect(restored(.init(folder: folder, key: key, readings: record(30, age: UsageStore.statusLineRetention + 60))) == nil)
+        // A folder another account holds now.
+        #expect(restored(.init(folder: AccountPaths.normalize(side.configDir), key: key, readings: record(30, age: 60))) == nil)
+        // A key without the process's start could be any process's.
+        #expect(restored(.init(folder: folder, key: "pid:101", readings: record(30, age: 60))) == nil)
+    }
+
+    @Test func aProcessNotHeardFromForAWeekIsForgotten() async throws {
+        let fixture = try UsageFixture()
+        var now = Date()
+        let store = UsageStore(registry: fixture.registry, configReader: ClaudeGlobalConfigReader(), stateStore: fixture.stateStore,
+                               externalSource: nil, readsExternalUsage: { false }, probeRunner: { _ in .failed("no probes here") },
+                               automaticProbes: false, clock: { now }, sessionStartedAt: { _ in nil },
+                               processStartedAt: { _ in nil }, sessionProcessId: { _ in nil })
+        store.ingest(line(fixture, weekly: 30, process: 101, at: now))
+        await store.pollCycle()
+        #expect(store.usage[fixture.id]?.sevenDay?.utilization == 30)
+        now = now.addingTimeInterval(UsageStore.statusLineRetention + 60)
+        await store.pollCycle()
+        #expect(store.usage[fixture.id] == nil)
+    }
+
+    /// A line that is news for its process but that the check outranks is
+    /// not recorded: the history gets what the ring shows.
+    @Test func aLineTheCheckOutranksIsNotRecorded() async throws {
+        let fixture = try UsageFixture()
+        try fixture.writeGlobalConfig()
+        let store = fixture.makeStore(desktopOn: false)
+        var seen: [UsageObservation] = []
+        let subscription = store.observations.sink { seen.append($0) }
+        defer { subscription.cancel() }
+        fixture.probe.answer(.usage(ParsedUsage(sevenDay: week(fixture, 42))))
+        await store.refresh(accountId: fixture.id, reason: .forced)
+        let t = Date()
+        store.ingest(line(fixture, weekly: 42, process: 101, at: t))
+        seen.removeAll()
+
+        // A process's own small step back (a late response): not news.
+        store.ingest(line(fixture, weekly: 40, process: 101, at: t.addingTimeInterval(1)))
+        // Another process's numbers, a little behind: news for it, not shown.
+        store.ingest(line(fixture, weekly: 40, process: 202, at: t.addingTimeInterval(2)))
+        #expect(store.usage[fixture.id]?.sevenDay?.utilization == 42)
+        #expect(!seen.contains { $0.source == .statusLine })
+
+        // A reset-sized drop from a process that reported after both: shown and recorded.
+        store.ingest(line(fixture, weekly: 40, process: 101, at: t.addingTimeInterval(2.5)))
+        store.ingest(line(fixture, weekly: 30, process: 101, at: t.addingTimeInterval(3)))
+        #expect(store.usage[fixture.id]?.sevenDay?.utilization == 30)
+        #expect(seen.contains { $0.source == .statusLine && $0.windows.first?.utilization == 30 })
+    }
+
+    /// Claude Desktop's reading is dated by the server's clock, to the
+    /// second: it is not taken for newer than a line from the minute before it.
+    @Test func claudeDesktopsDateAllowsForClockSkew() async throws {
+        for (lineAge, shown) in [(30.0, 62.0), (120.0, 10.0)] {
+            let fixture = try UsageFixture()
+            try fixture.writeGlobalConfig()
+            let observed = Date().addingTimeInterval(-10)
+            fixture.desktop.set(fixture.desktopReading(session: 20, observedAt: observed))
+            let store = fixture.makeStore(desktopOn: true)
+            store.ingest(line(fixture, weekly: 62, process: 101, at: observed.addingTimeInterval(-lineAge)))
+            await store.pollCycle()
+            try await fixture.settle(store)
+            #expect(store.usage[fixture.id]?.sevenDay?.utilization == shown, "line \(lineAge) s before Desktop's reading")
+        }
+    }
+
+    /// A check's answer came some time after it was launched: a line that
+    /// arrived while it ran is not known to be older than the answer.
+    @Test func aLineThatArrivesDuringACheckIsNotOlderThanItsAnswer() async throws {
+        let fixture = try UsageFixture()
+        try fixture.writeGlobalConfig()
+        let store = fixture.makeStore(desktopOn: false)
+        fixture.probe.answer(.usage(ParsedUsage(sevenDay: week(fixture, 3))))
+        fixture.probe.hold()
+        let refresh = Task { await store.refresh(accountId: fixture.id, reason: .forced) }
+        for _ in 0..<250 where fixture.probe.count == 0 {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(fixture.probe.count == 1)
+        store.ingest(line(fixture, weekly: 62, process: 101, at: Date()))
+        try await Task.sleep(for: .milliseconds(20))
+        fixture.probe.release()
+        await refresh.value
+        #expect(store.usage[fixture.id]?.sevenDay?.utilization == 62)
+    }
+
+    /// A status line's slow save doesn't hold back the quick one a check asks for.
+    @Test func aChecksSaveDoesntWaitBehindAStatusLines() async throws {
+        let fixture = try UsageFixture()
+        try fixture.writeGlobalConfig()
+        fixture.probe.answer(.usage(ParsedUsage(sevenDay: week(fixture, 31))))
+        let store = fixture.makeStore(desktopOn: false, processStarts: [101: Date().addingTimeInterval(-60)])
+        store.start()
+        defer { store.stop() }
+        store.ingest(line(fixture, weekly: 30, process: 101, at: Date()))
+        await store.refresh(accountId: fixture.id, reason: .forced)
+        for _ in 0..<50 where fixture.stateStore.load().accounts[fixture.id]?.lastProbeAt == nil {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        #expect(fixture.stateStore.load().accounts[fixture.id]?.lastProbeAt != nil)
+    }
+
+    /// A pid the session's hooks contradict isn't trusted: the line counts
+    /// for the session, with nothing known of when it was taken.
+    @Test func aPidTheHooksContradictIsNotTrusted() throws {
+        let fixture = try UsageFixture()
+        let started = Date().addingTimeInterval(-60)
+        let store = fixture.makeStore(desktopOn: false, processStarts: [101: started], hookPids: ["s101": 777])
+        let snapshotTime = Date().addingTimeInterval(-120)
+        // An older, higher reading from another process.
+        store.ingest(line(fixture, weekly: 62, process: 202, at: snapshotTime))
+        // Trusted, this process's start would make its first report newer than that.
+        store.ingest(line(fixture, weekly: 3, process: 101, at: Date()))
+        #expect(store.usage[fixture.id]?.sevenDay?.utilization == 62)
+        let trusting = fixture.makeStore(desktopOn: false, processStarts: [101: started])
+        trusting.ingest(line(fixture, weekly: 62, process: 202, at: snapshotTime))
+        trusting.ingest(line(fixture, weekly: 3, process: 101, at: Date()))
+        #expect(trusting.usage[fixture.id]?.sevenDay?.utilization == 3)
     }
 }
