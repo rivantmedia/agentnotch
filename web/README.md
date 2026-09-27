@@ -219,6 +219,41 @@ tables. `db:push` is removed on purpose, so nothing bypasses the migrations.
    set. The build never touches the database.
 4. Add the production (and preview) `/auth/callback` URLs to Supabase's redirect list (step 3).
 
+**Checking a connection string.** When the site logs Prisma's P1000 (authentication failed) or
+P1001 (can't reach database server), check the values without showing anyone the password. From
+`web/`:
+
+```sh
+node --env-file=.env scripts/check-database-url.mjs              # DATABASE_URL and DIRECT_URL from .env
+node --env-file=.env scripts/check-database-url.mjs --clipboard  # a value copied from Vercel
+```
+
+Each finding is one line (`ok`, `warn` or `problem`), and any problem exits 1. It catches the
+usual mistakes:
+
+- quotes or a stray line break;
+- a password character that must be percent-encoded (`@ # / ? %` or a space);
+- the `[ ]` of Supabase's `[YOUR-PASSWORD]` left around the password;
+- plain `postgres` as the user on the pooler;
+- a missing `pgbouncer=true`;
+- the IPv6-only direct host;
+- a value cut short by an unquoted `#` in `.env`;
+- two values with different passwords, for instance Vercel's copy against `.env`.
+
+The password only ever shows as its length.
+
+Add `--connect` to also log in, at Supabase's hosts and this computer only:
+
+- a transaction-mode value (port 6543) is tested with the site's own Prisma client (`select 1`),
+  since Prisma Migrate can't run through transaction mode;
+- any other value is tested with `prisma migrate status`, which also reports pending migrations.
+
+After a password reset:
+
+- Supabase's **Reset database password** changes only `postgres`'s password (`alter user prisma
+with password '…'` sets the `prisma` role's);
+- Vercel applies changed variables only to new deployments.
+
 Notes:
 
 - **Limits.** Kept in Postgres, so they hold across every function instance:
