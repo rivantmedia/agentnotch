@@ -220,6 +220,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             let updater = Updater()
             self.updater = updater
+            // Fork: upstream never started it, so the scheduled checks began
+            // only once someone opened Settings > General. A no-op unless this
+            // is a release build carrying the fork's feed (Fork.updatesEnabled).
+            updater.start() // Fork: own feed
 
             let relay = OllamaActivityRelay()
             self.ollamaRelay = relay
@@ -415,7 +419,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 settings?.show()
             }
             whatsNew.onDismiss = introduce
-            if !whatsNew.showIfNeeded() {
+            // Fork: upstream's notes are keyed by upstream's versions, never this app's.
+            if !Fork.showWhatsNewIfNeeded(whatsNew.showIfNeeded) { // Fork: no upstream notes
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: introduce)
             }
 

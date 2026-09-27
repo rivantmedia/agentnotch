@@ -99,20 +99,44 @@ SEAM	ISO	Sources/App/Log.swift	Logger(subsystem: Fork.logSubsystem,	2
 SEAM	ISO	Sources/Settings/Preferences.swift	Bundle.main.bundleIdentifier.flatMap { Fork.ownsBundleIdentifier($0) ? $0 : nil } // Fork: own domain only
 SEAM	ISO	Sources/Providers/ClaudeDesktopUsageCache.swift	import CodenotchZstd
 # Makefile: the running copy is quit by bundle id, never `pkill -x Codenotch`
-# (which would quit the official app); `make appcast` refuses to run.
+# (which would quit the official app); `make appcast` refuses to run: its
+# recipe publishes upstream's feed on hivinz.com. The fork's releases and
+# appcast come from Scripts/release-build.sh and .github/workflows/release.yml.
 SEAM	ISO	Makefile	BUNDLE_ID   := com.rivantmedia.agentnotch
 SEAM	ISO	Makefile	QUIT_RUNNING = osascript -e 'if application id "$(BUNDLE_ID)" is running then tell application id "$(BUNDLE_ID)" to quit' >/dev/null 2>&1 || true
 SEAM	ISO	Makefile	$(QUIT_RUNNING)	2
 SEAM	ISO	Makefile	@echo "appcast: Sparkle updates are disabled in Agent Notch" && exit 1
 FORBID	ISO	Makefile	pkill -x Codenotch
 FORBID	ISO	Makefile	release: notarize verify-release appcast
-# project.yml / Info.plist: our own bundle id, no Sparkle feed or key.
+# project.yml / Info.plist: our own bundle id, no Sparkle feed or key. Only
+# `Scripts/spm-build-app.sh --with-updates` (the release workflow's build)
+# writes the fork's feed and key, into the built bundle; every other build
+# strips them, so a local or sealed copy never updates itself.
 SEAM	ISO	project.yml	PRODUCT_BUNDLE_IDENTIFIER: com.rivantmedia.agentnotch
 FORBID	ISO	project.yml	PRODUCT_BUNDLE_IDENTIFIER: com.vinz
 FORBID	ISO	project.yml	SUFeedURL
 FORBID	ISO	project.yml	SUPublicEDKey
 FORBID	ISO	Sources/Info.plist	SUFeedURL
 FORBID	ISO	Sources/Info.plist	SUPublicEDKey
+# Upstream's download site: the copy and the build point at the fork's own
+# releases, never at the official Codenotch's.
+FORBID	ISO	Sources/App/Updater.swift	hivinz.com
+FORBID	ISO	Scripts/spm-build-app.sh	hivinz.com
+
+# --- UPD: the fork's own updates (release builds only) ----------------------
+# Sparkle runs only in the builds the release workflow makes, whose Info.plist
+# carries the fork's feed and key (Fork.updatesEnabled, guarded on every path
+# by the ISO "updates off" lines). The feed is always the fork's own, even
+# over user defaults; the updater starts at launch (upstream never started
+# it); the copy names the fork's releases page; the Settings switch can't be
+# flipped where updates are off; and upstream's What's New notes, keyed by
+# upstream's versions, never introduce one of this app's.
+SEAM	UPD	Sources/App/Updater.swift	nonisolated func feedURLString(for updater: SPUUpdater) -> String? { Fork.updateFeedURL } // Fork: own feed
+SEAM	UPD	Sources/App/Updater.swift	Fork.releasesPageURL)")) // Fork: own feed	2
+SEAM	UPD	Sources/App/AppDelegate.swift	updater.start() // Fork: own feed
+SEAM	UPD	Sources/App/AppDelegate.swift	if !Fork.showWhatsNewIfNeeded(whatsNew.showIfNeeded) { // Fork: no upstream notes
+SEAM	UPD	Sources/Settings/SettingsView.swift	.disabled(!Fork.updatesEnabled) // Fork: updates off
+SEAM	UPD	Tests/UpdaterOutcomeTests.swift	XCTAssertTrue(why.contains(Fork.releasesPageURL), why) // Fork: own feed
 
 # --- MBL: App/StatusItemSummary.swift (PP) -----------------------------------
 # The menu bar summary labels rings that share a mark with the profile's
@@ -173,6 +197,8 @@ ALLOW	Sources/Settings/OllamaSettingsRow.swift
 ALLOW	Tests/AntigravityTests.swift
 ALLOW	Tests/LocalizationTests.swift
 ALLOW	Sources/App/StatusItemSummary.swift
+# The fork's own updates (UPD):
+ALLOW	Tests/UpdaterOutcomeTests.swift
 # The fork's own files:
 ALLOW	Sources/ClaudeBridge/**
 ALLOW	Tests/ClaudeBridgeTests.swift

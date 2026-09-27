@@ -125,10 +125,58 @@ enum Fork {
         return bundleID + "." + name
     }
 
-    /// Sparkle stays off in this fork. Upstream's feed and signing key would
-    /// silently replace this build with the official Codenotch, and the fork
-    /// has no feed of its own. See `Updater`.
-    static let updatesEnabled = false
+    /// The fork's own Sparkle feed: the appcast the release workflow attaches
+    /// to every GitHub release. `releases/latest/download` follows the newest
+    /// published release, so the URL never changes. Never upstream's
+    /// (hivinz.com): that feed would replace this app with the official
+    /// Codenotch. `Updater` hands Sparkle this URL itself, which beats both the
+    /// Info.plist and user defaults.
+    static let updateFeedURL = "https://github.com/rivantmedia/agentnotch/releases/latest/download/appcast.xml"
+
+    /// Where someone whose copy doesn't update itself gets a new one. The
+    /// update copy names it; the app has no website address of its own.
+    static let releasesPageURL = "https://github.com/rivantmedia/agentnotch/releases/latest"
+
+    /// Whether this copy updates itself. Only the builds the release workflow
+    /// makes (`Scripts/spm-build-app.sh --with-updates`) carry the feed and the
+    /// EdDSA public key in their Info.plist; every other build strips them.
+    /// A local build that updated itself would be swapped for the published
+    /// release (Sparkle installs over whichever copy is running), and a
+    /// sealed or `.dev` copy must never fetch or install anything. See `Updater`.
+    static let updatesEnabled = updatesEnabled(
+        info: Bundle.main.infoDictionary ?? [:], bundleID: Bundle.main.bundleIdentifier,
+        sealed: isSealed, underTest: Runtime.isUnderTest)
+
+    /// Pure, for tests. All of it has to hold:
+    /// - not sealed, and not a test host;
+    /// - exactly this app's bundle id, not a suffixed development copy;
+    /// - the fork's own feed, as the release build writes it;
+    /// - a public key Sparkle can use: with an invalid one it refuses to start
+    ///   and puts up an alert on every launch, so such a copy stays off.
+    static func updatesEnabled(info: [String: Any], bundleID: String?, sealed: Bool, underTest: Bool) -> Bool {
+        guard !sealed, !underTest, bundleID == Fork.bundleID,
+              info["SUFeedURL"] as? String == updateFeedURL,
+              let key = info["SUPublicEDKey"] as? String else { return false }
+        // Decoded the way Sparkle decodes it (SUSignatures.m): trimmed, then
+        // strict base64 of a 32-byte Ed25519 public key.
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Data(base64Encoded: trimmed)?.count == 32
+    }
+
+    /// Upstream's What's New notes (`ReleaseNotes`) are keyed by upstream's
+    /// versions, from 1.0.0 up, and this app numbers its own releases from
+    /// 1.0.0 too (the VERSION file). Shown, they would introduce Agent Notch 1.0.0
+    /// with upstream's "The first release." and 1.1.0 with upstream's 1.1.0
+    /// changes. The fork's notes are on its releases page instead.
+    static let showsUpstreamReleaseNotes = false
+
+    /// The launch's What's New step (seam in AppDelegate): `showIfNeeded` is
+    /// the dialogue's own check, asked only while upstream's notes are shown.
+    /// Returns whether anything was put on screen, as `showIfNeeded` does, so
+    /// the first launch's introduction still follows.
+    @MainActor static func showWhatsNewIfNeeded(_ showIfNeeded: () -> Bool) -> Bool {
+        showsUpstreamReleaseNotes && showIfNeeded()
+    }
 
     /// Upstream copies `com.vinz.usagenotch` (its name before the rename)
     /// into a fresh defaults domain. A fork starts clean instead and never

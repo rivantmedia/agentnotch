@@ -212,9 +212,10 @@ PAGES_DIR := site
 # match it exactly, or an update downloads and then fails to verify.
 DOWNLOAD_PREFIX := https://hivinz.com/
 
-# Fork: Sparkle is off (see Sources/App/Fork.swift). This target would sign
-# an appcast for upstream's hivinz.com feed, so it refuses to run; the recipe
-# below is upstream's, kept for merges.
+# Fork: this target would sign an appcast for upstream's hivinz.com feed, so
+# it refuses to run; the recipe below is upstream's, kept for merges. The
+# fork's own releases and appcast come from Scripts/release-build.sh and
+# .github/workflows/release.yml (see Sources/App/Fork.swift).
 appcast:
 	@echo "appcast: Sparkle updates are disabled in Agent Notch" && exit 1
 	@test -n "$(SPARKLE_BIN)" || (echo "Sparkle tools not found — run make build first" && exit 1)

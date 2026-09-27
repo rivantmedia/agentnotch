@@ -25,7 +25,9 @@ final class UpdaterOutcomeTests: XCTestCase {
         guard case .failed(let why) = Updater.outcome(afterTimeoutFrom: .checking) else {
             return XCTFail("a stalled check must not stay on Checking…")
         }
-        XCTAssertTrue(why.contains("hivinz.com"), why)
+        // Fork: this app's own releases page, never upstream's download site.
+        XCTAssertTrue(why.contains(Fork.releasesPageURL), why) // Fork: own feed
+        XCTAssertFalse(why.contains("hivinz.com"), why)
         XCTAssertEqual(Updater.outcome(afterTimeoutFrom: .upToDate(Date(timeIntervalSince1970: 1))),
                        .upToDate(Date(timeIntervalSince1970: 1)))
     }

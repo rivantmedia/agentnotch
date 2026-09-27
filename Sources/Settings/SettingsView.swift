@@ -1305,6 +1305,7 @@ struct SettingsView: View {
                     get: { updater.automatic },
                     set: { updater.automatic = $0 }
                 ))
+                .disabled(!Fork.updatesEnabled) // Fork: updates off, a switch that would only snap back
 
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                     // Disclosed rather than merely silent. An app that updates

@@ -14,10 +14,13 @@ import Sparkle
 /// normal drag to /Applications, false if it was copied there with `sudo`), and
 /// the replacement is applied on relaunch rather than mid-flight.
 ///
-/// Fork: inert while `Fork.updatesEnabled` is false. The Sparkle controller is
-/// never created, so no feed is fetched and nothing is installed — upstream's
-/// feed would replace this build with the official Codenotch. The Info.plist
-/// carries no feed URL or key either.
+/// Fork: live only in the builds the release workflow makes, the ones whose
+/// Info.plist carries the fork's feed and EdDSA public key
+/// (`Fork.updatesEnabled`). Everywhere else (a local or source build, a sealed
+/// or `.dev` copy, a test host) the Sparkle controller is never created, so no
+/// feed is fetched and nothing is installed. The feed is always the fork's own
+/// (`feedURLString(for:)`): upstream's would replace this app with the
+/// official Codenotch.
 @MainActor
 final class Updater: NSObject, ObservableObject, SPUUpdaterDelegate {
     /// What the last check came to, in words the settings sheet can show.
@@ -84,7 +87,9 @@ final class Updater: NSObject, ObservableObject, SPUUpdaterDelegate {
     /// broken button.
     func checkNow() {
         guard Fork.updatesEnabled else { // Fork: updates off
-            outcome = .failed(L10n.t("Updates are off in Agent Notch. Pull the latest source and rebuild to update."))
+            // Fork: only release builds carry the feed and key; any other
+            // copy is replaced by downloading a release.
+            outcome = .failed(L10n.t("This copy of Agent Notch was built from source and doesn't update itself. Download the latest release from \(Fork.releasesPageURL)")) // Fork: own feed
             return
         }
         outcome = .checking
@@ -107,7 +112,8 @@ final class Updater: NSObject, ObservableObject, SPUUpdaterDelegate {
     /// Pure, so both endings can be tested without Sparkle.
     static func outcome(afterTimeoutFrom current: Outcome) -> Outcome {
         guard current == .checking else { return current }
-        return .failed(L10n.t("The update check didn't finish. Try again, or download the latest Codenotch from hivinz.com."))
+        // Fork: this app's own releases, never upstream's download site.
+        return .failed(L10n.t("The update check didn't finish. Try again, or download the latest Agent Notch from \(Fork.releasesPageURL)")) // Fork: own feed
     }
 
     /// A cycle that ended without saying found or not found — the person
@@ -120,6 +126,12 @@ final class Updater: NSObject, ObservableObject, SPUUpdaterDelegate {
     }
 
     // MARK: - SPUUpdaterDelegate
+
+    /// Fork: Sparkle asks its delegate for the feed before it reads user
+    /// defaults or the Info.plist, so a `defaults write … SUFeedURL`, or a
+    /// merge that brings upstream's feed back, can never point this app at
+    /// another app's updates.
+    nonisolated func feedURLString(for updater: SPUUpdater) -> String? { Fork.updateFeedURL } // Fork: own feed
 
     nonisolated func updaterDidNotFindUpdate(_ updater: SPUUpdater) {
         Task { @MainActor in self.outcome = .upToDate(Date()) }

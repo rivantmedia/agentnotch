@@ -135,9 +135,13 @@ targets:
         # tab through Apple Events (Terminal, iTerm2).
         NSAppleEventsUsageDescription: "Agent Notch selects the terminal tab a Claude session runs in and types your replies into it."
         # --- Sparkle -------------------------------------------------------
-        # Fork: no feed, no public key, no automatic checks. Upstream's feed
+        # Fork: no feed, no public key, no automatic checks here. Upstream's feed
         # (hivinz.com) and EdDSA key would silently replace this build with the
-        # official Codenotch; `Updater` is also inert (`Fork.updatesEnabled`).
+        # official Codenotch. Only release builds update themselves, from the
+        # fork's own GitHub releases: `Scripts/spm-build-app.sh --with-updates`
+        # (run by Scripts/release-build.sh) writes the fork's feed and key into
+        # the built bundle. Everywhere else, this Xcode build included, `Updater`
+        # stays inert (`Fork.updatesEnabled`).
         SUEnableAutomaticChecks: false
     settings:
       base:
