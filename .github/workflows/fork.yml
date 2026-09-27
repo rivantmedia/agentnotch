@@ -10,19 +10,26 @@ name: Fork
 #   seams, the engine imports no SwiftUI, and no Claude usage path can read a
 #   token (Scripts/check-seams.sh, Scripts/verify-token-free.sh).
 # Plus the Command Line Tools build path, which is how the fork is built day
-# to day (Scripts/spm-build-app.sh).
+# to day (Scripts/spm-build-app.sh), and a check that such a build never reads
+# an update feed. The Release workflow (release.yml) runs all of this first.
 
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # The Release workflow runs these same checks before it builds anything.
+  workflow_call:
 
 permissions:
   contents: read
 
+# A newer push cancels the older run. Named after the workflow that runs
+# (github.workflow is the caller's name inside a Release run), so a release's
+# checks and this workflow's own run for the same commit never cancel each
+# other.
 concurrency:
-  group: fork-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -102,3 +109,34 @@ jobs:
 
       - name: Command Line Tools app build
         run: Scripts/spm-build-app.sh
+
+      # Only a release build (Scripts/release-build.sh) may read an update
+      # feed: a copy built from source or a sealed one that did would replace
+      # itself with the release.
+      - name: Builds from source carry no update feed
+        run: |
+          set -euo pipefail
+          Scripts/spm-build-app.sh --skip-build --bundle-id com.rivantmedia.agentnotch.sealed \
+            --name "Agent Notch Sealed" --out build/sealed
+          for app in "build/Agent Notch.app" "build/sealed/Agent Notch Sealed.app"; do
+            plist="$app/Contents/Info.plist"
+            for key in SUFeedURL SUPublicEDKey; do
+              if plutil -extract "$key" raw "$plist" >/dev/null 2>&1; then
+                echo "::error::$app carries $key"; exit 1
+              fi
+            done
+            [[ "$(plutil -extract SUEnableAutomaticChecks raw "$plist")" == false ]] \
+              || { echo "::error::$app checks for updates"; exit 1; }
+            [[ "$(plutil -extract CFBundleVersion raw "$plist")" == "$(cat VERSION)" ]] \
+              || { echo "::error::$app's CFBundleVersion is not VERSION"; exit 1; }
+            echo "$app: no feed, no key, version $(cat VERSION)"
+          done
+          # And the release switch refuses anything but the real bundle id,
+          # for that reason and not some other failure.
+          status=0
+          refusal="$(Scripts/spm-build-app.sh --skip-build --with-updates --bundle-id com.rivantmedia.agentnotch.dev \
+            --out "$RUNNER_TEMP/refused" 2>&1)" || status=$?
+          if [[ $status -ne 2 || "$refusal" != *"refusing --with-updates"* ]]; then
+            echo "$refusal"
+            echo "::error::--with-updates did not refuse a .dev bundle id (exit $status)"; exit 1
+          fi

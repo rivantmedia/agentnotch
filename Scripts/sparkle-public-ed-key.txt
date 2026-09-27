@@ -1,0 +1,14 @@
+# Agent Notch's update signing key: the public half of the Ed25519 key pair
+# Sparkle checks every downloaded update against (SUPublicEDKey).
+#
+# Only release builds carry it: Scripts/spm-build-app.sh --with-updates copies
+# it into the Info.plist, and Scripts/release-build.sh refuses to sign a release
+# whose private key (the SPARKLE_ED_PRIVATE_KEY secret) does not match it.
+#
+# Lines starting with # and blank lines are ignored; the first other line is
+# the base64 of the 32-byte public key. Scripts/release-make-keys.sh
+# --update-key writes it. Changing it later strands every install, however it
+# is signed: release builds verify each update with the key they shipped with
+# before unpacking it (SUVerifyUpdateBeforeExtraction), so the script refuses
+# to replace it without --rotate, and the Release workflow refuses to publish
+# with a key other than the latest release's unless a manual run says so.
