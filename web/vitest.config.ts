@@ -17,6 +17,9 @@ export default defineConfig({
       ),
     },
   },
+  // tsconfig keeps JSX for Next.js to compile; the tests that render a client component need it
+  // compiled here.
+  oxc: { jsx: { runtime: "automatic" } },
   test: {
     include: ["tests/unit/**/*.test.ts"],
     environment: "node",

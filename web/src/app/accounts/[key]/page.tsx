@@ -10,6 +10,7 @@ import {
   formatTokens,
   plural,
 } from "~/lib/format";
+import { periodFromParam } from "~/lib/usage-period";
 import { isTRPCCode, requireViewer } from "~/server/pages";
 import { api, HydrateClient } from "~/trpc/server";
 
@@ -19,6 +20,7 @@ import { AccountActivity } from "./account-activity";
 import {
   filterFromParams,
   isAccountKey,
+  projectUsageInput,
   sessionsInput,
   usageFrom,
   usageInput,
@@ -35,6 +37,7 @@ export default async function AccountPage({
   searchParams: Promise<{
     project?: string | string[];
     member?: string | string[];
+    period?: string | string[];
   }>;
 }) {
   // layout.tsx already answered 404 for a key the viewer can't see, before anything streamed.
@@ -53,9 +56,12 @@ export default async function AccountPage({
     throw error;
   }
 
-  const filter = filterFromParams(await searchParams);
+  const query = await searchParams;
+  const filter = filterFromParams(query);
+  const period = periodFromParam(query.period);
   const fromMs = usageFrom(Date.now());
   void api.usage.history.prefetch(usageInput(key, fromMs));
+  void api.projects.usage.prefetch(projectUsageInput(key, period));
   void api.projects.list.prefetch({ accountKey: key });
   void api.sessions.list.prefetchInfinite(sessionsInput(key, filter));
 
@@ -172,6 +178,7 @@ export default async function AccountPage({
           members={account.members}
           pooled={account.pooled}
           initialFilter={filter}
+          initialPeriod={period}
         />
       </HydrateClient>
     </div>

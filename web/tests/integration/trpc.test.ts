@@ -63,6 +63,9 @@ describe("tRPC routers", () => {
       anon.sessions.get({ id: "x" }),
       anon.projects.list({ accountKey: K1 }),
       anon.projects.get({ id: "x" }),
+      anon.projects.usage({ period: "7d" }),
+      anon.projects.detail({ id: "x", period: "7d" }),
+      anon.projects.visible({ id: "x" }),
       anon.usage.history({ accountKey: K1 }),
       anon.pools.list(),
       anon.pools.create({ accountKey: K1 }),
@@ -114,6 +117,34 @@ describe("tRPC routers", () => {
     expect((await api.projects.get({ id: projects[0]!.id })).sessionCount).toBe(
       1,
     );
+    // Usage by project across both accounts, and one project's by account.
+    const usage = await api.projects.usage({ period: "all" });
+    expect(usage.projects.map((p) => [p.name, p.accounts.length])).toEqual([
+      ["agentnotch", 1],
+      ["billing-service", 1],
+    ]);
+    expect(
+      (
+        await api.projects.usage({ period: "all", accountKey: K2 })
+      ).projects.map((p) => p.name),
+    ).toEqual(["billing-service"]);
+    expect(
+      (await api.projects.usage({ period: "all", limit: 1 })).rest,
+    ).toMatchObject({ projects: 1, sessions: 1 });
+    const detail = await api.projects.detail({
+      id: projects[0]!.id,
+      period: "all",
+    });
+    expect(detail.accounts.map((a) => a.accountKey)).toEqual([K1]);
+    expect(await api.projects.visible({ id: projects[0]!.id })).toBe(true);
+    expect(
+      (
+        await api.sessions.list({
+          projectId: projects[0]!.id,
+          acrossAccounts: true,
+        })
+      ).items.map((s) => s.sessionId),
+    ).toEqual([S1]);
 
     const history = await api.usage.history({
       accountKey: K1,
@@ -150,6 +181,18 @@ describe("tRPC routers", () => {
     expect(await trpcCode(api.projects.list({ accountKey: K1 }))).toBe(
       "NOT_FOUND",
     );
+    expect(
+      await trpcCode(api.projects.usage({ period: "7d", accountKey: K1 })),
+    ).toBe("NOT_FOUND");
+    const annProject = await db.project.findFirstOrThrow({
+      where: { userId: "ann" },
+    });
+    expect(
+      await trpcCode(api.projects.detail({ id: annProject.id, period: "7d" })),
+    ).toBe("NOT_FOUND");
+    expect(await api.projects.visible({ id: annProject.id })).toBe(false);
+    // Bob's own view of usage by project has nothing of Ann's in it.
+    expect((await api.projects.usage({ period: "all" })).projects).toEqual([]);
     expect(await trpcCode(api.usage.history({ accountKey: K1 }))).toBe(
       "NOT_FOUND",
     );
@@ -228,6 +271,9 @@ describe("tRPC routers", () => {
       const outputs: unknown[] = [
         projects,
         await api.projects.get({ id: projects[0]!.id }),
+        await api.projects.usage({ period: "all" }),
+        await api.projects.usage({ period: "all", accountKey: K1 }),
+        await api.projects.detail({ id: projects[0]!.id, period: "all" }),
         await api.sessions.list({}),
         await api.accounts.list(),
         await api.accounts.get({ accountKey: K1 }),
@@ -256,6 +302,25 @@ describe("tRPC routers", () => {
     expect(await trpcCode(api.sessions.list({ limit: 1000 }))).toBe(
       "BAD_REQUEST",
     );
+    for (const period of ["90d", "", "ALL"]) {
+      expect(
+        await trpcCode(api.projects.usage({ period: period as "7d" })),
+      ).toBe("BAD_REQUEST");
+    }
+    expect(await trpcCode(api.projects.usage({ period: "7d", limit: 0 }))).toBe(
+      "BAD_REQUEST",
+    );
+    expect(
+      await trpcCode(api.projects.usage({ period: "7d", limit: 101 })),
+    ).toBe("BAD_REQUEST");
+    expect(
+      await trpcCode(
+        api.projects.usage({ period: "7d", accountKey: "not-a-key" }),
+      ),
+    ).toBe("BAD_REQUEST");
+    expect(
+      await trpcCode(api.projects.detail({ id: "\u0000", period: "7d" })),
+    ).toBe("BAD_REQUEST");
   });
 
   it("run the pool flow and share sessions through it", async () => {
@@ -298,6 +363,68 @@ describe("tRPC routers", () => {
     });
   });
 
+  it("list a project's sessions across accounts, and only rows the viewer sees", async () => {
+    // Ann works in agentnotch on K2 too.
+    const S3 = "c3c3c3c3-0000-4000-8000-000000000003";
+    await applySync(
+      db,
+      "ann",
+      request((r) => {
+        r.accounts = r.accounts.filter((a) => a.key === K2);
+        const base = r.sessions.find((s) => s.accountKey === K2)!;
+        const session = {
+          ...base,
+          sessionId: S3,
+          project: { key: "a".repeat(64), name: "agentnotch" },
+        };
+        delete session.summary;
+        r.sessions = [session];
+        r.usage = [];
+      }),
+      AFTER_FIXTURE,
+    );
+    const row = async (accountKey: string) =>
+      (
+        await db.project.findFirstOrThrow({
+          where: { userId: "ann", accountKey, name: "agentnotch" },
+        })
+      ).id;
+    const [k1Row, k2Row] = [await row(K1), await row(K2)];
+    const sessionIds = async (
+      viewer: typeof ann,
+      input: { projectId: string; acrossAccounts?: boolean },
+    ) =>
+      (await caller(viewer).sessions.list(input)).items
+        .map((s) => s.sessionId)
+        .sort();
+
+    expect(
+      await sessionIds(ann, { projectId: k1Row, acrossAccounts: true }),
+    ).toEqual([S1, S3].sort());
+    expect(await sessionIds(ann, { projectId: k1Row })).toEqual([S1]);
+    const detail = await caller(ann).projects.detail({
+      id: k2Row,
+      period: "all",
+    });
+    expect(detail.accounts.map((a) => a.accountKey).sort()).toEqual(
+      [K1, K2].sort(),
+    );
+
+    // Bob, pooled on K1 only, sees the K1 part, and nothing through the K2 row he can't see.
+    const { code } = await caller(ann).pools.create({ accountKey: K1 });
+    await caller(bob).pools.join({ code });
+    expect(
+      await sessionIds(bob, { projectId: k1Row, acrossAccounts: true }),
+    ).toEqual([S1]);
+    expect(
+      await sessionIds(bob, { projectId: k2Row, acrossAccounts: true }),
+    ).toEqual([]);
+    expect(
+      await trpcCode(caller(bob).projects.detail({ id: k2Row, period: "all" })),
+    ).toBe("NOT_FOUND");
+    expect(await caller(bob).projects.visible({ id: k2Row })).toBe(false);
+  });
+
   it("produce outputs that survive superjson", async () => {
     const accounts = await caller(ann).accounts.list();
     const back = superjson.parse<typeof accounts>(
@@ -307,5 +434,11 @@ describe("tRPC routers", () => {
     const k1 = back.find((a) => a.key === K1)!;
     expect(typeof k1.last30Days.tokens.total).toBe("bigint");
     expect(k1.lastActivityAt).toBeInstanceOf(Date);
+
+    const usage = await caller(ann).projects.usage({ period: "all" });
+    const usageBack = superjson.parse<typeof usage>(superjson.stringify(usage));
+    expect(usageBack).toEqual(usage);
+    expect(typeof usageBack.total.tokens.total).toBe("bigint");
+    expect(usageBack.projects[0]!.accounts[0]!.lastUsedAt).toBeInstanceOf(Date);
   });
 });

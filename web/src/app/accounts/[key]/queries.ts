@@ -2,6 +2,7 @@
  * Query inputs the account page prefetches on the server and its client components read back.
  * Both sides build them here, so they match exactly and the browser doesn't fetch again.
  */
+import { type UsagePeriod } from "~/lib/usage-period";
 
 export const SESSIONS_PAGE_SIZE = 20;
 
@@ -61,6 +62,14 @@ export function sessionsInput(accountKey: string, filter: SessionFilter) {
 export function usageFrom(now: number): number {
   const hour = 60 * 60 * 1000;
   return Math.floor((now - USAGE_HISTORY_DAYS * 24 * hour) / hour) * hour;
+}
+
+/**
+ * The account's usage by project: every project with sessions in the period, none folded away,
+ * since this page is the only one that shows them for this account alone.
+ */
+export function projectUsageInput(accountKey: string, period: UsagePeriod) {
+  return { period, accountKey };
 }
 
 export function usageInput(accountKey: string, fromMs: number) {

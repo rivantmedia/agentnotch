@@ -11,9 +11,11 @@ import {
   plural,
   usageSourceLabel,
 } from "~/lib/format";
+import { withPeriod, type UsagePeriod } from "~/lib/usage-period";
 import { api, type RouterOutputs } from "~/trpc/react";
 
 import { ConnectMacSteps } from "../_components/connect-mac";
+import { ProjectUsageList } from "../_components/project-usage-list";
 import { QueryBoundary } from "../_components/query-boundary";
 import { SessionList, SessionListSkeleton } from "../_components/session-list";
 import { RelativeTime } from "../_components/time";
@@ -25,12 +27,24 @@ import {
   SectionHeading,
   Skeleton,
 } from "../_components/ui";
+import {
+  PeriodPicker,
+  usePeriod,
+  UsageBreakdownSkeleton,
+} from "../_components/usage-breakdown";
 import { UsageMeter } from "../_components/usage-meter";
-import { RECENT_SESSIONS_INPUT } from "./queries";
+import { dashboardProjectsInput, RECENT_SESSIONS_INPUT } from "./queries";
 
 type AccountSummary = RouterOutputs["accounts"]["list"][number];
 
-export function DashboardView({ siteAddress }: { siteAddress: string | null }) {
+export function DashboardView({
+  siteAddress,
+  period,
+}: {
+  siteAddress: string | null;
+  /** The usage-by-project period the address bar asked for. */
+  period: UsagePeriod;
+}) {
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-10 px-4 py-8 sm:py-10">
       <PageHeader
@@ -49,13 +63,19 @@ export function DashboardView({ siteAddress }: { siteAddress: string | null }) {
           </LoadingBlock>
         }
       >
-        <Accounts siteAddress={siteAddress} />
+        <Accounts siteAddress={siteAddress} period={period} />
       </QueryBoundary>
     </div>
   );
 }
 
-function Accounts({ siteAddress }: { siteAddress: string | null }) {
+function Accounts({
+  siteAddress,
+  period,
+}: {
+  siteAddress: string | null;
+  period: UsagePeriod;
+}) {
   const [accounts] = api.accounts.list.useSuspenseQuery();
 
   if (accounts.length === 0) {
@@ -94,12 +114,15 @@ function Accounts({ siteAddress }: { siteAddress: string | null }) {
         </h2>
         <ul className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {accounts.map((account) => (
-            <li key={account.key} className="flex">
+            // min-w-0: a grid item is otherwise as wide as its longest title, which truncates
+            // only once the card may be narrower than it (a long email on a phone).
+            <li key={account.key} className="flex min-w-0">
               <AccountCard account={account} />
             </li>
           ))}
         </ul>
       </section>
+      <ProjectUsageSection accounts={accounts} initialPeriod={period} />
       <section aria-labelledby="recent-title" className="flex flex-col gap-4">
         <SectionHeading
           id="recent-title"
@@ -245,6 +268,65 @@ function AccountCardSkeleton() {
         ))}
       </div>
     </div>
+  );
+}
+
+/** Which projects the accounts' tokens went to, across every account. */
+function ProjectUsageSection({
+  accounts,
+  initialPeriod,
+}: {
+  accounts: AccountSummary[];
+  initialPeriod: UsagePeriod;
+}) {
+  const { period, shown, stale, choose } = usePeriod(initialPeriod);
+  const names = new Map(accounts.map((a) => [a.key, accountTitle(a)]));
+
+  return (
+    <section
+      aria-labelledby="project-usage-title"
+      className="flex flex-col gap-4"
+    >
+      <SectionHeading
+        id="project-usage-title"
+        title="Usage by project"
+        description="The tokens each project used, across all your accounts, by the sessions started in the period. Limits are per account, so these are shares of the tokens, not of a limit."
+        actions={
+          <PeriodPicker
+            value={period}
+            onChange={choose}
+            label="Usage by project over"
+          />
+        }
+      />
+      <div className="card p-5">
+        <QueryBoundary
+          what="usage by project"
+          fallback={
+            <LoadingBlock label="Loading usage by project…">
+              <UsageBreakdownSkeleton />
+            </LoadingBlock>
+          }
+          resetKeys={[shown]}
+        >
+          <ProjectUsageList
+            input={dashboardProjectsInput(shown)}
+            stale={stale}
+            accountName={
+              accounts.length > 1
+                ? (key) => names.get(key) ?? "Claude account"
+                : undefined
+            }
+            showOwner={accounts.some((a) => a.pooled)}
+            footer={
+              <Link href={withPeriod("/projects", shown)} className="link">
+                All projects
+              </Link>
+            }
+          />
+        </QueryBoundary>
+      </div>
+    </section>
   );
 }
 

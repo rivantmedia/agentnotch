@@ -1,7 +1,7 @@
 /**
- * The account page answers a real 404 for an account the viewer can't see: the check runs in
- * the route's layout, above its loading.tsx, so it throws notFound() before anything streams
- * (after the loading fallback flushed, the status would already be 200).
+ * The project page answers a real 404 for a project the viewer can't see, as the account page
+ * does: the check runs in the route's layout, above its loading.tsx, so it throws notFound()
+ * before anything streams.
  */
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -9,16 +9,16 @@ import path from "node:path";
 import { notFound } from "next/navigation";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const visible = vi.fn<(input: { accountKey: string }) => Promise<boolean>>();
+const visible = vi.fn<(input: { id: string }) => Promise<boolean>>();
 const requireViewer = vi.fn(async (_returnTo: string) => ({ id: "ann" }));
 
-vi.mock("~/trpc/server", () => ({ api: { accounts: { visible } } }));
+vi.mock("~/trpc/server", () => ({ api: { projects: { visible } } }));
 vi.mock("~/server/pages", () => ({ requireViewer }));
 
-const { default: AccountLayout } = await import("~/app/accounts/[key]/layout");
+const { default: ProjectLayout } = await import("~/app/projects/[id]/layout");
 
-const KEY = "8ca65b0df91fc776aded7f419f011fc1e99e2fd120e893692cfaf83f0fa994c0";
-const route = path.resolve(import.meta.dirname, "../../src/app/accounts/[key]");
+const ID = "cm1abcdef0000xyz";
+const route = path.resolve(import.meta.dirname, "../../src/app/projects/[id]");
 const app = path.resolve(import.meta.dirname, "../../src/app");
 
 /** What notFound() throws, to compare with (Next marks it with a digest). */
@@ -30,10 +30,10 @@ function notFoundError(): unknown {
   }
 }
 
-function render(key: string) {
-  return AccountLayout({
+function render(id: string) {
+  return ProjectLayout({
     children: "the page",
-    params: Promise.resolve({ key }),
+    params: Promise.resolve({ id }),
   });
 }
 
@@ -42,28 +42,29 @@ beforeEach(() => {
   requireViewer.mockClear();
 });
 
-describe("the account route's layout", () => {
-  it("answers not found for an account the viewer can't see", async () => {
+describe("the project route's layout", () => {
+  it("answers not found for a project the viewer can't see", async () => {
     visible.mockResolvedValue(false);
-    const error: unknown = await render(KEY).catch((e: unknown) => e);
+    const error: unknown = await render(ID).catch((e: unknown) => e);
     expect(error).toMatchObject({
       digest: (notFoundError() as { digest: string }).digest,
     });
-    expect(visible).toHaveBeenCalledWith({ accountKey: KEY });
-    expect(requireViewer).toHaveBeenCalledWith(`/accounts/${KEY}`);
+    expect(visible).toHaveBeenCalledWith({ id: ID });
+    expect(requireViewer).toHaveBeenCalledWith(`/projects/${ID}`);
   });
 
-  it("answers not found for a malformed key without asking", async () => {
-    const error: unknown = await render("not-a-key").catch((e: unknown) => e);
+  it("answers not found for a malformed id without asking", async () => {
+    const error: unknown = await render("not an id").catch((e: unknown) => e);
     expect(error).toMatchObject({
       digest: (notFoundError() as { digest: string }).digest,
     });
     expect(visible).not.toHaveBeenCalled();
+    expect(requireViewer).not.toHaveBeenCalled();
   });
 
-  it("renders the page for an account the viewer can see", async () => {
+  it("renders the page for a project the viewer can see", async () => {
     visible.mockResolvedValue(true);
-    expect(await render(KEY)).toBe("the page");
+    expect(await render(ID)).toBe("the page");
   });
 
   it("sits above every loading boundary", () => {

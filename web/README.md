@@ -37,16 +37,30 @@ too. The rows themselves, and the contract, stay per Mac. When a sync moves a se
 project row (its Mac's secret changed), the row it left is deleted in the same transaction once
 no session uses it. The account page's projects table says all this.
 
+**Usage by project.** The dashboard, each account page and `/projects` split the tokens, cost and
+sessions of a period (the last 7 or 30 days, or all time; `?period=7d|30d|all`, 7 days when left
+out) by project, and each project's page (`/projects/<id>`) splits the same by account. A session
+counts in a period by its start, as in the account cards' totals. Here a project is one person's
+folders of one name across accounts as well as Macs: a project key is made from the account's key
+too, so the website can't tell that two accounts worked in the same folder either, and groups by
+name (`src/server/services/project-usage.ts`). A pool member's projects count only on the
+accounts shared with you. Usage limits are per account and nothing reports them per project, so
+these are shares of the tokens, never of a limit, and the pages say so. A project's sessions
+across accounts are `sessions.list` with `acrossAccounts`; the project row it names must be one
+you can see.
+
 ## Pages
 
-| Path              | What it shows                                                                                                                                                                   |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/`               | What sync is, sign-in, and what the app sends                                                                                                                                   |
-| `/login`          | "Continue with Google"; explains `?error=` from a failed sign-in                                                                                                                |
-| `/dashboard`      | One card per visible Claude account, with limits, 7-day totals and a pooled badge. Also the most recent sessions. With nothing synced yet, it shows how to connect the Mac app  |
-| `/accounts/<key>` | 30-day usage charts per limit, with a table view. The projects table (grouped by folder name, Macs counted). Sessions filtered by project and member (`?project=` / `?member=`) |
-| `/pools`          | Create, copy and revoke share codes (they last 7 days). See members by email and remove them. Join with a code, or leave                                                        |
-| `/settings`       | The signed-in email, the website address for the app, the Macs that synced. Removing your summaries, or all your synced data                                                    |
+| Path              | What it shows                                                                                                                                                                                                                                         |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/`               | What sync is, sign-in, and what the app sends                                                                                                                                                                                                         |
+| `/login`          | "Continue with Google"; explains `?error=` from a failed sign-in                                                                                                                                                                                      |
+| `/dashboard`      | One card per visible Claude account, with limits, 7-day totals and a pooled badge. Usage by project across all accounts (the first 8, the rest added up). Also the most recent sessions. With nothing synced yet, it shows how to connect the Mac app |
+| `/accounts/<key>` | 30-day usage charts per limit, with a table view. Usage by project on the account (every project in the period). The projects table (grouped by folder name, Macs counted). Sessions filtered by project and member (`?project=` / `?member=`)        |
+| `/projects`       | Usage by project across all accounts: every project with sessions in the period, with each one's accounts                                                                                                                                             |
+| `/projects/<id>`  | One project on every account you see it on: its usage by account, and its sessions. Any of its rows' ids names it; one you can't see answers 404                                                                                                      |
+| `/pools`          | Create, copy and revoke share codes (they last 7 days). See members by email and remove them. Join with a code, or leave                                                                                                                              |
+| `/settings`       | The signed-in email, the website address for the app, the Macs that synced. Removing your summaries, or all your synced data                                                                                                                          |
 
 Everything signed-in reads through tRPC, and every read goes through the access rules in
 `src/server/services/access.ts`. Pages prefetch their queries on the server and hand them to
@@ -57,7 +71,10 @@ see, a code that didn't work) print nothing in production.
 
 An account you can't see (or that doesn't exist) answers HTTP 404, not a 200 carrying the
 not-found page: `src/app/accounts/[key]/layout.tsx` checks access before anything streams, above
-the route's `loading.tsx`, and the page only loads the account after that.
+the route's `loading.tsx`, and the page only loads the account after that. A project page does
+the same from `src/app/projects/[id]/layout.tsx`. A `loading.tsx` also wraps every route below
+its folder, so the projects list keeps its own in the `(list)` route group, where it can't stream
+ahead of that check; tests hold both routes to having none above them.
 
 **Dates from the future.** Sync accepts dates up to a day past the server's clock (for Macs whose
 clock runs a little ahead), and they are stored as sent, but no view dates anything later than

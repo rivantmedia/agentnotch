@@ -7,6 +7,7 @@ import {
   formatDuration,
   formatExact,
   formatPercent,
+  formatShare,
   formatRelative,
   formatTokens,
   isSessionActive,
@@ -16,6 +17,7 @@ import {
   plural,
   sessionDurationMs,
   sessionSourceLabel,
+  shareOf,
   usageSourceLabel,
   windowDescription,
   windowLabel,
@@ -219,5 +221,42 @@ describe("accounts", () => {
     expect(plural(1, "person", "people")).toBe("1 person");
     expect(plural(3, "person", "people")).toBe("3 people");
     expect(plural(1200, "session", "sessions")).toBe("1,200 sessions");
+  });
+});
+
+describe("shares of a whole", () => {
+  it("divide token counts, beyond Number's safe range too", () => {
+    expect(shareOf(1n, 4n)).toBe(0.25);
+    expect(shareOf(0n, 4n)).toBe(0);
+    expect(shareOf(4n, 4n)).toBe(1);
+    // Nothing to share: no part of it.
+    expect(shareOf(5n, 0n)).toBe(0);
+    expect(shareOf(-1n, 4n)).toBe(0);
+    expect(shareOf(9n, 4n)).toBe(1);
+    const big = 2n ** 70n;
+    expect(shareOf(big / 3n, big)).toBeCloseTo(1 / 3, 10);
+    // However small, a part that is there is never none of it.
+    expect(shareOf(1n, 10n ** 12n)).toBeGreaterThan(0);
+    expect(shareOf(1n, 2n ** 80n)).toBeGreaterThan(0);
+  });
+
+  it("show a small project as there, never as none", () => {
+    // 800 tokens of 22.8M, and 30K of half a billion: both read "<1%", neither "0%".
+    expect(formatShare(shareOf(800n, 22_800_000n))).toBe("<1%");
+    expect(formatShare(shareOf(30_000n, 500_000_000n))).toBe("<1%");
+    expect(formatShare(shareOf(9_999_999n, 10_000_000n))).toBe("99%");
+  });
+
+  it("read as whole percentages, never all or none of it when it isn't", () => {
+    expect(formatShare(0)).toBe("0%");
+    expect(formatShare(0.00001)).toBe("<1%");
+    expect(formatShare(0.0099)).toBe("<1%");
+    expect(formatShare(0.01)).toBe("1%");
+    expect(formatShare(0.424)).toBe("42%");
+    expect(formatShare(0.425)).toBe("43%");
+    expect(formatShare(0.996)).toBe("99%");
+    expect(formatShare(1)).toBe("100%");
+    expect(formatShare(Number.NaN)).toBe("0%");
+    expect(formatShare(-0.5)).toBe("0%");
   });
 });

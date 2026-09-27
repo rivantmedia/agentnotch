@@ -1,10 +1,20 @@
 "use client";
 
-import { useCallback, useDeferredValue, useId, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import {
+  useCallback,
+  useDeferredValue,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
 
 import { formatCost, formatExact, formatTokens, plural } from "~/lib/format";
+import { type UsagePeriod } from "~/lib/usage-period";
 import { api, type RouterOutputs } from "~/trpc/react";
 
+import { ProjectUsageList } from "../../_components/project-usage-list";
 import { QueryBoundary } from "../../_components/query-boundary";
 import {
   SessionList,
@@ -18,28 +28,58 @@ import {
   SectionHeading,
   Skeleton,
 } from "../../_components/ui";
-import { PROJECTS_DESCRIPTION } from "./copy";
-import { projectForId, sessionsInput, type SessionFilter } from "./queries";
+import {
+  PeriodPicker,
+  usePeriod,
+  UsageBreakdownSkeleton,
+} from "../../_components/usage-breakdown";
+import { PROJECTS_DESCRIPTION, PROJECT_USAGE_DESCRIPTION } from "./copy";
+import {
+  filterFromParams,
+  projectForId,
+  projectUsageInput,
+  sessionsInput,
+  type SessionFilter,
+} from "./queries";
 
 type Person = RouterOutputs["accounts"]["get"]["members"][number];
 type Project = RouterOutputs["projects"]["list"][number];
 
 /**
- * The account's projects and sessions. They share one filter (project, member), kept in the
- * address bar so a filtered view can be reloaded or shared with a pool member.
+ * The account's usage by project, projects and sessions. They share one filter (project,
+ * member), kept in the address bar with the usage period so a view can be reloaded or shared
+ * with a pool member.
  */
 export function AccountActivity({
   accountKey,
   members,
   pooled,
   initialFilter,
+  initialPeriod,
 }: {
   accountKey: string;
   members: Person[];
   pooled: boolean;
   initialFilter: SessionFilter;
+  initialPeriod: UsagePeriod;
 }) {
-  const [filter, setFilter] = useState<SessionFilter>(initialFilter);
+  const usage = usePeriod(initialPeriod);
+  // The address bar is the source of truth, as for the period (usePeriod): Back restores the page
+  // with its first render's props, and a link to the same page doesn't remount it. (No search
+  // params outside the App Router: the props stand in.)
+  const params = useSearchParams();
+  const urlFilter: SessionFilter = params
+    ? filterFromParams({
+        project: params.get("project") ?? undefined,
+        member: params.get("member") ?? undefined,
+      })
+    : initialFilter;
+  const [filter, setFilter] = useState<SessionFilter>(urlFilter);
+  const [seenFilter, setSeenFilter] = useState<SessionFilter>(urlFilter);
+  if (!sameFilter(urlFilter, seenFilter)) {
+    setSeenFilter(urlFilter);
+    setFilter(urlFilter);
+  }
   // The list follows the filter a render behind: while the new page loads, the old rows stay
   // (faded) instead of flashing back to a skeleton.
   const shownFilter = useDeferredValue(filter);
@@ -56,6 +96,14 @@ export function AccountActivity({
     window.history.replaceState(null, "", url);
   }, []);
 
+  // A link to a project's sessions here (from its project page) lands on them, whatever the
+  // loading boundary did to the browser's own jump to the fragment.
+  useEffect(() => {
+    if (window.location.hash !== "#sessions") return;
+    sessionsRef.current?.scrollIntoView({ block: "start" });
+    sessionsRef.current?.focus({ preventScroll: true });
+  }, []);
+
   const showProject = (projectId: string) => {
     applyFilter({ ...filter, projectId });
     const still = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -68,6 +116,51 @@ export function AccountActivity({
 
   return (
     <>
+      <section
+        aria-labelledby="project-usage-title"
+        className="flex flex-col gap-4"
+      >
+        <SectionHeading
+          id="project-usage-title"
+          title="Usage by project"
+          description={PROJECT_USAGE_DESCRIPTION}
+          actions={
+            <PeriodPicker
+              value={usage.period}
+              onChange={usage.choose}
+              label="Usage by project over"
+            />
+          }
+        />
+        <div className="card p-5">
+          <QueryBoundary
+            what="usage by project"
+            fallback={
+              <LoadingBlock label="Loading usage by project…">
+                <UsageBreakdownSkeleton />
+              </LoadingBlock>
+            }
+            resetKeys={[usage.shown]}
+          >
+            <ProjectUsageList
+              input={projectUsageInput(accountKey, usage.shown)}
+              stale={usage.stale}
+              showOwner={pooled}
+              action={(project) => (
+                <button
+                  type="button"
+                  onClick={() => showProject(project.id)}
+                  className="text-xs font-medium text-accent-ink underline decoration-1 underline-offset-3 hover:decoration-2"
+                  aria-label={`Show sessions in ${project.name}${pooled ? ` by ${project.owner.isViewer ? "you" : project.owner.displayName}` : ""}`}
+                >
+                  Show sessions
+                </button>
+              )}
+            />
+          </QueryBoundary>
+        </div>
+      </section>
+
       <section aria-labelledby="projects-title" className="flex flex-col gap-4">
         <SectionHeading
           id="projects-title"
@@ -97,6 +190,7 @@ export function AccountActivity({
 
       <section
         ref={sessionsRef}
+        id="sessions"
         tabIndex={-1}
         aria-labelledby="sessions-title"
         className="flex scroll-mt-20 flex-col gap-4 outline-none"
@@ -134,6 +228,10 @@ export function AccountActivity({
       </section>
     </>
   );
+}
+
+function sameFilter(a: SessionFilter, b: SessionFilter): boolean {
+  return a.projectId === b.projectId && a.ownerId === b.ownerId;
 }
 
 function Projects({

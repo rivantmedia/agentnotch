@@ -28,6 +28,7 @@ export function SessionList({
   items,
   accountName,
   showOwner,
+  showProject = true,
   dimmed = false,
 }: {
   items: readonly SessionItem[];
@@ -35,6 +36,8 @@ export function SessionList({
   accountName?: (accountKey: string) => string;
   /** Show whose session it is (pooled accounts). */
   showOwner: boolean;
+  /** Show its project's name; a project's own page leaves it out. */
+  showProject?: boolean;
   /** A refetch is under way: keep the old rows, faded. */
   dimmed?: boolean;
 }) {
@@ -52,6 +55,7 @@ export function SessionList({
           session={session}
           accountName={accountName}
           showOwner={showOwner}
+          showProject={showProject}
         />
       ))}
     </ul>
@@ -62,10 +66,12 @@ function SessionRow({
   session,
   accountName,
   showOwner,
+  showProject,
 }: {
   session: SessionItem;
   accountName?: (accountKey: string) => string;
   showOwner: boolean;
+  showProject: boolean;
 }) {
   const now = useNow();
   const active = now !== null && isSessionActive(session, now);
@@ -88,7 +94,12 @@ function SessionRow({
                 {accountName(session.accountKey)}
               </Link>
             ) : null}
-            <span className="font-medium text-ink">{session.project.name}</span>
+            {showProject ? (
+              // A folder name can be one long word; it breaks rather than widen the page.
+              <span className="min-w-0 font-medium wrap-anywhere text-ink">
+                {session.project.name}
+              </span>
+            ) : null}
             <Badge>{sessionSourceLabel(session.source)}</Badge>
             {active ? (
               <Badge tone="good">

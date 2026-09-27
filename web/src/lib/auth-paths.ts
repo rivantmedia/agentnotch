@@ -7,6 +7,7 @@
 export const PROTECTED_PREFIXES = [
   "/dashboard",
   "/accounts",
+  "/projects",
   "/pools",
   "/settings",
 ] as const;

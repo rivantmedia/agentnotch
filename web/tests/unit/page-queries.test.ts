@@ -4,12 +4,25 @@ import {
   filterFromParams,
   isAccountKey,
   projectForId,
+  projectUsageInput,
   SESSIONS_PAGE_SIZE,
   sessionsInput,
   usageFrom,
   usageInput,
   USAGE_HISTORY_DAYS,
 } from "~/app/accounts/[key]/queries";
+import {
+  DASHBOARD_PROJECTS_LIMIT,
+  dashboardProjectsInput,
+} from "~/app/dashboard/queries";
+import {
+  accountProjectHref,
+  allProjectsInput,
+  isProjectId,
+  PROJECT_SESSIONS_PAGE_SIZE,
+  projectDetailInput,
+  projectSessionsInput,
+} from "~/app/projects/queries";
 
 const KEY = "8ca65b0df91fc776aded7f419f011fc1e99e2fd120e893692cfaf83f0fa994c0";
 
@@ -92,5 +105,66 @@ describe("account page queries", () => {
     expect(isAccountKey(KEY)).toBe(true);
     expect(isAccountKey(KEY.toUpperCase())).toBe(false);
     expect(isAccountKey(KEY.slice(1))).toBe(false);
+  });
+});
+
+describe("usage by project queries", () => {
+  it("ask for the dashboard's and the account's first projects in the period", () => {
+    expect(dashboardProjectsInput("30d")).toEqual({
+      period: "30d",
+      limit: DASHBOARD_PROJECTS_LIMIT,
+    });
+    // The account page lists every project in the period: no limit at all, not an undefined one.
+    expect(projectUsageInput(KEY, "all")).toEqual({
+      period: "all",
+      accountKey: KEY,
+    });
+    expect(Object.keys(projectUsageInput(KEY, "7d"))).toEqual([
+      "period",
+      "accountKey",
+    ]);
+    // Every project on the projects page: no limit at all, not an undefined one.
+    expect(Object.keys(allProjectsInput("7d"))).toEqual(["period"]);
+  });
+
+  it("ask for one project on every account", () => {
+    expect(projectDetailInput("cm1abc", "7d")).toEqual({
+      id: "cm1abc",
+      period: "7d",
+    });
+    expect(projectSessionsInput("cm1abc")).toEqual({
+      projectId: "cm1abc",
+      acrossAccounts: true,
+      limit: PROJECT_SESSIONS_PAGE_SIZE,
+    });
+  });
+
+  it("link a project's account to its sessions there, over the same period", () => {
+    expect(accountProjectHref(KEY, "cm1abc", "7d")).toBe(
+      `/accounts/${KEY}?project=cm1abc#sessions`,
+    );
+    expect(accountProjectHref(KEY, "cm1abc", "all")).toBe(
+      `/accounts/${KEY}?project=cm1abc&period=all#sessions`,
+    );
+    // What the account page reads back from it.
+    const url = new URL(
+      accountProjectHref(KEY, "cm1_a-b", "30d"),
+      "https://x.invalid",
+    );
+    expect(
+      filterFromParams({
+        project: url.searchParams.get("project") ?? undefined,
+      }),
+    ).toEqual({ projectId: "cm1_a-b", ownerId: undefined });
+    expect(url.searchParams.get("period")).toBe("30d");
+  });
+
+  it("recognise project ids", () => {
+    expect(isProjectId("cm1abcdef0000xyz")).toBe(true);
+    expect(isProjectId("0b8e1f7a-9c2d-4e3f-8a1b-2c3d4e5f6a7b")).toBe(true);
+    expect(isProjectId("")).toBe(false);
+    expect(isProjectId("a b")).toBe(false);
+    expect(isProjectId("../accounts")).toBe(false);
+    expect(isProjectId("x".repeat(129))).toBe(false);
   });
 });

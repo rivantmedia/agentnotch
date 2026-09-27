@@ -14,11 +14,17 @@ import { ErrorNotice } from "./ui";
 export function QueryBoundary({
   what,
   fallback,
+  resetKeys,
   children,
 }: {
   /** What the section loads, for the error message: "your accounts". */
   what: string;
   fallback: ReactNode;
+  /**
+   * What the children load by, e.g. a period picked outside the section: when one changes after
+   * a failure, the section tries again with it instead of keeping the old error.
+   */
+  resetKeys?: readonly unknown[];
   children: ReactNode;
 }) {
   return (
@@ -26,6 +32,7 @@ export function QueryBoundary({
       {({ reset }) => (
         <ErrorBoundary
           onReset={reset}
+          resetKeys={resetKeys}
           fallback={(error, retry) => (
             <ErrorNotice error={error} what={what} onRetry={retry} />
           )}
@@ -39,6 +46,7 @@ export function QueryBoundary({
 
 type BoundaryProps = {
   onReset: () => void;
+  resetKeys?: readonly unknown[];
   fallback: (error: unknown, retry: () => void) => ReactNode;
   children: ReactNode;
 };
@@ -50,6 +58,15 @@ class ErrorBoundary extends Component<BoundaryProps, BoundaryState> {
 
   static getDerivedStateFromError(error: unknown): BoundaryState {
     return { failed: true, error };
+  }
+
+  componentDidUpdate(previous: BoundaryProps) {
+    if (
+      this.state.failed &&
+      changed(previous.resetKeys, this.props.resetKeys)
+    ) {
+      this.retry();
+    }
   }
 
   retry = () => {
@@ -64,4 +81,14 @@ class ErrorBoundary extends Component<BoundaryProps, BoundaryState> {
     }
     return this.props.children;
   }
+}
+
+function changed(
+  before: readonly unknown[] | undefined,
+  after: readonly unknown[] | undefined,
+): boolean {
+  if (before === after) return false;
+  if (before === undefined || after === undefined) return true;
+  if (before.length !== after.length) return true;
+  return before.some((value, i) => !Object.is(value, after[i]));
 }

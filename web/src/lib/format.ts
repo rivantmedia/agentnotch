@@ -47,6 +47,27 @@ export function formatPercent(utilization: number): string {
   return `${shown}%`;
 }
 
+/** A part's share of a whole, from 0 to 1; 0 when the whole is nothing. */
+export function shareOf(part: bigint, whole: bigint): number {
+  if (whole <= 0n || part <= 0n) return 0;
+  if (part >= whole) return 1;
+  // As Numbers: past the safe range they round, but keep ~16 significant digits, plenty for a
+  // share. And a part that is there never divides down to 0 (fixed-point bigint division would
+  // truncate a small project to none), so it reads "<1%" with a sliver.
+  return Number(part) / Number(whole);
+}
+
+/**
+ * "42%" of a whole. A share that is there but rounds to nothing reads "<1%", and only the whole
+ * reads "100%", so a breakdown never shows a part as all or none of it when it isn't.
+ */
+export function formatShare(share: number): string {
+  if (!Number.isFinite(share) || share <= 0) return "0%";
+  if (share >= 1) return "100%";
+  if (share < 0.01) return "<1%";
+  return `${Math.min(99, Math.round(share * 100))}%`;
+}
+
 const SECOND = 1000;
 const MINUTE = 60 * SECOND;
 const HOUR = 60 * MINUTE;

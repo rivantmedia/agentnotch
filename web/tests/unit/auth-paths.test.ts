@@ -13,6 +13,8 @@ describe("isProtectedPath", () => {
       "/dashboard/pools",
       "/accounts",
       "/accounts/abc",
+      "/projects",
+      "/projects/cm1abcdef0000xyz",
       "/pools",
       "/settings",
       "/settings/devices",
@@ -30,6 +32,7 @@ describe("isProtectedPath", () => {
       "/api/app/v1/config",
       "/api/trpc/viewer.current",
       "/dashboards",
+      "/projectsx",
       "/poolside",
       "/settingsx",
     ]) {

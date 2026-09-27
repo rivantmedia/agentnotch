@@ -15,13 +15,15 @@ export const sessionsRouter = createTRPCRouter({
    * A page of sessions, newest first (a start dated in the future counts as now). Pass
    * `nextCursor` back as `cursor` for the next page: it carries the first page's clock, so the
    * walk has no gaps or repeats. `projectId` selects the project's whole group: its owner's rows
-   * of that folder name on the account, from every Mac.
+   * of that folder name on the account, from every Mac; with `acrossAccounts`, on every account
+   * the viewer sees them on.
    */
   list: protectedProcedure
     .input(
       z.object({
         accountKey: accountKeyInput.optional(),
         projectId: idInput.optional(),
+        acrossAccounts: z.boolean().optional(),
         ownerId: idInput.optional(),
         source: sessionSourceInput.optional(),
         from: z.date().optional(),

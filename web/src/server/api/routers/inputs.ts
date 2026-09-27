@@ -3,6 +3,7 @@
  */
 import { z } from "zod";
 
+import { USAGE_PERIODS } from "~/lib/usage-period";
 import {
   hexKey,
   sessionSourceSchema,
@@ -31,3 +32,5 @@ export const idInput = storableText(z.string().min(1).max(128));
 export const searchInput = storableText(z.string().max(200));
 export const sessionSourceInput = sessionSourceSchema;
 export const usageSourceInput = usageSourceSchema;
+/** A usage breakdown's period (lib/usage-period.ts). */
+export const usagePeriodInput = z.enum(USAGE_PERIODS);

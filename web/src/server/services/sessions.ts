@@ -38,6 +38,11 @@ export type SessionListFilter = {
    * account: the same folder name on their other Macs (projects.ts groups them the same way).
    */
   projectId?: string;
+  /**
+   * With `projectId`: the owner's folders of that name on every account the viewer sees them
+   * on, not only on the project row's own account (the project page, project-usage.ts).
+   */
+  acrossAccounts?: boolean;
   /** Only sessions of this person (the viewer or a pool member). */
   ownerId?: string;
   source?: string;
@@ -122,13 +127,24 @@ function clampedColumns(now: Prisma.Sql): Prisma.Sql {
     ${clampedTime(Prisma.sql`s."summaryAt"`, now)} AS "summaryAt"`;
 }
 
-/** The ids of every project in `projectId`'s group: same owner, account and name. */
-function projectGroupIds(projectId: string): Prisma.Sql {
+/**
+ * The ids of every project in `projectId`'s group: same owner, account and name, or with
+ * `acrossAccounts` same owner and name on any account. The row named must be one the viewer
+ * sees, so an id of someone's unshared project can't select their shared ones of that name.
+ */
+function projectGroupIds(
+  projectId: string,
+  acrossAccounts: boolean,
+  visible: Prisma.Sql,
+): Prisma.Sql {
+  const sameAccount = acrossAccounts
+    ? Prisma.empty
+    : Prisma.sql`AND g."accountKey" = p."accountKey"`;
   return Prisma.sql`
     SELECT g."id" FROM "Project" g
     JOIN "Project" p
-      ON g."userId" = p."userId" AND g."accountKey" = p."accountKey" AND g."name" = p."name"
-    WHERE p."id" = ${projectId}`;
+      ON g."userId" = p."userId" AND g."name" = p."name" ${sameAccount}
+    WHERE p."id" = ${projectId} AND ${visible}`;
 }
 
 export async function listSessions(
@@ -158,9 +174,12 @@ export async function listSessions(
     ownedRowSql(ownedRowWhere(scope, { accountKey: filter.accountKey }), "s"),
   ];
   if (filter.projectId) {
-    conditions.push(
-      Prisma.sql`s."projectId" IN (${projectGroupIds(filter.projectId)})`,
+    const group = projectGroupIds(
+      filter.projectId,
+      filter.acrossAccounts === true,
+      ownedRowSql(ownedRowWhere(scope), "p"),
     );
+    conditions.push(Prisma.sql`s."projectId" IN (${group})`);
   }
   if (filter.ownerId)
     conditions.push(Prisma.sql`s."userId" = ${filter.ownerId}`);
