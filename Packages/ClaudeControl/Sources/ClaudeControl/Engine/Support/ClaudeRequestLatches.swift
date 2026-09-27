@@ -88,4 +88,10 @@ public final class ClaudeHeldRequests<Value> {
             subject.send(now)
         }
     }
+
+    // Swift 6.3's optimizer crashes on this class's implicit deinit (signal
+    // 11 in EarlyPerfInliner, release builds only; 6.4 is fine), which breaks
+    // the Release workflow's Xcode 26 build. Nothing to clean up here.
+    @_optimize(none)
+    deinit {}
 }
