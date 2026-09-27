@@ -51,16 +51,18 @@ you can see.
 
 ## Pages
 
-| Path              | What it shows                                                                                                                                                                                                                                         |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/`               | What sync is, sign-in, and what the app sends                                                                                                                                                                                                         |
-| `/login`          | "Continue with Google"; explains `?error=` from a failed sign-in                                                                                                                                                                                      |
-| `/dashboard`      | One card per visible Claude account, with limits, 7-day totals and a pooled badge. Usage by project across all accounts (the first 8, the rest added up). Also the most recent sessions. With nothing synced yet, it shows how to connect the Mac app |
-| `/accounts/<key>` | 30-day usage charts per limit, with a table view. Usage by project on the account (every project in the period). The projects table (grouped by folder name, Macs counted). Sessions filtered by project and member (`?project=` / `?member=`)        |
-| `/projects`       | Usage by project across all accounts: every project with sessions in the period, with each one's accounts                                                                                                                                             |
-| `/projects/<id>`  | One project on every account you see it on: its usage by account, and its sessions. Any of its rows' ids names it; one you can't see answers 404                                                                                                      |
-| `/pools`          | Create, copy and revoke share codes (they last 7 days). See members by email and remove them. Join with a code, or leave                                                                                                                              |
-| `/settings`       | The signed-in email, the website address for the app, the Macs that synced. Removing your summaries, or all your synced data                                                                                                                          |
+| Path                   | What it shows                                                                                                                                                                                                                                         |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/`                    | What sync is, sign-in, and what the app sends                                                                                                                                                                                                         |
+| `/login`               | "Continue with Google"; explains `?error=` from a failed sign-in                                                                                                                                                                                      |
+| `/dashboard`           | One card per visible Claude account, with limits, 7-day totals and a pooled badge. Usage by project across all accounts (the first 8, the rest added up). Also the most recent sessions. With nothing synced yet, it shows how to connect the Mac app |
+| `/accounts/<key>`      | 30-day usage charts per limit, with a table view. Usage by project on the account (every project in the period). The projects table (grouped by folder name, Macs counted). Sessions filtered by project and member (`?project=` / `?member=`)        |
+| `/projects`            | Usage by project across all accounts: every project with sessions in the period, with each one's accounts                                                                                                                                             |
+| `/projects/<id>`       | One project on every account you see it on: its usage by account, and its sessions. Any of its rows' ids names it; one you can't see answers 404                                                                                                      |
+| `/pools`               | Create, copy and revoke share codes (they last 7 days). See members by email and remove them. Join with a code, or leave                                                                                                                              |
+| `/settings`            | The signed-in email, the website address for the app, the Macs that synced. Removing your summaries, or all your synced data                                                                                                                          |
+| `/download`            | The latest release's file for each platform, the visitor's marked; Windows and Linux read "Not available yet" until a release carries a file for them. How to open the app the first time, and how updates arrive. Public                             |
+| `/download/<platform>` | `mac`, `windows` or `linux`: a redirect to that file on the repository's GitHub releases (and nowhere else), back to `/download` when there is none, or to GitHub's releases page when GitHub can't be reached. Public                                |
 
 Everything signed-in reads through tRPC, and every read goes through the access rules in
 `src/server/services/access.ts`. Pages prefetch their queries on the server and hand them to
@@ -112,8 +114,9 @@ too) and in one transaction that waits for any sync of yours to finish:
 | `src/server/auth/`                       | Bearer verification (`jose`, JWKS or legacy HS256) and `getViewer`                                 |
 | `src/server/services/`                   | Access rules, sync, accounts, sessions, projects, usage, pools, your data, database rate limits    |
 | `src/server/client-ip.ts`                | The client's IP address as the per-IP limits key it (hashed, never stored)                         |
+| `src/server/releases.ts`                 | The latest GitHub release for `/download`, cached for 5 minutes                                    |
 | `src/server/api/`                        | tRPC routers for the website's pages                                                               |
-| `src/lib/`                               | Pure helpers: formatting, chart geometry, redirect checks, site address                            |
+| `src/lib/`                               | Pure helpers: formatting, chart geometry, redirect checks, site address, release files             |
 | `src/lib/supabase/`, `src/middleware.ts` | Supabase cookie session: refresh, protected pages                                                  |
 | `prisma/`                                | Schema and migrations (the first one also enables row-level security)                              |
 | `tests/unit`, `tests/integration`        | Vitest; integration runs against a throwaway Postgres in Docker                                    |
@@ -191,6 +194,8 @@ cp .env.example .env    # .env is git-ignored; never commit it
 | `NEXT_PUBLIC_SITE_URL`                 | The site's public address; the app's "Open dashboard" goes to `<this>/dashboard`                    |
 | `SUPABASE_JWT_SECRET`                  | Optional: only for projects still signing tokens with the legacy HS256 secret                       |
 | `RATE_LIMIT_PEPPER`                    | Optional, recommended: a long random string that keys the hash of IP addresses in the per-IP limits |
+| `RELEASES_REPO`                        | Optional: GitHub `owner/name` whose releases `/download` offers; `rivantmedia/agentnotch` if unset  |
+| `GITHUB_RELEASES_TOKEN`                | Optional, recommended on Vercel: a GitHub token for reading releases (see [Downloads](#downloads))  |
 
 `NEXT_PUBLIC_*` values are compiled into the build. Set them before building, and rebuild
 after changing them.
@@ -304,7 +309,39 @@ Notes:
   in front of nginx, say), have the last one append the client's address as the first one
   reported it (nginx's `real_ip` module does this), or every client counts as the CDN's address.
 
+## Downloads
+
+`/download` offers the latest release of the Mac app from the repository in `RELEASES_REPO`
+(`rivantmedia/agentnotch` unless set), which the repository's release workflow publishes. The
+latest release is the newest one that is neither a draft nor a prerelease. Each platform gets
+one file, picked by extension and by the words in its name, since GitHub renames uploads (a
+space becomes a dot): for the Mac the disk image, else the zip Sparkle updates from; for Windows
+an `.exe`, else an `.msi`; for Linux an `.AppImage`, else a `.deb` or `.rpm`. Sparkle's
+`appcast.xml`, signatures, checksums and anything named after upstream's Codenotch are never
+offered, and Windows and Linux read "Not available yet" until a release carries a file for them.
+The rules are `src/lib/releases.ts`; the fetch is `src/server/releases.ts`.
+
+- **Caching.** The site asks GitHub's API for the 5 newest releases, and Next's Data Cache keeps
+  the answer for 5 minutes, so a new release shows up within that without a redeploy. It lists
+  releases instead of asking for `/releases/latest`, which answers 404 until the first release
+  (Next caches only a 200). Without a token, GitHub allows 60 requests an hour per IP address.
+  On Vercel, or any host whose outbound addresses are shared, other sites use the same
+  allowance. A refusal isn't cached, so the buttons fall back to GitHub's releases page until
+  the limit resets. Set `GITHUB_RELEASES_TOKEN` there.
+- **The buttons** link to `/download/<platform>`, which redirects (302, never cached) to the
+  file, and only to a file under `https://github.com/<repo>/releases/download/`. They are plain
+  links, not `next/link`, which would prefetch the redirect. The landing page and the header
+  link to these pages and never wait on GitHub themselves.
+- **No release yet:** `/download` says so and links the source. `/download/<platform>` comes back
+  to `/download?unavailable=<platform>`, as it does when the release has no file for that
+  platform.
+- **GitHub unreachable** (an error, an answer other than 200, one that doesn't read as a list of
+  releases, or none within 5 seconds): `/download` points to GitHub's releases page, and
+  `/download/<platform>` redirects there.
+
 ## Connect the Mac app
+
+Install the app first, from `/download` (see [Downloads](#downloads)).
 
 1. Sign in on the website with the Google account you want your history under.
 2. In Agent Notch, open **Settings > Claude Code > Cloud**. Paste the website's address under

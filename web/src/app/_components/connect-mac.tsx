@@ -1,12 +1,21 @@
+import Link from "next/link";
+
 import { CopyButton } from "./copy-button";
 
 /**
- * How to connect the Mac app to this website: the address to paste and the three steps. Used by
- * the dashboard's empty state and by Settings.
+ * How to connect the Mac app to this website: where to get it, the address to paste and the
+ * three steps. Used by the dashboard's empty state and by Settings.
  */
 export function ConnectMacSteps({ address }: { address: string | null }) {
   return (
     <div className="flex flex-col gap-4">
+      <p className="text-sm text-ink-2">
+        Don&apos;t have the app yet?{" "}
+        <Link href="/download" className="link">
+          Download Agent Notch
+        </Link>
+        .
+      </p>
       <SiteAddressField address={address} />
       <ol className="flex flex-col gap-3 text-sm">
         {[

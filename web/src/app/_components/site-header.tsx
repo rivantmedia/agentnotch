@@ -6,7 +6,10 @@ import { api } from "~/trpc/server";
 import { LogoMark } from "./logo";
 import { NavLinks } from "./nav-links";
 
-/** The bar on every page: the name, the signed-in navigation, and sign in / sign out. */
+/**
+ * The bar on every page: the name, the signed-in navigation, the download page, and sign in /
+ * sign out.
+ */
 export async function SiteHeader() {
   let viewer: Awaited<ReturnType<typeof api.viewer.current>> = null;
   try {
@@ -22,7 +25,7 @@ export async function SiteHeader() {
       <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-2.5 sm:flex-nowrap">
         <Link
           href={viewer ? "/dashboard" : "/"}
-          className="flex items-center gap-2 rounded-md font-semibold tracking-tight"
+          className="flex shrink-0 items-center gap-2 rounded-md font-semibold tracking-tight whitespace-nowrap"
         >
           <LogoMark />
           <span>Agent Notch</span>
@@ -32,7 +35,14 @@ export async function SiteHeader() {
           {viewer ? <NavLinks /> : null}
         </div>
 
-        <div className="ml-auto flex items-center gap-3">
+        {/* From md, where the email shows, min-w-0 lets it truncate to make room; otherwise the
+            cluster keeps its full width and pushes Sign out off a 768–853px screen. Not below
+            md: with no email to give way, the buttons would spill past the edge instead. */}
+        <div className="ml-auto flex items-center gap-3 md:min-w-0">
+          {/* Not in NavLinks: signed-out visitors, who need it most, don't get those. */}
+          <Link href="/download" className="btn btn-ghost btn-sm">
+            Download
+          </Link>
           {viewer ? (
             <>
               <span

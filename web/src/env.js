@@ -16,6 +16,15 @@ export const env = createEnv({
     // Optional: keys the hash of a client's IP address in the per-IP rate limits, so the stored
     // hashes can't be turned back into addresses by trying every one.
     RATE_LIMIT_PEPPER: z.string().min(16).optional(),
+    // Optional: the GitHub repository (`owner/name`) whose latest release /download offers.
+    // Unset means rivantmedia/agentnotch (src/lib/releases.ts, which holds the same rule).
+    RELEASES_REPO: z
+      .string()
+      .regex(/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/(?!\.\.?$)[\w.-]{1,100}$/)
+      .optional(),
+    // Optional: a GitHub token for reading those releases. Public releases need none; a token
+    // lifts GitHub's limit of 60 unauthenticated requests an hour per IP address.
+    GITHUB_RELEASES_TOKEN: z.string().min(1).optional(),
     NODE_ENV: z
       .enum(["development", "test", "production"])
       .default("development"),
@@ -41,6 +50,8 @@ export const env = createEnv({
     DIRECT_URL: process.env.DIRECT_URL,
     SUPABASE_JWT_SECRET: process.env.SUPABASE_JWT_SECRET,
     RATE_LIMIT_PEPPER: process.env.RATE_LIMIT_PEPPER,
+    RELEASES_REPO: process.env.RELEASES_REPO,
+    GITHUB_RELEASES_TOKEN: process.env.GITHUB_RELEASES_TOKEN,
     NODE_ENV: process.env.NODE_ENV,
     NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
     NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:

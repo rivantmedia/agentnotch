@@ -29,6 +29,8 @@ describe("isProtectedPath", () => {
       "/login",
       "/auth/callback",
       "/auth/signout",
+      "/download",
+      "/download/mac",
       "/api/app/v1/config",
       "/api/trpc/viewer.current",
       "/dashboards",

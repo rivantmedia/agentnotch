@@ -74,23 +74,26 @@ export default async function Home() {
             account&apos;s limits, the projects it worked on, and the tokens
             every session took.
           </p>
-          <div className="flex max-w-sm flex-col gap-3">
-            {signedIn ? (
-              <Link
-                href="/dashboard"
-                className="btn btn-primary self-start px-5"
-              >
+          {signedIn ? (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
+              <Link href="/dashboard" className="btn btn-primary px-5">
                 Open dashboard
               </Link>
-            ) : (
-              <>
+              <DownloadLinks />
+            </div>
+          ) : (
+            <>
+              <div className="flex max-w-sm flex-col gap-3">
                 <GoogleSignInButton next="/dashboard" />
                 <p className="text-sm text-ink-3">
                   Google is used only to sign you in: your name and email.
                 </p>
-              </>
-            )}
-          </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                <DownloadLinks />
+              </div>
+            </>
+          )}
         </div>
         <ExampleCard />
       </section>
@@ -212,6 +215,23 @@ export default async function Home() {
         </div>
       </section>
     </div>
+  );
+}
+
+/** Links only: the landing page never waits on GitHub (the download page does). */
+function DownloadLinks() {
+  return (
+    <>
+      {/* /download/mac redirects to the file, it is no page: next/link would prefetch it (a
+          GitHub lookup per view) and navigate to it in the client. */}
+      {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
+      <a href="/download/mac" className="btn btn-secondary px-4">
+        Download for Mac
+      </a>
+      <Link href="/download" className="link text-sm">
+        Other platforms
+      </Link>
+    </>
   );
 }
 
