@@ -33,6 +33,21 @@
   --color-grid: #e1e0d9;
   --color-axis: #c3c2b7;
 
+  /*
+   * Categorical slots for part-to-whole charts (the usage pies), in this order only: each slot
+   * touches the next and the last the first, and those pairs were validated (lightness band,
+   * chroma, colour-blind and normal-vision distance, both modes) on the card surface. Aqua,
+   * yellow and magenta sit under 3:1 on white, so every value is also written in the legend.
+   * `other` is the de-emphasis gray of a folded tail.
+   */
+  --color-cat-1: #2a78d6;
+  --color-cat-2: #eb6834;
+  --color-cat-3: #1baf7a;
+  --color-cat-4: #eda100;
+  --color-cat-5: #e87ba4;
+  --color-cat-6: #008300;
+  --color-cat-other: #898781;
+
   --color-good: #0ca30c;
   --color-good-ink: #006300;
   --color-warning: #fab219;
@@ -64,6 +79,14 @@
     --color-series-wash: rgb(57 135 229 / 0.12);
     --color-grid: #2c2c2a;
     --color-axis: #383835;
+
+    /* The same hues, stepped for the dark surface (and validated there). */
+    --color-cat-1: #3987e5;
+    --color-cat-2: #d95926;
+    --color-cat-3: #199e70;
+    --color-cat-4: #c98500;
+    --color-cat-5: #d55181;
+    --color-cat-6: #008300;
 
     --color-good-ink: #3fbf3f;
     --color-warning-ink: #f5c55c;

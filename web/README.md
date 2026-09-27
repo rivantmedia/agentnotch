@@ -39,8 +39,9 @@ no session uses it. The account page's projects table says all this.
 
 **Usage by project.** The dashboard, each account page and `/projects` split the tokens, cost and
 sessions of a period (the last 7 or 30 days, or all time; `?period=7d|30d|all`, 7 days when left
-out) by project, and each project's page (`/projects/<id>`) splits the same by account. A session
-counts in a period by its start, as in the account cards' totals. Here a project is one person's
+out) by project, as a pie beside a list that is its legend (the first 6 projects get slices, the
+rest share a gray one), and each project's page (`/projects/<id>`) splits the same by account. A
+session counts in a period by its start, as in the account cards' totals. Here a project is one person's
 folders of one name across accounts as well as Macs: a project key is made from the account's key
 too, so the website can't tell that two accounts worked in the same folder either, and groups by
 name (`src/server/services/project-usage.ts`). A pool member's projects count only on the
@@ -51,18 +52,18 @@ you can see.
 
 ## Pages
 
-| Path                   | What it shows                                                                                                                                                                                                                                         |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/`                    | What sync is, sign-in, and what the app sends                                                                                                                                                                                                         |
-| `/login`               | "Continue with Google"; explains `?error=` from a failed sign-in                                                                                                                                                                                      |
-| `/dashboard`           | One card per visible Claude account, with limits, 7-day totals and a pooled badge. Usage by project across all accounts (the first 8, the rest added up). Also the most recent sessions. With nothing synced yet, it shows how to connect the Mac app |
-| `/accounts/<key>`      | 30-day usage charts per limit, with a table view. Usage by project on the account (every project in the period). The projects table (grouped by folder name, Macs counted). Sessions filtered by project and member (`?project=` / `?member=`)        |
-| `/projects`            | Usage by project across all accounts: every project with sessions in the period, with each one's accounts                                                                                                                                             |
-| `/projects/<id>`       | One project on every account you see it on: its usage by account, and its sessions. Any of its rows' ids names it; one you can't see answers 404                                                                                                      |
-| `/pools`               | Create, copy and revoke share codes (they last 7 days). See members by email and remove them. Join with a code, or leave                                                                                                                              |
-| `/settings`            | The signed-in email, the website address for the app, the Macs that synced. Removing your summaries, or all your synced data                                                                                                                          |
-| `/download`            | The latest release's file for each platform, the visitor's marked; Windows and Linux read "Not available yet" until a release carries a file for them. How to open the app the first time, and how updates arrive. Public                             |
-| `/download/<platform>` | `mac`, `windows` or `linux`: a redirect to that file on the repository's GitHub releases (and nowhere else), back to `/download` when there is none, or to GitHub's releases page when GitHub can't be reached. Public                                |
+| Path                   | What it shows                                                                                                                                                                                                                                                  |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/`                    | What sync is, sign-in, and what the app sends                                                                                                                                                                                                                  |
+| `/login`               | "Continue with Google"; explains `?error=` from a failed sign-in                                                                                                                                                                                               |
+| `/dashboard`           | One card per visible Claude account, with limits, 7-day totals and a pooled badge. Usage by project across all accounts as a pie (the first 6, the rest added up). Also the most recent sessions. With nothing synced yet, it shows how to connect the Mac app |
+| `/accounts/<key>`      | 30-day usage charts per limit, with a table view. Usage by project on the account (every project in the period). The projects table (grouped by folder name, Macs counted). Sessions filtered by project and member (`?project=` / `?member=`)                 |
+| `/projects`            | Usage by project across all accounts: every project with sessions in the period, with each one's accounts                                                                                                                                                      |
+| `/projects/<id>`       | One project on every account you see it on: its usage by account, and its sessions. Any of its rows' ids names it; one you can't see answers 404                                                                                                               |
+| `/pools`               | Create, copy and revoke share codes (they last 7 days). See members by email and remove them. Join with a code, or leave                                                                                                                                       |
+| `/settings`            | The signed-in email, the website address for the app, the Macs that synced. Removing your summaries, or all your synced data                                                                                                                                   |
+| `/download`            | The latest release's file for each platform, the visitor's marked; Windows and Linux read "Not available yet" until a release carries a file for them. How to open the app the first time, and how updates arrive. Public                                      |
+| `/download/<platform>` | `mac`, `windows` or `linux`: a redirect to that file on the repository's GitHub releases (and nowhere else), back to `/download` when there is none, or to GitHub's releases page when GitHub can't be reached. Public                                         |
 
 Everything signed-in reads through tRPC, and every read goes through the access rules in
 `src/server/services/access.ts`. Pages prefetch their queries on the server and hand them to

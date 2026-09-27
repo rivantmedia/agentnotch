@@ -6,6 +6,7 @@ import {
   useDeferredValue,
   useId,
   useState,
+  type PointerEvent,
   type ReactNode,
 } from "react";
 
@@ -53,6 +54,12 @@ export type BreakdownRow = {
   lastUsedAt?: Date | null;
   /** The folded tail ("12 more projects"): drawn in gray, so it never reads as one project. */
   rest?: boolean;
+  /**
+   * Beside a pie, the row is its slice's legend entry: this colour marks it in place of a bar,
+   * and `slice` names the slice it belongs to (rows past the named slices share the other one).
+   */
+  swatch?: string;
+  slice?: string;
 };
 
 /**
@@ -138,15 +145,19 @@ export function PeriodPicker({
 }
 
 /**
- * Usage split into parts (projects, or a project's accounts) as ranked bars: each part's tokens
- * as a share of `whole`, one hue on a same-hue track like the limit meters. Every number is also
- * written out beside its bar, so nothing depends on reading the bar or hovering it.
+ * Usage split into parts (projects, or a project's accounts): each part's tokens as a share of
+ * `whole`. As ranked bars (one hue on a same-hue track, like the limit meters), or, beside a
+ * pie, as its legend: a swatch per row, and pointing at a row lights its slice. Every number is
+ * written out either way, so nothing depends on reading a bar or a slice, or on hovering.
  */
 export function UsageBreakdown({
   rows,
   whole,
   label,
   dimmed = false,
+  bars = true,
+  activeSlice = null,
+  onActiveSlice,
 }: {
   rows: readonly BreakdownRow[];
   /** The tokens the shares are of: every part added up, the folded tail included. */
@@ -155,6 +166,11 @@ export function UsageBreakdown({
   label: string;
   /** A refetch is under way: keep the old rows, faded. */
   dimmed?: boolean;
+  /** Draw a share bar per row; false beside a pie, where the rows are its legend. */
+  bars?: boolean;
+  /** The pie slice being pointed at, whose rows are marked. */
+  activeSlice?: string | null;
+  onActiveSlice?: (slice: string | null) => void;
 }) {
   return (
     <ol
@@ -166,23 +182,75 @@ export function UsageBreakdown({
       )}
     >
       {rows.map((row) => (
-        <BreakdownItem key={row.key} row={row} whole={whole} />
+        <BreakdownItem
+          key={row.key}
+          row={row}
+          whole={whole}
+          bar={bars}
+          active={activeSlice !== null && row.slice === activeSlice}
+          onActiveSlice={onActiveSlice}
+        />
       ))}
     </ol>
   );
 }
 
-function BreakdownItem({ row, whole }: { row: BreakdownRow; whole: bigint }) {
+function BreakdownItem({
+  row,
+  whole,
+  bar,
+  active,
+  onActiveSlice,
+}: {
+  row: BreakdownRow;
+  whole: bigint;
+  bar: boolean;
+  active: boolean;
+  onActiveSlice?: (slice: string | null) => void;
+}) {
   const { tokens, sessions, costUsd } = row.totals;
   const share = shareOf(tokens.total, whole);
   const cost = formatCost(costUsd);
   const split = `Input ${formatExact(tokens.input)} · Output ${formatExact(tokens.output)} · Cache write ${formatExact(tokens.cacheCreation)} · Cache read ${formatExact(tokens.cacheRead)}`;
+  // Hover for a mouse only: a finger's tap fires enter and leave together, which would light the
+  // slice and put it out at once. Keyboard focus lights it too.
+  const point =
+    onActiveSlice && row.slice !== undefined
+      ? {
+          onPointerEnter: (e: PointerEvent) => {
+            if (e.pointerType === "mouse") onActiveSlice(row.slice ?? null);
+          },
+          onPointerLeave: (e: PointerEvent) => {
+            if (e.pointerType === "mouse") onActiveSlice(null);
+          },
+          onFocus: () => onActiveSlice(row.slice ?? null),
+          onBlur: () => onActiveSlice(null),
+        }
+      : {};
 
   return (
-    <li className="flex flex-col gap-1.5 py-3.5 first:pt-0 last:pb-0">
+    <li
+      className={cx(
+        "flex flex-col gap-1.5 transition-colors",
+        // Bars run flush with the card's padding; a legend row pads itself, so its highlight
+        // has room around the text.
+        bar ? "py-3.5 first:pt-0 last:pb-0" : "rounded-md px-2 py-3",
+        active && "bg-surface-2",
+      )}
+      {...point}
+    >
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
-          <div className="min-w-0 font-medium break-words">{row.label}</div>
+          <div className="flex min-w-0 items-baseline gap-2 font-medium break-words">
+            {row.swatch ? (
+              <span
+                aria-hidden="true"
+                className="size-2.5 shrink-0 translate-y-px rounded-full"
+                style={{ backgroundColor: row.swatch }}
+              />
+            ) : null}
+            <div className="min-w-0">{row.label}</div>
+          </div>
           {row.action}
         </div>
         <p className="text-sm whitespace-nowrap tabular-nums">
@@ -194,7 +262,7 @@ function BreakdownItem({ row, whole }: { row: BreakdownRow; whole: bigint }) {
           </span>
         </p>
       </div>
-      <ShareBar share={share} rest={row.rest === true} />
+      {bar ? <ShareBar share={share} rest={row.rest === true} /> : null}
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-xs text-ink-2">
         <div className="min-w-0">{row.detail}</div>
         <p className="tabular-nums">
