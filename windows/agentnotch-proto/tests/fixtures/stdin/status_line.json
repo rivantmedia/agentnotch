@@ -1,0 +1,33 @@
+{
+  "session_id": "5d1e0a7b-3c21-4f7e-9a0b-1c2d3e4f5a6b",
+  "transcript_path": "C:\\Users\\me\\.claude-work\\projects\\C--Users-me-code-app\\5d1e0a7b-3c21-4f7e-9a0b-1c2d3e4f5a6b.jsonl",
+  "cwd": "C:\\Users\\me\\code\\app",
+  "model": {
+    "id": "claude-opus-4-5",
+    "display_name": "Opus 4.5"
+  },
+  "workspace": {
+    "current_dir": "C:\\Users\\me\\code\\app"
+  },
+  "version": "2.1.282",
+  "cost": {
+    "total_cost_usd": 1.25,
+    "total_duration_ms": 90000
+  },
+  "context_window": {
+    "used_percentage": 37,
+    "context_window_size": 200000,
+    "total_input_tokens": 74000
+  },
+  "rate_limits": {
+    "five_hour": {
+      "used_percentage": 42.5,
+      "resets_at": 1790000000
+    },
+    "seven_day": {
+      "used_percentage": 12,
+      "resets_at": 1790300000
+    }
+  },
+  "session_name": "Fix login"
+}

@@ -1,0 +1,6 @@
+{
+  "stdin": "permission_request_bash",
+  "response": {
+    "decision": "deny"
+  }
+}

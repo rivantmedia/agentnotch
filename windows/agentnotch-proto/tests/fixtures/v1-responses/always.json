@@ -1,0 +1,19 @@
+{
+  "stdin": "permission_request_bash",
+  "response": {
+    "decision": "allow",
+    "updated_permissions": [
+      {
+        "type": "addRules",
+        "rules": [
+          {
+            "toolName": "Bash",
+            "ruleContent": "npm run test:*"
+          }
+        ],
+        "behavior": "allow",
+        "destination": "localSettings"
+      }
+    ]
+  }
+}

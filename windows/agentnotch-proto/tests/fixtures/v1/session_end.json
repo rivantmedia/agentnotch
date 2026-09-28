@@ -1,0 +1,21 @@
+{
+  "agent_id": null,
+  "agent_type": null,
+  "attended": true,
+  "config_dir_env": "C:\\Users\\me\\.claude-work",
+  "cwd": "C:\\Users\\me\\code\\app",
+  "entrypoint": "cli",
+  "event": "SessionEnd",
+  "hook_pid": 6789,
+  "permission_mode": "default",
+  "pid": 4242,
+  "protocol": 1,
+  "reason": "prompt_input_exit",
+  "session_id": "5d1e0a7b-3c21-4f7e-9a0b-1c2d3e4f5a6b",
+  "status": "ended",
+  "terminal": {
+    "term_program": null,
+    "wt_session": "0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0"
+  },
+  "transcript_path": "C:\\Users\\me\\.claude-work\\projects\\C--Users-me-code-app\\5d1e0a7b-3c21-4f7e-9a0b-1c2d3e4f5a6b.jsonl"
+}

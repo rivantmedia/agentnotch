@@ -1,0 +1,19 @@
+{
+  "session_id": "5d1e0a7b-3c21-4f7e-9a0b-1c2d3e4f5a6b",
+  "transcript_path": "C:\\Users\\me\\.claude-work\\projects\\C--Users-me-code-app\\5d1e0a7b-3c21-4f7e-9a0b-1c2d3e4f5a6b.jsonl",
+  "cwd": "C:\\Users\\me\\code\\app",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "TaskCreate",
+  "tool_input": {
+    "subject": "Write the migration tests",
+    "description": "v2 schema"
+  },
+  "tool_use_id": "toolu_02TASK",
+  "tool_response": {
+    "task": {
+      "id": 3,
+      "subject": "Write the migration tests"
+    }
+  }
+}
