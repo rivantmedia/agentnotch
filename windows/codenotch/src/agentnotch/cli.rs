@@ -9,7 +9,8 @@
 //! The fork claims upstream's command names too (`doctor`, `install-hooks`, `uninstall-hooks`,
 //! `autostart`): upstream's arms still sit in `main`, unreachable, and upstream's doctor would
 //! read Claude's credentials. An argument naming the `agentnotch:` scheme is never a command,
-//! whatever else argv holds.
+//! whatever else argv holds: such an argv is either an app launch (`None`) or, when it also names
+//! one of these commands, refused without running anything.
 
 use std::io::Write;
 use std::panic::{self, AssertUnwindSafe};
@@ -29,12 +30,21 @@ const COMMANDS: [&str; 6] = [
     "autostart",
 ];
 
-/// `Some(exit code)` for a command the fork owns (it has run), `None` to let the app start.
+/// The exit code of a command line that names a command and a link at once.
+const REFUSED: i32 = 2;
+
+/// `Some(exit code)` for a command the fork owns (it has run, or was refused), `None` to let the
+/// app start.
 pub fn run(args: &[String]) -> Option<i32> {
-    if args.iter().skip(1).any(|a| deeplink::names_scheme(a)) {
-        return None;
-    }
     let command = args.get(1)?.as_str();
+    if args.iter().skip(1).any(|a| deeplink::names_scheme(a)) {
+        // A link is never a command. Letting such an argv start the app is right unless it also
+        // names a command: upstream's arms for those names sit in `main` right after this seam,
+        // so `None` would run them (its doctor reads Claude's credentials; its installer writes
+        // hooks without consent). Windows never launches the app that way (a link arrives as the
+        // only argument), so it is refused, with nothing run, printed or written.
+        return COMMANDS.contains(&command).then_some(REFUSED);
+    }
     if !COMMANDS.contains(&command) {
         return None;
     }
@@ -176,16 +186,32 @@ mod tests {
     #[test]
     fn upstreams_command_names_are_claimed() {
         // Upstream's arms for these stay in main, unreachable: its doctor reads Claude's
-        // credentials and its installer writes upstream's hooks.
-        for name in [
-            "doctor",
-            "install-hooks",
-            "uninstall-hooks",
-            "autostart",
-            "control",
-            "inspect-accounts",
-        ] {
+        // credentials and its installer writes upstream's hooks. Read from main itself, so a
+        // command an upstream merge adds fails here until the fork claims it.
+        for name in crate::CONSOLE_CMDS {
             assert!(COMMANDS.contains(&name), "{name}");
+        }
+        for name in ["control", "inspect-accounts"] {
+            assert!(COMMANDS.contains(&name), "{name}");
+        }
+    }
+
+    #[test]
+    fn upstreams_arms_never_run_beside_a_link() {
+        // `None` would fall through to upstream's arm for the same name in main.
+        for name in crate::CONSOLE_CMDS {
+            for link in ["agentnotch://open", "AGENTNOTCH:x", "\"agentnotch://open\""] {
+                assert_eq!(
+                    super::run(&argv(&["agentnotch.exe", name, link])),
+                    Some(super::REFUSED),
+                    "{name} {link}"
+                );
+                assert_eq!(
+                    super::run(&argv(&["agentnotch.exe", name, "--quiet", link])),
+                    Some(super::REFUSED),
+                    "{name} --quiet {link}"
+                );
+            }
         }
     }
 
@@ -198,6 +224,8 @@ mod tests {
 
     #[test]
     fn a_deep_link_is_never_a_command() {
+        // A link (and whatever follows it) starts the app; the single-instance plugin hands it
+        // to a running copy.
         assert_eq!(
             super::run(&argv(&[
                 "agentnotch.exe",
@@ -206,15 +234,26 @@ mod tests {
             None
         );
         assert_eq!(
-            super::run(&argv(&["agentnotch.exe", "doctor", "agentnotch://open"])),
+            super::run(&argv(&["agentnotch.exe", "agentnotch://open", "doctor"])),
             None
+        );
+        // Beside a command name, nothing runs at all.
+        assert_eq!(
+            super::run(&argv(&["agentnotch.exe", "doctor", "agentnotch://open"])),
+            Some(super::REFUSED)
         );
         assert_eq!(
             super::run(&argv(&[
                 "agentnotch.exe",
-                "uninstall-hooks",
-                "AGENTNOTCH:x"
+                "control",
+                "status",
+                "agentnotch:x"
             ])),
+            Some(super::REFUSED)
+        );
+        // Not a command: the app starts, and the link is ignored (not the only argument).
+        assert_eq!(
+            super::run(&argv(&["agentnotch.exe", "--silent", "agentnotch://open"])),
             None
         );
     }
