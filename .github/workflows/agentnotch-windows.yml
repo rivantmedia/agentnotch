@@ -10,9 +10,14 @@ name: Windows
 # The Release workflow calls this with `release: true` and the updater's public
 # key; every other build carries no key and no feed, so a copy built from
 # source never updates itself. No secret is ever read here.
+#
+# Every branch whose push touches the port runs it: a work package is proven on
+# Windows by this workflow going green on its own branch (DESIGN-WIN §8). `**`
+# rather than no branch filter, so a tag push (path filters don't apply to
+# tags) never starts it.
 on:
   push:
-    branches: [windows-port]
+    branches: ['**']
     paths:
       - 'windows/**'
       - 'VERSION'
