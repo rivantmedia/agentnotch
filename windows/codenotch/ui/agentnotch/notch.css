@@ -1,0 +1,3 @@
+/* Agent Notch's additions to upstream's notch page (DESIGN-WIN §5.2): count badges, the success
+   ring, resting marks. Loaded by seam WS1, before the page's own <style>, so nothing here can
+   override upstream by accident. Empty in the scaffold: the fork's UI package (WP10) fills it. */

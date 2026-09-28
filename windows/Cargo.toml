@@ -1,5 +1,5 @@
 [workspace]
-members = ["codenotch", "codenotch-hook"]
+members = ["codenotch", "codenotch-hook", "agentnotch-proto", "agentnotch-engine", "agentnotch-win", "agentnotch-hook", "agentnotch-release"] # Fork: WWS
 resolver = "2"
 
 [profile.release]

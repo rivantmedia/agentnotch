@@ -1,0 +1,65 @@
+# The Windows implementations of the engine's platform traits (DESIGN-WIN §2.3):
+# each function does one OS thing and returns plain data; every decision stays in
+# agentnotch-engine. On other systems the crate compiles to stub.rs, whose
+# services all answer "not available on this platform", so the fork crates'
+# `cargo test` runs on macOS and Linux too.
+[package]
+name = "agentnotch-win"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.88"
+publish = false
+license = "Apache-2.0"
+description = "Agent Notch: Windows platform services for the engine"
+
+[dependencies]
+agentnotch-engine = { path = "../agentnotch-engine" }
+agentnotch-proto = { path = "../agentnotch-proto" }
+serde_json = "1"
+# Names the transport's event channel in the HookTransport and Terminals impls; the same
+# version the engine uses, so both sides share one Sender type.
+crossbeam-channel = "0.5"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+  "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Pipes",
+  "Win32_System_IO", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_Diagnostics_Debug", "Win32_System_JobObjects", "Win32_System_Console",
+  "Win32_System_Registry", "Win32_System_SystemInformation", "Win32_System_Com",
+  "Win32_System_DataExchange", "Win32_System_Memory", "Win32_Storage_FileSystem",
+  "Win32_UI_WindowsAndMessaging", "Win32_UI_Accessibility", "Win32_UI_Shell",
+  "Win32_UI_Shell_Common",
+  "Win32_Security_AppLocker",               # SaferComputeTokenFromLevel (integrity-level tests)
+  "Win32_NetworkManagement_NetManagement",  # NetUserAdd (the squatter test)
+  "Win32_UI_Input_KeyboardAndMouse", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi",
+  "Win32_Media_Audio", "Wdk_System_Threading",
+  "Data_Xml_Dom", "UI_Notifications", "Foundation" ] }   # 0.61 = the version Tauri already locks
+tokio = { version = "1", features = ["rt", "net", "io-util", "sync", "time", "macros"] }
+# Windows-only on purpose: on Linux native-tls would pull OpenSSL (C). On Windows
+# it is schannel, the OS's own TLS stack.
+ureq = { version = "2", default-features = false, features = ["json", "native-tls", "gzip"] }
+native-tls = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+agentnotch-engine = { path = "../agentnotch-engine", features = ["testkit"] }
+
+[[bin]]
+name = "fake-claude"            # test-only fake executable (never shipped: not in any bundle)
+path = "src/bin/fake-claude.rs"
+test = false
+
+[[bin]]
+name = "pipe-test-server"       # test-only: the real pipe server in its own process (integrity-level tests)
+path = "src/bin/pipe-test-server.rs"
+test = false
+
+[[bin]]
+name = "pipe-squatter"          # test-only: creates the pipe name first, records any byte it receives
+path = "src/bin/pipe-squatter.rs"
+test = false
+
+[lints.rust]
+# Win32 calls are unsafe; each unsafe operation inside an unsafe fn still gets
+# its own block, so every one of them is visible and justified where it happens.
+unsafe_op_in_unsafe_fn = "deny"

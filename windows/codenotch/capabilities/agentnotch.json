@@ -1,0 +1,10 @@
+{
+  "identifier": "agentnotch",
+  "description": "Agent Notch's sessions panel: events and its own window",
+  "windows": [
+    "agentnotch-panel"
+  ],
+  "permissions": [
+    "core:default"
+  ]
+}

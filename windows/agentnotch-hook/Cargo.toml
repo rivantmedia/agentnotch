@@ -1,0 +1,49 @@
+# agentnotch-hook.exe (DESIGN-WIN §1.1, §1.8): the one native helper Claude Code
+# runs for every hook event and the status line, and the app runs to type into a
+# console. It must never block Claude Code: it parses argv by hand (an argument
+# parser exits 2 on a usage error, and a hook exiting 2 blocks Claude Code),
+# never panics out, and exits 0 on every path. check-seams.sh rejects argument
+# parser crates here, and the clippy lints below reject unwrap/expect and
+# printing macros outside tests (output goes through write_all, errors ignored).
+[package]
+name = "agentnotch-hook"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.88"
+publish = false
+license = "Apache-2.0"
+description = "Agent Notch: the hook, status line and console helper exe"
+
+[[bin]]
+name = "agentnotch-hook"
+path = "src/main.rs"
+
+[[bin]]
+name = "console-reader"         # test-only reader for console_type.rs; never bundled
+path = "tests/bin/console-reader.rs"
+test = false
+
+[dependencies]                  # no argument parser, ever (§1.8); check-seams.sh rejects clap/argh/pico-args/lexopt here
+agentnotch-proto = { path = "../agentnotch-proto" }
+serde_json = "1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem",
+  "Win32_System_Pipes", "Win32_System_IO", "Win32_System_Threading", "Win32_Security",
+  "Win32_Security_Authorization", "Win32_System_Console", "Win32_System_JobObjects",
+  "Win32_System_Diagnostics_ToolHelp", "Wdk_System_Threading"] }     # 0.61 = the one tokio already locks
+
+[dev-dependencies]
+agentnotch-win = { path = "../agentnotch-win" }
+agentnotch-engine = { path = "../agentnotch-engine", features = ["testkit"] }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+# A panic exits 101 and `println!` panics on a closed stdout; both would reach
+# Claude Code as a failing hook. clippy.toml lets tests use them.
+unwrap_used = "deny"
+expect_used = "deny"
+print_stdout = "deny"
+print_stderr = "deny"

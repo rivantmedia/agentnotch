@@ -1,0 +1,4 @@
+# Tests may unwrap and print; the shipped exe may not (Cargo.toml [lints.clippy]).
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-print-in-tests = true

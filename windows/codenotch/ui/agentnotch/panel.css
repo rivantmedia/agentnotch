@@ -1,0 +1,3 @@
+/* The sessions panel's page (DESIGN-WIN §5.3). The window is transparent: the page draws the
+   card and its tail as one silhouette. Scaffold: an empty, transparent page. */
+html, body { margin: 0; background: transparent; color: var(--an-text); font-family: var(--an-font); }

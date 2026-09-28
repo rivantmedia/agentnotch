@@ -171,7 +171,7 @@ fn default_scale() -> f64 {
     1.0
 }
 fn default_weekly_ring() -> String {
-    "off".into()
+    "outside".into() // Fork: WC (the Mac fork's default: weekly ring outside)
 }
 fn default_color_transition() -> String {
     "hard_step".into()
@@ -266,7 +266,7 @@ impl Default for Config {
 pub fn config_path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("codenotch")
+        .join(crate::agentnotch::data_folder_name()) // Fork: WR-DIR
         .join("config.json")
 }
 

@@ -13,7 +13,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         builder = builder.icon(icon);
     }
     builder
-        .tooltip(concat!("Codenotch v", env!("CARGO_PKG_VERSION")))
+        .tooltip(crate::agentnotch::tray_tooltip()) // Fork: WR-TRAY
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(|app, ev| handle(app, ev.id().as_ref()))
@@ -72,7 +72,7 @@ fn build_menu_from(app: &AppHandle, lang: &str, lines: &[(String, String, bool)]
     }
     let refresh = MenuItemBuilder::with_id("refresh", tr(&lang, "refresh_all")).build(app)?;
     let settings = MenuItemBuilder::with_id("settings", tr(&lang, "settings")).build(app)?;
-    let quit = MenuItemBuilder::with_id("quit", tr(&lang, "quit_app")).build(app)?;
+    let quit = MenuItemBuilder::with_id("quit", crate::agentnotch::rebrand(tr(&lang, "quit_app"))).build(app)?; // Fork: WR-QUIT
     let mut menu = MenuBuilder::new(app);
     for item in &items {
         menu = menu.item(item);
@@ -110,9 +110,9 @@ fn tooltip(app: &AppHandle) -> String {
         parts.push(format!("{} {value}", crate::provider_label(id)));
     }
     if parts.is_empty() {
-        concat!("Codenotch v", env!("CARGO_PKG_VERSION")).to_string()
+        crate::agentnotch::tray_tooltip() // Fork: WR-TRAY
     } else {
-        format!("Codenotch — {}", parts.join(" · "))
+        format!("{} — {}", crate::agentnotch::DISPLAY_NAME, parts.join(" · ")) // Fork: WR-TRAY
     }
 }
 
