@@ -49,13 +49,17 @@ pub(crate) struct SealedFixture {
     sinks: Mutex<Vec<Arc<EventSink>>>,
 }
 
-/// Moves every time in a fixture by `delta_ms`: fields named `*_ms`, and
-/// upstream's `resets_at` / `fetched_at` (epoch ms too).
+/// Moves every time in a fixture by `delta_ms`: fields named `*_at_ms` and
+/// `since_ms`, and upstream's `resets_at` / `fetched_at` (epoch ms too).
+/// Durations (`duration_ms`, …) stay as they are.
 fn shift_times(value: &mut Value, delta_ms: i64) {
     match value {
         Value::Object(map) => {
             for (key, item) in map.iter_mut() {
-                let is_time = key.ends_with("_ms") || key == "resets_at" || key == "fetched_at";
+                let is_time = key.ends_with("_at_ms")
+                    || key == "since_ms"
+                    || key == "resets_at"
+                    || key == "fetched_at";
                 match item {
                     Value::Number(n) if is_time => {
                         if let Some(ms) = n.as_u64() {

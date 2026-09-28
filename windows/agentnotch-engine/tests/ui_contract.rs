@@ -128,6 +128,10 @@ fn the_snapshot_fixture_is_consistent() {
 }
 
 fn sealed_hub() -> (Hub, Arc<Mutex<Vec<HubEvent>>>) {
+    sealed_hub_at(TEST_START_MS)
+}
+
+fn sealed_hub_at(now_ms: u64) -> (Hub, Arc<Mutex<Vec<HubEvent>>>) {
     let root = std::env::temp_dir().join("agentnotch-ui-contract-never-created");
     let cfg = HubConfig {
         roots: Roots::under(&root),
@@ -140,7 +144,7 @@ fn sealed_hub() -> (Hub, Arc<Mutex<Vec<HubEvent>>>) {
         hook_exe: root.join("install").join("agentnotch-hook.exe"),
         pipe_name: agentnotch_proto::pipe_name("S-1-5-21-1000000001-1000000002-1000000003-1001"),
     };
-    let hub = Hub::sealed(cfg, Arc::new(FakeClock::at_ms(TEST_START_MS)));
+    let hub = Hub::sealed(cfg, Arc::new(FakeClock::at_ms(now_ms)));
     let events = Arc::new(Mutex::new(Vec::new()));
     let sink = events.clone();
     hub.on_event(Box::new(move |event| {
@@ -392,6 +396,49 @@ fn the_sealed_hub_emits_and_reacts() {
         .windows
         .iter()
         .any(|w| w.id.starts_with("session@claude-acct-")));
+}
+
+#[test]
+fn a_later_clock_moves_the_times_but_not_the_durations() {
+    const DAY: u64 = 86_400_000;
+    let fixture: HubSnapshot = serde_json::from_value(fixture("snapshot.json")).unwrap();
+    let (hub, events) = sealed_hub_at(TEST_START_MS + DAY);
+    let snapshot = hub.snapshot();
+    assert_eq!(snapshot.generated_at_ms, TEST_START_MS + DAY);
+    for (now, then) in snapshot.sessions.iter().zip(&fixture.sessions) {
+        assert_eq!(now.since_ms, then.since_ms + DAY, "{}", now.session_id);
+    }
+    let resets = |s: &HubSnapshot| s.rings[0].usage.windows[0].resets_at.unwrap();
+    assert_eq!(resets(&snapshot), resets(&fixture) + DAY);
+
+    hub.call(Call::ChatOpen {
+        session_id: "needs-permission".into(),
+    })
+    .unwrap();
+    let chat = events
+        .lock()
+        .unwrap()
+        .iter()
+        .find_map(|e| match e {
+            HubEvent::Chat(chat) => Some(chat.clone()),
+            _ => None,
+        })
+        .unwrap();
+    let durations: Vec<u64> = chat
+        .items
+        .iter()
+        .filter_map(|item| match &item.body {
+            ChatBody::Tool {
+                result:
+                    Some(ToolResultView::Task {
+                        total_duration_ms, ..
+                    }),
+                ..
+            } => *total_duration_ms,
+            _ => None,
+        })
+        .collect();
+    assert_eq!(durations, [41_000]);
 }
 
 #[test]
