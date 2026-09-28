@@ -38,9 +38,9 @@ pub const IDENTIFIER: &str = "com.rivantmedia.agentnotch";
 pub const SETTINGS_TITLE: &str = "Agent Notch Settings";
 pub const DROPZONES_TITLE: &str = "Agent Notch drop zones";
 pub const PANEL_TITLE: &str = "Agent Notch sessions";
-/// Upstream's "Sign in" button on a Claude ring would start `claude auth login`, a token path the
-/// fork never takes (seam WU1). The fork's projection never offers the button; this is the answer
-/// should anything still invoke the command.
+/// Upstream's "Sign in" button on a Claude ring would start Claude Code's own browser login from
+/// the app, part of the token path the fork never takes (seam WU1). The fork's projection never
+/// offers the button; this is the answer should anything still invoke the command.
 pub const SIGN_IN_REFUSED: &str =
     "Agent Notch never signs in to Claude itself. Run claude in a terminal, then /login.";
 /// What upstream's own hooks switch says when Claude Code control hasn't been turned on (WH7).
