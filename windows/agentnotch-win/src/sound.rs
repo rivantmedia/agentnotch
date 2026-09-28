@@ -3,6 +3,8 @@
 //!
 //! Not implemented in this build: silent.
 
+#![cfg(windows)]
+
 use agentnotch_engine::platform::{Chime, Sounds};
 
 #[derive(Debug, Default)]

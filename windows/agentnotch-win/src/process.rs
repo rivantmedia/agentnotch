@@ -6,6 +6,8 @@
 //! Not implemented in this build: every answer is "unknown", which the engine already handles
 //! (sessions keyed by id, no liveness checks, attribution from the hooks alone).
 
+#![cfg(windows)]
+
 use std::path::PathBuf;
 use std::time::SystemTime;
 

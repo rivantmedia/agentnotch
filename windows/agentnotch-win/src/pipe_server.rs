@@ -7,6 +7,8 @@
 //! Not implemented in this build: `start` reports it, which the hub shows as "Not receiving hook
 //! events" while sessions still come from Claude Code's session files.
 
+#![cfg(windows)]
+
 use agentnotch_engine::platform::{ConnId, HookTransport, TransportEvent};
 
 use crate::NOT_IMPLEMENTED;

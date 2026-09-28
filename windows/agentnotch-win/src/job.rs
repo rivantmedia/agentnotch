@@ -5,6 +5,8 @@
 //! Not implemented in this build: nothing is ever started, so no probe or summary runs and the
 //! rings show the engine's honest "unavailable" status.
 
+#![cfg(windows)]
+
 use std::io;
 
 use agentnotch_engine::platform::{CommandRunner, CommandSpec, RunningCommand};

@@ -5,6 +5,8 @@
 //! Not implemented in this build: nothing is posted, and the permission reads "unavailable" so
 //! Settings says banners aren't available rather than pretending they were sent.
 
+#![cfg(windows)]
+
 use agentnotch_engine::platform::{Notifier, NotifyPermission, Toast};
 
 #[derive(Debug, Default)]

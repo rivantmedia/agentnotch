@@ -29,7 +29,8 @@ windows = { version = "0.61", features = [
   "Win32_System_DataExchange", "Win32_System_Memory", "Win32_Storage_FileSystem",
   "Win32_UI_WindowsAndMessaging", "Win32_UI_Accessibility", "Win32_UI_Shell",
   "Win32_UI_Shell_Common",
-  "Win32_Security_AppLocker",               # SaferComputeTokenFromLevel (integrity-level tests)
+  "Win32_System_Ole", "Win32_System_Variant",  # UI Automation's property conditions and values (VARIANT)
+  "Win32_Security_AppLocker",              # SaferComputeTokenFromLevel (integrity-level tests)
   "Win32_NetworkManagement_NetManagement",  # NetUserAdd (the squatter test)
   "Win32_UI_Input_KeyboardAndMouse", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi",
   "Win32_Media_Audio", "Wdk_System_Threading",

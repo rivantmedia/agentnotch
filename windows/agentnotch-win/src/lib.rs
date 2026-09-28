@@ -25,46 +25,38 @@ pub use clock::SystemClock;
 /// already depends on for platform work (its `Cargo.toml` seam names only the engine and this).
 pub use agentnotch_proto as proto;
 
-#[cfg(windows)]
-mod browser;
+// Each package's own module. It is public and declared on every system; the file itself says
+// what it compiles where (`#![cfg(windows)]` at its top for now), so its owner can expose a
+// test hook or build a pure helper everywhere (and test it on every OS, §2.3) without editing
+// this file.
+pub mod browser;
+pub mod console;
+pub mod device;
+pub mod files;
+pub mod focus;
+pub mod http;
+pub mod integrity;
+pub mod job;
+pub mod pipe_server;
+pub mod process;
+pub mod sid;
+pub mod sound;
+pub mod toast;
+pub mod uia;
+pub mod visibility;
+
+// The modules the app's glue calls on every system (its host tests build on macOS too): the
+// real ones on Windows, stub.rs's elsewhere.
 #[cfg(windows)]
 pub mod capture;
 #[cfg(windows)]
 pub mod clipboard;
 #[cfg(windows)]
-mod console;
-#[cfg(windows)]
-mod device;
-#[cfg(windows)]
-mod files;
-#[cfg(windows)]
-mod focus;
-#[cfg(windows)]
 pub mod hotkey;
-#[cfg(windows)]
-mod http;
-#[cfg(windows)]
-pub mod integrity;
-#[cfg(windows)]
-mod job;
 #[cfg(windows)]
 pub mod paths;
 #[cfg(windows)]
-mod pipe_server;
-#[cfg(windows)]
-mod process;
-#[cfg(windows)]
 pub mod shell;
-#[cfg(windows)]
-pub mod sid;
-#[cfg(windows)]
-mod sound;
-#[cfg(windows)]
-mod toast;
-#[cfg(windows)]
-mod uia;
-#[cfg(windows)]
-mod visibility;
 #[cfg(windows)]
 pub mod window;
 

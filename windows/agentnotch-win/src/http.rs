@@ -4,6 +4,8 @@
 //! Not implemented in this build: every request fails, so sync reports its error and retries
 //! later; nothing leaves the PC.
 
+#![cfg(windows)]
+
 use agentnotch_engine::platform::{Http, HttpError, HttpRequest, HttpResponse};
 
 use crate::NOT_IMPLEMENTED;

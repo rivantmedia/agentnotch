@@ -4,6 +4,8 @@
 //!
 //! The SID is real already (`sid`); the rest reports "unknown" until WP8.
 
+#![cfg(windows)]
+
 use agentnotch_engine::platform::{Device, Roots};
 
 #[derive(Debug, Default)]

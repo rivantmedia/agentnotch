@@ -6,6 +6,8 @@
 //! Not implemented in this build: every call fails, so nothing is written anywhere (no
 //! settings.json, no `<support>` file) and the hub reports what it could not save.
 
+#![cfg(windows)]
+
 use std::io;
 use std::path::{Path, PathBuf};
 

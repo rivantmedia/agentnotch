@@ -4,6 +4,8 @@
 //!
 //! Not implemented in this build: the sign-in reports that no browser could be opened.
 
+#![cfg(windows)]
+
 use agentnotch_engine::platform::Browser;
 
 use crate::NOT_IMPLEMENTED;

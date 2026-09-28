@@ -6,6 +6,8 @@
 //! Not implemented in this build: nothing is typed and the outcome says so. Typing replies is
 //! off by default on Windows (`typeReplies`), so the chat offers "Show terminal" instead.
 
+#![cfg(windows)]
+
 use std::path::{Path, PathBuf};
 
 use agentnotch_engine::platform::{ConsoleInput, ConsoleTarget, TypeOutcome};

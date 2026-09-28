@@ -6,6 +6,8 @@
 //! Not implemented in this build: no host is found, so rows offer no "Show terminal" and the
 //! engine never believes the user is looking at a session.
 
+#![cfg(windows)]
+
 use std::path::{Path, PathBuf};
 
 use agentnotch_engine::platform::{

@@ -2,6 +2,8 @@
 //! security descriptor both come from the string SID of the process token's user, so the hook
 //! and the app compute the same name without anything being templated into hook commands.
 
+#![cfg(windows)]
+
 use std::mem::size_of;
 
 use windows::core::PWSTR;
