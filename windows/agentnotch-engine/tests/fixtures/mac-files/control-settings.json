@@ -1,0 +1,31 @@
+{
+  "autoOpen" : "needsInput",
+  "claudeBinaryPath" : null,
+  "cloudDeviceId" : "3F2504E0-4F89-41D3-9A0C-0305E82C3301",
+  "cloudSummariesEnabled" : false,
+  "cloudSyncEnabled" : true,
+  "holdOpenWhileNeedsYou" : "never",
+  "hookConsent" : true,
+  "hookConsentScope" : 2,
+  "hooksEnabled" : true,
+  "hotKey" : "ctrlAltSpace",
+  "notifyNeedsInput" : true,
+  "notifyReadyForReview" : false,
+  "panelPinned" : false,
+  "peek" : true,
+  "peekSeconds" : 10,
+  "readsDesktopUsageCache" : true,
+  "restingMarks" : true,
+  "ringBadges" : true,
+  "ringClick" : "openPanel",
+  "sessionClick" : "smart",
+  "someFutureSwitch" : {
+    "kept" : true
+  },
+  "sound" : false,
+  "statusLineIntegration" : true,
+  "trayBadge" : true,
+  "typeReplies" : false,
+  "usageProbeIntervalMinutes" : 10,
+  "version" : 1
+}

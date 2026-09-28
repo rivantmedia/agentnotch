@@ -1,0 +1,87 @@
+{
+  "accounts" : {
+    "uuid:5f0c3a1e-0000-4000-8000-000000000001" : {
+      "failureCount" : 0,
+      "lastFullReading" : {
+        "accountId" : "uuid:5f0c3a1e-0000-4000-8000-000000000001",
+        "extraUsage" : {
+          "currency" : "USD",
+          "isEnabled" : true,
+          "monthlyLimit" : 5000,
+          "usedCredits" : 1234,
+          "utilization" : 24.68
+        },
+        "fiveHour" : {
+          "duration" : 18000,
+          "resetsAt" : "2026-09-21T16:23:20Z",
+          "utilization" : 34
+        },
+        "scoped" : [
+          {
+            "name" : "Opus",
+            "window" : {
+              "duration" : 604800,
+              "resetsAt" : "2026-09-24T18:13:20Z",
+              "utilization" : 12.5
+            }
+          }
+        ],
+        "sevenDay" : {
+          "duration" : 604800,
+          "resetsAt" : "2026-09-24T18:13:20Z",
+          "utilization" : 41
+        },
+        "source" : "probe",
+        "subscriptionType" : "max",
+        "takenAfter" : "2026-09-21T14:09:18Z",
+        "updatedAt" : "2026-09-21T14:09:20Z"
+      },
+      "lastProbeAt" : "2026-09-21T14:09:18Z",
+      "statusLines" : [
+        {
+          "folder" : "/Users/me/.claude",
+          "key" : "pid:48213@1790000000",
+          "readings" : {
+            "fiveHour" : {
+              "at" : "2026-09-21T14:12:00Z",
+              "notBefore" : "2026-09-21T14:10:00Z",
+              "window" : {
+                "duration" : 18000,
+                "resetsAt" : "2026-09-21T16:23:20Z",
+                "utilization" : 35
+              }
+            },
+            "lastReportAt" : "2026-09-21T14:12:00Z",
+            "sevenDay" : {
+              "at" : "2026-09-21T14:12:00Z",
+              "window" : {
+                "duration" : 604800,
+                "resetsAt" : "2026-09-24T18:13:20Z",
+                "utilization" : 41
+              }
+            }
+          }
+        }
+      ]
+    },
+    "uuid:8a7b6c5d-0000-4000-8000-000000000002/org-work-0002" : {
+      "failureCount" : 2,
+      "lastFullReading" : {
+        "accountId" : "uuid:8a7b6c5d-0000-4000-8000-000000000002/org-work-0002",
+        "fiveHour" : {
+          "duration" : 18000,
+          "resetsAt" : "2026-09-21T14:53:20Z",
+          "utilization" : 72
+        },
+        "scoped" : [
+
+        ],
+        "source" : "cache",
+        "updatedAt" : "2026-09-21T14:05:00Z"
+      },
+      "lastProbeAt" : "2026-09-21T14:00:00Z",
+      "nextAttemptAt" : "2026-09-21T14:10:00Z"
+    }
+  },
+  "version" : 1
+}

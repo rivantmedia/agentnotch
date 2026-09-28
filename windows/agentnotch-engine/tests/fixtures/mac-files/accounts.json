@@ -1,0 +1,79 @@
+{
+  "accounts" : [
+    {
+      "colorIndex" : 0,
+      "configDir" : "/Users/me/.claude",
+      "id" : "/Users/me/.claude",
+      "isHidden" : false,
+      "lastSeenAt" : "2026-09-20T08:15:00Z",
+      "seenConfigDirEnvs" : [
+        ""
+      ],
+      "source" : "discovered"
+    },
+    {
+      "colorIndex" : 3,
+      "configDir" : "/Users/me/.claude-work",
+      "configDirEnv" : "/Users/me/.claude-work",
+      "customLabel" : "Work",
+      "id" : "/Users/me/.claude-work",
+      "isHidden" : false,
+      "lastSeenAt" : "2026-09-21T14:02:11Z",
+      "seenConfigDirEnvs" : [
+        "/Users/me/.claude-work",
+        "~/.claude-work"
+      ],
+      "source" : "hook"
+    },
+    {
+      "colorIndex" : 5,
+      "configDir" : "/Users/me/claude-lab",
+      "configDirEnv" : "/Users/me/claude-lab",
+      "id" : "/Users/me/claude-lab",
+      "isHidden" : true,
+      "source" : "manual"
+    }
+  ],
+  "defaultIdentityTimeline" : {
+    "spans" : [
+      {
+        "from" : "2026-09-01T09:00:00Z",
+        "identity" : "uuid:5f0c3a1e-0000-4000-8000-000000000001",
+        "isLogin" : false,
+        "lastSeen" : "2026-09-18T17:30:00Z",
+        "rawUuid" : "5f0c3a1e-0000-4000-8000-000000000001"
+      },
+      {
+        "after" : "2026-09-18T17:30:00Z",
+        "from" : "2026-09-18T17:31:05Z",
+        "identity" : "uuid:8a7b6c5d-0000-4000-8000-000000000002/org-work-0002",
+        "isLogin" : true,
+        "lastSeen" : "2026-09-21T14:02:11Z",
+        "rawUuid" : "8a7b6c5d-0000-4000-8000-000000000002"
+      }
+    ]
+  },
+  "forgottenIdentities" : [
+    "email:old@example.com"
+  ],
+  "identities" : {
+    "dir:/Users/me/claude-lab" : {
+      "colorIndex" : 5,
+      "isHidden" : true
+    },
+    "uuid:5f0c3a1e-0000-4000-8000-000000000001" : {
+      "colorIndex" : 0,
+      "customLabel" : "Personal",
+      "isHidden" : false
+    },
+    "uuid:8a7b6c5d-0000-4000-8000-000000000002/org-work-0002" : {
+      "colorIndex" : 3,
+      "customLabel" : "Work",
+      "isHidden" : false
+    }
+  },
+  "removedIds" : [
+    "/Users/me/.claude-old"
+  ],
+  "version" : 2
+}

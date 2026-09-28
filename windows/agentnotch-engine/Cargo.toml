@@ -1,0 +1,36 @@
+[package]
+name = "agentnotch-engine"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.88"
+publish = false
+license = "Apache-2.0"
+description = "Agent Notch for Windows: all Claude Code logic (accounts, sessions, usage, hooks, cloud) behind platform traits. No Tauri, no windows crates, no C."
+
+# check-seams.sh rejects tauri*, wry, tao, webview2-com, windows*, winapi,
+# libc, cc, ring, openssl*, libsqlite3-sys and zstd-sys here: the engine
+# builds and tests the same on macOS, Linux and Windows.
+[dependencies]
+agentnotch-proto = { path = "../agentnotch-proto" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+sha2 = "0.10"
+hmac = "0.12"
+base64 = "0.22"
+getrandom = "0.2"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+regex = "1"
+fancy-regex = "0.14"            # lookaround in the redaction/scrub patterns (CL§9.6)
+unicode-segmentation = "1"      # grapheme-safe UTF-16 clamps (CL§1.5)
+url = "2"                       # parsing only; canonical strings are built by hand (CL§3.1)
+ruzstd = "0.8"                  # pure-Rust zstd for Claude Desktop's Simple Cache bodies (AU§12)
+crossbeam-channel = "0.5"
+
+[dev-dependencies]
+tempfile = "3"
+# The engine's own integration tests use its testkit too.
+agentnotch-engine = { path = ".", features = ["testkit"] }
+
+[features]
+testkit = []                    # exposes engine::testkit to other crates' tests

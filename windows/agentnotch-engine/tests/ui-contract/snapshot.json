@@ -1,0 +1,928 @@
+{
+  "version": 1,
+  "generated_at_ms": 1790000000000,
+  "sealed": true,
+  "rings": [
+    {
+      "ring_id": "claude-acct-5f3e1d2c0b9a",
+      "label": "Personal",
+      "monogram": "PE",
+      "color_index": 0,
+      "shown": true,
+      "is_default": true,
+      "usage": {
+        "status": "ok",
+        "windows": [
+          {
+            "id": "session",
+            "label": "Session",
+            "used": 0.34,
+            "resets_at": 1790007800000,
+            "count": null,
+            "derived": false,
+            "group": null
+          },
+          {
+            "id": "weekly_all",
+            "label": "Weekly",
+            "used": 0.41,
+            "resets_at": 1790273600000,
+            "count": null,
+            "derived": false,
+            "group": null
+          },
+          {
+            "id": "weekly_opus",
+            "label": "Opus",
+            "used": 0.12,
+            "resets_at": 1790273600000,
+            "count": null,
+            "derived": false,
+            "group": null
+          }
+        ],
+        "fetched_at_ms": 1789999760000,
+        "note": "",
+        "stale": false
+      },
+      "activity": "waiting",
+      "success_settles_at_ms": null,
+      "badges": {
+        "needs_you": 3,
+        "review": 2
+      },
+      "counts": {
+        "needs_you": 3,
+        "failed": 0,
+        "review": 2,
+        "working": 1,
+        "idle": 2
+      },
+      "a11y": "Personal: 5-hour 34%, weekly 41%; 3 need you, 2 to review"
+    },
+    {
+      "ring_id": "claude-acct-8a7b6c5d4e3f",
+      "label": "Work",
+      "monogram": "WO",
+      "color_index": 3,
+      "shown": true,
+      "is_default": false,
+      "usage": {
+        "status": "ok",
+        "windows": [
+          {
+            "id": "session",
+            "label": "Session",
+            "used": 0.72,
+            "resets_at": 1790002400000,
+            "count": null,
+            "derived": false,
+            "group": null
+          },
+          {
+            "id": "weekly_all",
+            "label": "Weekly",
+            "used": 0.55,
+            "resets_at": 1790439200000,
+            "count": null,
+            "derived": false,
+            "group": null
+          }
+        ],
+        "fetched_at_ms": 1789999760000,
+        "note": "",
+        "stale": false
+      },
+      "activity": "waiting",
+      "success_settles_at_ms": null,
+      "badges": {
+        "needs_you": 2,
+        "review": 1
+      },
+      "counts": {
+        "needs_you": 1,
+        "failed": 1,
+        "review": 1,
+        "working": 2,
+        "idle": 2
+      },
+      "a11y": "Work: 5-hour 72%, weekly 55%; 2 need you, 1 to review"
+    }
+  ],
+  "sessions": [
+    {
+      "session_id": "needs-permission",
+      "ring_id": "claude-acct-8a7b6c5d4e3f",
+      "account_label": "Work",
+      "account_color": 3,
+      "title": "Fix the login redirect loop",
+      "project": "acme-web",
+      "bucket": "needs_you",
+      "failed": false,
+      "state_word": "needs you",
+      "since_ms": 1789999880000,
+      "detail": {
+        "kind": "permission",
+        "tool": "Bash",
+        "request": "npm run test -- --watch=false auth/redirect.spec.ts",
+        "waiting_in_terminal": false
+      },
+      "tasks": {
+        "done": 3,
+        "total": 7,
+        "active_label": "Running the auth test suite",
+        "items": [
+          {
+            "id": "p-1",
+            "label": "Step 1",
+            "status": "completed"
+          },
+          {
+            "id": "p-2",
+            "label": "Step 2",
+            "status": "completed"
+          },
+          {
+            "id": "p-3",
+            "label": "Step 3",
+            "status": "completed"
+          },
+          {
+            "id": "p-4",
+            "label": "Running the auth test suite",
+            "status": "in_progress"
+          },
+          {
+            "id": "p-5",
+            "label": "Step 5",
+            "status": "pending"
+          },
+          {
+            "id": "p-6",
+            "label": "Step 6",
+            "status": "pending"
+          },
+          {
+            "id": "p-7",
+            "label": "Step 7",
+            "status": "pending"
+          }
+        ]
+      },
+      "context_pct": 42.0,
+      "background_count": 0,
+      "pending": {
+        "tool_use_id": "toolu_sample_bash",
+        "kind": "permission",
+        "tool_name": "Bash",
+        "received_at_ms": 1789999880000,
+        "request": "npm run test -- --watch=false auth/redirect.spec.ts",
+        "needs_review": false,
+        "always": "Don't ask again for Bash(npm run test:*) in this project (just you)",
+        "inline_always": true,
+        "questions": null,
+        "single_tap": false,
+        "plan_markdown": null,
+        "diff": null
+      },
+      "focus_label": "Show terminal",
+      "can_message": true,
+      "reviewable": false,
+      "a11y": "Fix the login redirect loop, needs you, 3 of 7 tasks done, account Work",
+      "card": {
+        "name": "Windows Terminal · acme-web",
+        "detail": "3/7 Running the auth test suite · ctx 42%",
+        "state": "needs_you",
+        "waiting_for": "Approve Bash",
+        "since_ms": 1789999880000
+      }
+    },
+    {
+      "session_id": "needs-question",
+      "ring_id": "claude-acct-5f3e1d2c0b9a",
+      "account_label": "Personal",
+      "account_color": 0,
+      "title": "Pick a charting library",
+      "project": "dashboard",
+      "bucket": "needs_you",
+      "failed": false,
+      "state_word": "needs you",
+      "since_ms": 1789999640000,
+      "detail": {
+        "kind": "question",
+        "text": "Which charting library should the dashboard use?"
+      },
+      "tasks": null,
+      "context_pct": 18.0,
+      "background_count": 0,
+      "pending": {
+        "tool_use_id": "toolu_sample_question",
+        "kind": "question",
+        "tool_name": "AskUserQuestion",
+        "received_at_ms": 1789999640000,
+        "request": "Which charting library should the dashboard use?",
+        "needs_review": false,
+        "always": null,
+        "inline_always": false,
+        "questions": [
+          {
+            "text": "Which charting library should the dashboard use?",
+            "header": "Charts",
+            "multi_select": false,
+            "options": [
+              {
+                "label": "Recharts",
+                "description": "Composable React components"
+              },
+              {
+                "label": "Chart.js",
+                "description": "Canvas, small bundle"
+              },
+              {
+                "label": "ECharts",
+                "description": "Feature-rich, larger bundle"
+              }
+            ]
+          }
+        ],
+        "single_tap": true,
+        "plan_markdown": null,
+        "diff": null
+      },
+      "focus_label": "Show in editor",
+      "can_message": false,
+      "reviewable": false,
+      "a11y": "Pick a charting library, needs you, Which charting library should the dashboard use?, account Personal",
+      "card": {
+        "name": "VS Code · dashboard",
+        "detail": "ctx 18%",
+        "state": "needs_you",
+        "waiting_for": "Question · Charts",
+        "since_ms": 1789999640000
+      }
+    },
+    {
+      "session_id": "needs-plan",
+      "ring_id": "claude-acct-5f3e1d2c0b9a",
+      "account_label": "Personal",
+      "account_color": 0,
+      "title": "Migrate settings storage to SQLite",
+      "project": "notes-app",
+      "bucket": "needs_you",
+      "failed": false,
+      "state_word": "needs you",
+      "since_ms": 1789999340000,
+      "detail": {
+        "kind": "plan"
+      },
+      "tasks": null,
+      "context_pct": 61.0,
+      "background_count": 0,
+      "pending": {
+        "tool_use_id": "toolu_sample_plan",
+        "kind": "plan",
+        "tool_name": "ExitPlanMode",
+        "received_at_ms": 1789999340000,
+        "request": "Plan ready for approval",
+        "needs_review": false,
+        "always": null,
+        "inline_always": false,
+        "questions": null,
+        "single_tap": false,
+        "plan_markdown": "## Plan\n\n1. Add the models\n2. Migrate the stored settings\n3. Remove the old store",
+        "diff": null
+      },
+      "focus_label": "Show terminal",
+      "can_message": true,
+      "reviewable": false,
+      "a11y": "Migrate settings storage to SQLite, needs you, account Personal",
+      "card": {
+        "name": "Console · notes-app",
+        "detail": "ctx 61%",
+        "state": "needs_you",
+        "waiting_for": "Plan ready for approval",
+        "since_ms": 1789999340000
+      }
+    },
+    {
+      "session_id": "needs-elicitation",
+      "ring_id": "claude-acct-5f3e1d2c0b9a",
+      "account_label": "Personal",
+      "account_color": 0,
+      "title": "Sync the design tokens",
+      "project": "design-system",
+      "bucket": "needs_you",
+      "failed": false,
+      "state_word": "needs you",
+      "since_ms": 1789999700000,
+      "detail": {
+        "kind": "dialog",
+        "text": "Figma needs you to pick a file"
+      },
+      "tasks": null,
+      "context_pct": 33.0,
+      "background_count": 0,
+      "pending": null,
+      "focus_label": "Show terminal",
+      "can_message": true,
+      "reviewable": false,
+      "a11y": "Sync the design tokens, needs you, Figma needs you to pick a file, account Personal",
+      "card": {
+        "name": "Windows Terminal · design-system",
+        "detail": "ctx 33%",
+        "state": "needs_you",
+        "waiting_for": "Figma needs you to pick a file",
+        "since_ms": 1789999700000
+      }
+    },
+    {
+      "session_id": "needs-ratelimit",
+      "ring_id": "claude-acct-8a7b6c5d4e3f",
+      "account_label": "Work",
+      "account_color": 3,
+      "title": "Refactor the billing webhooks",
+      "project": "billing-service",
+      "bucket": "needs_you",
+      "failed": true,
+      "state_word": "failed",
+      "since_ms": 1789999460000,
+      "detail": {
+        "kind": "failed",
+        "text": "Rate limited · weekly limit resets Fri 9:00 AM"
+      },
+      "tasks": null,
+      "context_pct": 57.0,
+      "background_count": 0,
+      "pending": null,
+      "focus_label": "Show terminal",
+      "can_message": true,
+      "reviewable": false,
+      "a11y": "Refactor the billing webhooks, failed, Rate limited · weekly limit resets Fri 9:00 AM, account Work",
+      "card": {
+        "name": "Windows Terminal · billing-service",
+        "detail": "ctx 57%",
+        "state": "failed",
+        "waiting_for": "Rate limited",
+        "since_ms": 1789999460000
+      }
+    },
+    {
+      "session_id": "review-just-finished",
+      "ring_id": "claude-acct-5f3e1d2c0b9a",
+      "account_label": "Personal",
+      "account_color": 0,
+      "title": "Fix the flaky date test",
+      "project": "billing-service",
+      "bucket": "ready_for_review",
+      "failed": false,
+      "state_word": "done",
+      "since_ms": 1789999980000,
+      "detail": {
+        "kind": "review",
+        "text": "The test pinned the time zone to UTC; it now uses a fixed calendar and passes 50 runs in a row."
+      },
+      "tasks": {
+        "done": 3,
+        "total": 3,
+        "active_label": null,
+        "items": [
+          {
+            "id": "r-1",
+            "label": "Step 1",
+            "status": "completed"
+          },
+          {
+            "id": "r-2",
+            "label": "Step 2",
+            "status": "completed"
+          },
+          {
+            "id": "r-3",
+            "label": "Step 3",
+            "status": "completed"
+          }
+        ]
+      },
+      "context_pct": 27.0,
+      "background_count": 0,
+      "pending": null,
+      "focus_label": "Show terminal",
+      "can_message": true,
+      "reviewable": true,
+      "a11y": "Fix the flaky date test, done, The test pinned the time zone to UTC; it now uses a fixed calendar and passes 50 runs in a row., 3 of 3 tasks done, account Personal",
+      "card": {
+        "name": "Windows Terminal · billing-service",
+        "detail": "3/3 · ctx 27%",
+        "state": "review",
+        "waiting_for": null,
+        "since_ms": 1789999980000
+      }
+    },
+    {
+      "session_id": "review-darkmode",
+      "ring_id": "claude-acct-5f3e1d2c0b9a",
+      "account_label": "Personal",
+      "account_color": 0,
+      "title": "Add a dark mode toggle to settings",
+      "project": "acme-web",
+      "bucket": "ready_for_review",
+      "failed": false,
+      "state_word": "done",
+      "since_ms": 1789999700000,
+      "detail": {
+        "kind": "review",
+        "text": "Added a Dark mode toggle under Settings › Appearance. It follows the system by default, persists the choice, and all 42 tests pass."
+      },
+      "tasks": {
+        "done": 5,
+        "total": 5,
+        "active_label": null,
+        "items": [
+          {
+            "id": "d-1",
+            "label": "Step 1",
+            "status": "completed"
+          },
+          {
+            "id": "d-2",
+            "label": "Step 2",
+            "status": "completed"
+          },
+          {
+            "id": "d-3",
+            "label": "Step 3",
+            "status": "completed"
+          },
+          {
+            "id": "d-4",
+            "label": "Step 4",
+            "status": "completed"
+          },
+          {
+            "id": "d-5",
+            "label": "Step 5",
+            "status": "completed"
+          }
+        ]
+      },
+      "context_pct": 38.0,
+      "background_count": 0,
+      "pending": null,
+      "focus_label": "Show terminal",
+      "can_message": true,
+      "reviewable": true,
+      "a11y": "Add a dark mode toggle to settings, done, Added a Dark mode toggle under Settings › Appearance. It follows the system by default, persists the choice, and all 42 tests pass., 5 of 5 tasks done, account Personal",
+      "card": {
+        "name": "Console · acme-web",
+        "detail": "5/5 · ctx 38%",
+        "state": "review",
+        "waiting_for": null,
+        "since_ms": 1789999700000
+      }
+    },
+    {
+      "session_id": "review-devserver",
+      "ring_id": "claude-acct-8a7b6c5d4e3f",
+      "account_label": "Work",
+      "account_color": 3,
+      "title": "Set up the local dev server",
+      "project": "acme-web",
+      "bucket": "ready_for_review",
+      "failed": false,
+      "state_word": "done",
+      "since_ms": 1789999280000,
+      "detail": {
+        "kind": "review",
+        "text": "The dev server is up on http://localhost:5173 with hot reload. I left the type checker watching in the background."
+      },
+      "tasks": null,
+      "context_pct": 22.0,
+      "background_count": 2,
+      "pending": null,
+      "focus_label": "Show terminal",
+      "can_message": true,
+      "reviewable": true,
+      "a11y": "Set up the local dev server, done, The dev server is up on http://localhost:5173 with hot reload. I left the type checker watching in the background., account Work",
+      "card": {
+        "name": "Windows Terminal · acme-web",
+        "detail": "2 background · ctx 22%",
+        "state": "review",
+        "waiting_for": null,
+        "since_ms": 1789999280000
+      }
+    },
+    {
+      "session_id": "work-migration",
+      "ring_id": "claude-acct-8a7b6c5d4e3f",
+      "account_label": "Work",
+      "account_color": 3,
+      "title": "Write migration tests for the v2 schema",
+      "project": "billing-service",
+      "bucket": "working",
+      "failed": false,
+      "state_word": "working",
+      "since_ms": 1789999160000,
+      "detail": {
+        "kind": "working",
+        "text": "Writing tests for the v2 schema",
+        "secondary": false
+      },
+      "tasks": {
+        "done": 2,
+        "total": 6,
+        "active_label": "Writing tests for the v2 schema",
+        "items": [
+          {
+            "id": "m-1",
+            "label": "Step 1",
+            "status": "completed"
+          },
+          {
+            "id": "m-2",
+            "label": "Step 2",
+            "status": "completed"
+          },
+          {
+            "id": "m-3",
+            "label": "Writing tests for the v2 schema",
+            "status": "in_progress"
+          },
+          {
+            "id": "m-4",
+            "label": "Step 4",
+            "status": "pending"
+          },
+          {
+            "id": "m-5",
+            "label": "Step 5",
+            "status": "pending"
+          },
+          {
+            "id": "m-6",
+            "label": "Step 6",
+            "status": "pending"
+          }
+        ]
+      },
+      "context_pct": 84.0,
+      "background_count": 0,
+      "pending": null,
+      "focus_label": "Show terminal",
+      "can_message": true,
+      "reviewable": false,
+      "a11y": "Write migration tests for the v2 schema, working, Writing tests for the v2 schema, 2 of 6 tasks done, account Work",
+      "card": {
+        "name": "Windows Terminal · billing-service",
+        "detail": "2/6 Writing tests for the v2 schema · ctx 84%",
+        "state": "working",
+        "waiting_for": null,
+        "since_ms": 1789999160000
+      }
+    },
+    {
+      "session_id": "work-ci",
+      "ring_id": "claude-acct-5f3e1d2c0b9a",
+      "account_label": "Personal",
+      "account_color": 0,
+      "title": "Investigate the flaky CI job",
+      "project": "infra",
+      "bucket": "working",
+      "failed": false,
+      "state_word": "working",
+      "since_ms": 1789999520000,
+      "detail": {
+        "kind": "working",
+        "text": "Grep ETIMEDOUT|socket hang up",
+        "secondary": true
+      },
+      "tasks": {
+        "done": 9,
+        "total": 15,
+        "active_label": "Bisecting the failing commit",
+        "items": [
+          {
+            "id": "c-1",
+            "label": "Step 1",
+            "status": "completed"
+          },
+          {
+            "id": "c-2",
+            "label": "Step 2",
+            "status": "completed"
+          },
+          {
+            "id": "c-3",
+            "label": "Step 3",
+            "status": "completed"
+          },
+          {
+            "id": "c-4",
+            "label": "Step 4",
+            "status": "completed"
+          },
+          {
+            "id": "c-5",
+            "label": "Step 5",
+            "status": "completed"
+          },
+          {
+            "id": "c-6",
+            "label": "Step 6",
+            "status": "completed"
+          },
+          {
+            "id": "c-7",
+            "label": "Step 7",
+            "status": "completed"
+          },
+          {
+            "id": "c-8",
+            "label": "Step 8",
+            "status": "completed"
+          },
+          {
+            "id": "c-9",
+            "label": "Step 9",
+            "status": "completed"
+          },
+          {
+            "id": "c-10",
+            "label": "Bisecting the failing commit",
+            "status": "in_progress"
+          },
+          {
+            "id": "c-11",
+            "label": "Step 11",
+            "status": "pending"
+          },
+          {
+            "id": "c-12",
+            "label": "Step 12",
+            "status": "pending"
+          },
+          {
+            "id": "c-13",
+            "label": "Step 13",
+            "status": "pending"
+          },
+          {
+            "id": "c-14",
+            "label": "Step 14",
+            "status": "pending"
+          },
+          {
+            "id": "c-15",
+            "label": "Step 15",
+            "status": "pending"
+          }
+        ]
+      },
+      "context_pct": 93.0,
+      "background_count": 0,
+      "pending": null,
+      "focus_label": "Show in editor",
+      "can_message": true,
+      "reviewable": false,
+      "a11y": "Investigate the flaky CI job, working, Grep ETIMEDOUT|socket hang up, 9 of 15 tasks done, account Personal",
+      "card": {
+        "name": "VS Code · infra",
+        "detail": "9/15 Bisecting the failing commit · ctx 93%",
+        "state": "working",
+        "waiting_for": null,
+        "since_ms": 1789999520000
+      }
+    },
+    {
+      "session_id": "work-summary",
+      "ring_id": "claude-acct-8a7b6c5d4e3f",
+      "account_label": "Work",
+      "account_color": 3,
+      "title": "Summarize the PR review feedback",
+      "project": "acme-web",
+      "bucket": "working",
+      "failed": false,
+      "state_word": "working",
+      "since_ms": 1789999960000,
+      "detail": {
+        "kind": "working",
+        "text": "Thinking…",
+        "secondary": true
+      },
+      "tasks": null,
+      "context_pct": 12.0,
+      "background_count": 0,
+      "pending": null,
+      "focus_label": "Show terminal",
+      "can_message": true,
+      "reviewable": false,
+      "a11y": "Summarize the PR review feedback, working, Thinking…, account Work",
+      "card": {
+        "name": "Windows Terminal · acme-web",
+        "detail": "ctx 12%",
+        "state": "working",
+        "waiting_for": null,
+        "since_ms": 1789999960000
+      }
+    },
+    {
+      "session_id": "idle-notch",
+      "ring_id": "claude-acct-5f3e1d2c0b9a",
+      "account_label": "Personal",
+      "account_color": 0,
+      "title": "Explore the notch APIs",
+      "project": "agent-notch",
+      "bucket": "idle",
+      "failed": false,
+      "state_word": "idle",
+      "since_ms": 1789997000000,
+      "detail": {
+        "kind": "idle",
+        "text": "The work area excludes the taskbar, so the notch sits below it."
+      },
+      "tasks": null,
+      "context_pct": 7.0,
+      "background_count": 0,
+      "pending": null,
+      "focus_label": "Show terminal",
+      "can_message": true,
+      "reviewable": false,
+      "a11y": "Explore the notch APIs, idle, The work area excludes the taskbar, so the notch sits below it., account Personal",
+      "card": {
+        "name": "Windows Terminal · agent-notch",
+        "detail": "ctx 7%",
+        "state": "idle",
+        "waiting_for": null,
+        "since_ms": 1789997000000
+      }
+    },
+    {
+      "session_id": "idle-readme",
+      "ring_id": "claude-acct-8a7b6c5d4e3f",
+      "account_label": "Work",
+      "account_color": 3,
+      "title": "Tidy up the README",
+      "project": "acme-web",
+      "bucket": "idle",
+      "failed": false,
+      "state_word": "idle",
+      "since_ms": 1789989200000,
+      "detail": {
+        "kind": "idle",
+        "text": "You: thanks, that's all for now"
+      },
+      "tasks": null,
+      "context_pct": null,
+      "background_count": 0,
+      "pending": null,
+      "focus_label": "Show terminal",
+      "can_message": true,
+      "reviewable": false,
+      "a11y": "Tidy up the README, idle, You: thanks, that's all for now, account Work",
+      "card": {
+        "name": "Windows Terminal · acme-web",
+        "detail": null,
+        "state": "idle",
+        "waiting_for": null,
+        "since_ms": 1789989200000
+      }
+    },
+    {
+      "session_id": "idle-deps",
+      "ring_id": "claude-acct-8a7b6c5d4e3f",
+      "account_label": "Work",
+      "account_color": 3,
+      "title": "Bump dependencies",
+      "project": "billing-service",
+      "bucket": "idle",
+      "failed": false,
+      "state_word": "idle",
+      "since_ms": 1789982000000,
+      "detail": {
+        "kind": "idle",
+        "text": "Bash npm outdated"
+      },
+      "tasks": null,
+      "context_pct": null,
+      "background_count": 0,
+      "pending": null,
+      "focus_label": "Show terminal",
+      "can_message": true,
+      "reviewable": false,
+      "a11y": "Bump dependencies, idle, Bash npm outdated, account Work",
+      "card": {
+        "name": "Windows Terminal · billing-service",
+        "detail": null,
+        "state": "idle",
+        "waiting_for": null,
+        "since_ms": 1789982000000
+      }
+    },
+    {
+      "session_id": "idle-logo",
+      "ring_id": "claude-acct-5f3e1d2c0b9a",
+      "account_label": "Personal",
+      "account_color": 0,
+      "title": "Draft a new logo brief",
+      "project": "brand",
+      "bucket": "idle",
+      "failed": false,
+      "state_word": "idle",
+      "since_ms": 1789906400000,
+      "detail": {
+        "kind": "idle",
+        "text": "No messages yet"
+      },
+      "tasks": null,
+      "context_pct": null,
+      "background_count": 0,
+      "pending": null,
+      "focus_label": null,
+      "can_message": false,
+      "reviewable": false,
+      "a11y": "Draft a new logo brief, idle, No messages yet, account Personal",
+      "card": {
+        "name": "Windows Terminal · brand",
+        "detail": null,
+        "state": "idle",
+        "waiting_for": null,
+        "since_ms": 1789906400000
+      }
+    }
+  ],
+  "sections": [
+    {
+      "bucket": "needs_you",
+      "title": "Needs you",
+      "count": 5,
+      "fold_by_default": false
+    },
+    {
+      "bucket": "ready_for_review",
+      "title": "Ready for review",
+      "count": 3,
+      "fold_by_default": false
+    },
+    {
+      "bucket": "working",
+      "title": "Working",
+      "count": 3,
+      "fold_by_default": false
+    },
+    {
+      "bucket": "idle",
+      "title": "Idle",
+      "count": 4,
+      "fold_by_default": true
+    }
+  ],
+  "totals": {
+    "needs_you": 4,
+    "failed": 1,
+    "review": 3,
+    "working": 3,
+    "idle": 4
+  },
+  "resting_marks": {
+    "needs_you": true,
+    "review": true,
+    "working": true,
+    "needs_you_key": 5
+  },
+  "tray_badge": 5,
+  "setup": {
+    "hook_consent": true,
+    "needs_hook_consent": false,
+    "consent_files": [
+      {
+        "path": "~\\.claude\\settings.json",
+        "account": "me@personal.example"
+      },
+      {
+        "path": "~\\.claude-work\\settings.json",
+        "account": "me@work.example"
+      }
+    ],
+    "codenotch_hooks_folders": [],
+    "new_install_folders": [],
+    "transport_error": null,
+    "control_off": false,
+    "missing_hooks_accounts": [],
+    "install_disabled": false
+  },
+  "ui": {
+    "panel_open_mode": "never",
+    "hold_open": "never",
+    "ring_badges": true,
+    "resting_marks": true,
+    "ring_click": "openPanel",
+    "hover_click": "smart",
+    "hotkey": "off",
+    "panel_pinned": false,
+    "peek": true,
+    "peek_seconds": 5,
+    "type_replies": false,
+    "sound": true,
+    "tray_badge": true
+  },
+  "accounts_multi": true
+}

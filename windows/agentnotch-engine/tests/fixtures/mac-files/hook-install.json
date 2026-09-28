@@ -1,0 +1,23 @@
+{
+  "files" : [
+    {
+      "command" : "C:/Users/me/.claude/hooks/agentnotch-hook.exe hook",
+      "folder" : "C:\\Users\\me\\.claude",
+      "form" : "string",
+      "hookCopy" : "C:\\Users\\me\\.claude\\hooks\\agentnotch-hook.exe",
+      "installedAt" : "2026-09-21T14:00:05Z",
+      "settingsPath" : "C:\\Users\\me\\.claude\\settings.json",
+      "statusLine" : true
+    },
+    {
+      "command" : "C:/Users/JOHNSM~1/.claude-work/hooks/AGENTN~1.EXE hook",
+      "folder" : "C:\\Users\\John Smith\\.claude-work",
+      "form" : "string",
+      "hookCopy" : "C:\\Users\\John Smith\\.claude-work\\hooks\\agentnotch-hook.exe",
+      "installedAt" : "2026-09-21T14:00:06Z",
+      "settingsPath" : "C:\\Users\\John Smith\\.claude-work\\settings.json",
+      "statusLine" : false
+    }
+  ],
+  "version" : 1
+}

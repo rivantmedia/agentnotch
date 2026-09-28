@@ -1,0 +1,17 @@
+agentnotch-engine (windows/agentnotch-engine in Agent Notch)
+
+This crate is licensed under the Apache License, Version 2.0 (see LICENSE),
+as is windows/agentnotch-proto. The rest of Agent Notch is Codenotch's code
+under its own MIT licence (see the LICENSE file at the repository root).
+
+agentnotch-engine is a Rust port, for Windows, of ClaudeControl
+(Packages/ClaudeControl in Agent Notch), which is derived from:
+
+- Superpowered Vibe Notch (https://github.com/paraswtf/superpowered-vibe-notch),
+  a fork of Vibe Notch by paraswtf.
+
+- Vibe Notch, previously Claude Island (https://github.com/farouqaldori/vibe-notch),
+  Copyright 2025 Farouq Aldori, licensed under the Apache License, Version 2.0.
+
+The port is Copyright 2026 paraswtf, licensed under the Apache License,
+Version 2.0.

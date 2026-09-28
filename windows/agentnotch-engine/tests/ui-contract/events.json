@@ -1,0 +1,171 @@
+[
+  {
+    "event": "an:snapshot",
+    "payload_fixture": "snapshot.json"
+  },
+  {
+    "event": "an:settings",
+    "payload_fixture": "settings.json"
+  },
+  {
+    "event": "an:cloud",
+    "payload": {
+      "website_url": "https://agentnotch.rivant.in",
+      "website_is_overridden": false,
+      "auth": {
+        "signed_in": {
+          "email": "me@personal.example"
+        }
+      },
+      "sync_enabled": true,
+      "summaries_enabled": false,
+      "summaries_available": true,
+      "is_syncing": false,
+      "last_sync_at_ms": 1789999820000,
+      "last_error": null,
+      "pending_sessions": 1,
+      "pending_usage": 4,
+      "summarized_sessions": 0,
+      "dashboard_url": "https://agentnotch.rivant.in/dashboard",
+      "pools_url": "https://agentnotch.rivant.in/pools",
+      "settings_url": "https://agentnotch.rivant.in/settings"
+    }
+  },
+  {
+    "event": "an:chat",
+    "payload_fixture": "chat.json"
+  },
+  {
+    "event": "an:chat",
+    "payload": {
+      "session_id": "needs-permission",
+      "revision": 2,
+      "reset": false,
+      "items": [
+        {
+          "id": "toolu_sample_bash",
+          "kind": "tool",
+          "name": "Bash",
+          "summary": "npm run test -- --watch=false auth/redirect.spec.ts",
+          "status": "success",
+          "input": {
+            "command": "npm run test -- --watch=false auth/redirect.spec.ts",
+            "description": "Run the auth suite"
+          },
+          "result": {
+            "tool": "bash",
+            "stdout": "PASS auth/redirect.spec.ts\n  4 passed",
+            "stderr": "",
+            "interrupted": false,
+            "return_code_interpretation": null,
+            "background_task_id": null
+          },
+          "subagent": null
+        },
+        {
+          "id": "a-0004-text-0",
+          "kind": "assistant",
+          "text": "All 4 redirect tests pass."
+        }
+      ],
+      "removed": [],
+      "order": [
+        "u-0001-text-0",
+        "a-0002-thinking-0",
+        "a-0002-text-1",
+        "toolu_read_1",
+        "toolu_edit_1",
+        "toolu_agent_1",
+        "u-0003-image-0",
+        "toolu_sample_bash",
+        "a-0004-text-0"
+      ],
+      "has_earlier": 0,
+      "working": null,
+      "ended": false,
+      "loading": false
+    }
+  },
+  {
+    "event": "an:panel",
+    "payload": {
+      "route": "session:needs-permission",
+      "ring_id": "claude-acct-8a7b6c5d4e3f",
+      "highlight": "needs-permission",
+      "reason": "notification"
+    }
+  },
+  {
+    "event": "an:panel_focus",
+    "payload": {
+      "focused": true
+    }
+  },
+  {
+    "event": "an:peek",
+    "payload": {
+      "ring_id": "claude-acct-5f3e1d2c0b9a",
+      "seconds": 5
+    }
+  },
+  {
+    "event": "an:notice",
+    "payload": "Claude Code control is on for 2 folders."
+  },
+  {
+    "event": "usage",
+    "payload": {
+      "status": "ok",
+      "windows": [
+        {
+          "id": "session",
+          "label": "Session",
+          "used": 0.34,
+          "resets_at": 1790007800000,
+          "count": null,
+          "derived": false,
+          "group": "Personal"
+        },
+        {
+          "id": "weekly_all",
+          "label": "Weekly",
+          "used": 0.41,
+          "resets_at": 1790273600000,
+          "count": null,
+          "derived": false,
+          "group": "Personal"
+        },
+        {
+          "id": "weekly_opus",
+          "label": "Opus",
+          "used": 0.12,
+          "resets_at": 1790273600000,
+          "count": null,
+          "derived": false,
+          "group": "Personal"
+        },
+        {
+          "id": "session@claude-acct-8a7b6c5d4e3f",
+          "label": "Session",
+          "used": 0.72,
+          "resets_at": 1790002400000,
+          "count": null,
+          "derived": false,
+          "group": "Work"
+        },
+        {
+          "id": "weekly_all@claude-acct-8a7b6c5d4e3f",
+          "label": "Weekly",
+          "used": 0.55,
+          "resets_at": 1790439200000,
+          "count": null,
+          "derived": false,
+          "group": "Work"
+        }
+      ],
+      "fetched_at": 1789999760000,
+      "note": "",
+      "backoff_until": 0
+    }
+  }
+]
