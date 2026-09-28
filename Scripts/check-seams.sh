@@ -36,7 +36,13 @@
 #  f. every CreateFileW in agentnotch-hook/src and agentnotch-win/src opens
 #     with SECURITY_SQOS_PRESENT (a client of the hook pipe must let the server
 #     identify it and never act as it), unless the line or the two before it say
-#     `not a pipe` (a plain file).
+#     `not a pipe` (a plain file);
+#  g. upstream's own hook plumbing stays off whatever a merge brings: no file
+#     under windows/codenotch/src but its own names server:: (the TCP hook
+#     server on upstream's port), and hooks_install:: (it writes settings.json
+#     with no consent) is used only by main's "install-hooks" and
+#     "uninstall-hooks" arms, which WCLI claims first. (watcher:: is
+#     verify-token-free.sh's.)
 #
 # Exit 0 when everything holds, 1 with a list of problems otherwise. Reads only.
 set -euo pipefail
@@ -323,6 +329,30 @@ while IFS= read -r file; do
     done < <(without_comments "$file" "$(grep -n 'CreateFileW(' "$file" || true)")
 done < <(find windows/agentnotch-hook/src windows/agentnotch-win/src -name '*.rs' 2>/dev/null | sort)
 echo "CreateFileW calls checked for SECURITY_SQOS_PRESENT: $sqos"
+
+# g. Upstream's hook server and hook installer stay unreachable. The seams
+#    replace their call sites in main.rs; this catches a merge that calls them
+#    from anywhere else (comment lines aside).
+UPSRC=windows/codenotch/src
+if [[ -d "$UPSRC" ]]; then
+    code_refs() {  # $1 = module name: `grep -n` hits naming it in other files
+        grep -rnE --exclude-dir=agentnotch "(^|[^A-Za-z0-9_])$1::" "$UPSRC" \
+            | grep -vE "^$UPSRC/$1\.rs:" | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true
+    }
+    hits=$(code_refs server)
+    if [[ -n "$hits" ]]; then
+        while IFS= read -r hit; do fail "WH: upstream's TCP hook server is reached from $hit"; done <<< "$hits"
+    fi
+    install_arm='^[[:space:]]*"(un)?install-hooks"[[:space:]]*=>'
+    while IFS= read -r hit; do
+        [[ -n "$hit" ]] || continue
+        file="${hit%%:*}"; rest="${hit#*:}"; n="${rest%%:*}"
+        arm=""
+        [[ "$file" == "$UPSRC/main.rs" ]] && arm=$(sed -n "$((n > 1 ? n - 1 : 1))p" "$file")
+        [[ "$arm" =~ $install_arm ]] \
+            || fail "WH: upstream's hook installer (it writes settings.json without consent) is reached outside main's install-hooks/uninstall-hooks arms: $hit"
+    done <<< "$(code_refs hooks_install)"
+fi
 
 if [[ $problems -gt 0 ]]; then
     echo "check-seams: $problems problem(s)"

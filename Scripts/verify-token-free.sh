@@ -49,6 +49,15 @@
 #    usage::request_refresh() on no code line of main.rs. (Upstream's other
 #    providers read their own credentials with functions of the same names, in
 #    grok.rs, cursor.rs and antigravity.rs; those are not Claude's.)
+#    Upstream merges keep bringing new code, so three rules go by name rather
+#    than by pattern: code outside the dormant files (usage.rs, claude_auth.rs,
+#    doctor.rs, watcher.rs) reaches into usage.rs only for the names in
+#    USAGE_REVIEWED (its types and the saved snapshot: a poller start, a
+#    refresh or a new credential helper called from any file fails until
+#    someone reviews it); doctor::run() (it reads the credential) is called
+#    once, from main's "doctor" arm, which WCLI makes unreachable; and no file
+#    but the dormant doctor names watcher:: (upstream's transcript watcher,
+#    off by WH).
 #  - GLM's one read of a key from Claude Code's settings.json (glm.rs
 #    claude_code_key: an API key for Z.ai, not a Claude login, kept as upstream
 #    ships it) stays exactly that: ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY
@@ -105,6 +114,11 @@ WIN_PATTERNS=(
 # sha256 of glm.rs's `fn claude_code_key` (its line through the closing `}` at
 # the start of a line), as reviewed at upstream 642d329.
 GLM_CLAUDE_KEY_PIN=2bb3f6781cc33352d259fbaf95e25c3ebffd7e73b7759a2a76ed1489edd3ee37
+# What upstream's other files may use of usage.rs (its Claude token path), as
+# reviewed at upstream 642d329: the snapshot types every provider shares, and
+# load_persisted (upstream's saved Claude snapshot from its own config folder;
+# no credential). Add a name only after reading what it reaches.
+USAGE_REVIEWED=(UsageSnapshot LimitWindow load_persisted)
 problems=0
 fail() { echo "FAIL: $*"; problems=$((problems + 1)); }
 
@@ -237,6 +251,45 @@ if [[ -d "$UP" ]]; then
     code=$(grep -nF -e 'usage::start(' -e 'usage::request_refresh()' "$UP/main.rs" \
                | grep -vE '^[0-9]+:[[:space:]]*//' || true)
     [[ -z "$code" ]] || fail "upstream's Claude poller is started or refreshed in $UP/main.rs: $code"
+
+    # Everything else upstream's code uses of usage.rs, by name (comment lines
+    # aside): `usage::X`, `usage::{X, Y}` and `usage::*` in any file but the
+    # dormant ones, each kept unreachable by its own rule here: claude_auth.rs
+    # (start_login, claude_auth::), doctor.rs (below) and watcher.rs (upstream's
+    # transcript watcher, which walks usage.rs's credential-checked profile
+    # list: never started, and named by no other file).
+    usage_ref='(^|[^A-Za-z0-9_])usage::(\{[^}]*\}|\*|[A-Za-z_][A-Za-z0-9_]*)'
+    while IFS= read -r hit; do
+        [[ -n "$hit" ]] || continue
+        file="${hit%%:*}"; rest="${hit#*:}"; text="${rest#*:}"
+        while IFS= read -r ref; do
+            [[ -n "$ref" ]] || continue
+            names="${ref#*usage::}"; names="${names#\{}"; names="${names%\}}"
+            IFS=', ' read -ra list <<< "$names"
+            for name in "${list[@]}"; do
+                [[ -n "$name" ]] || continue
+                reviewed=0
+                for ok in "${USAGE_REVIEWED[@]}"; do [[ "$name" == "$ok" ]] && reviewed=1; done
+                [[ $reviewed -eq 1 ]] || fail "upstream code reaches usage::$name (its Claude token path) from outside usage.rs; review what it reads, then add it to USAGE_REVIEWED: $hit"
+            done
+        done < <(grep -oE "$usage_ref" <<< "$text" || true)
+    done < <(grep -rnE --exclude-dir=agentnotch "$usage_ref" "$UP" \
+                 | grep -vE "^$UP/(usage|claude_auth|doctor|watcher)\.rs:" \
+                 | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
+    watcher=$(grep -rnE --exclude-dir=agentnotch '(^|[^A-Za-z0-9_])watcher::' "$UP" \
+                  | grep -vE "^$UP/(watcher|doctor)\.rs:" | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
+    [[ -z "$watcher" ]] || fail "upstream's transcript watcher (it walks usage.rs's profile list) is reached from: $watcher"
+
+    # Upstream's doctor reads the credential (usage::probe_credentials): called
+    # once, from main's "doctor" arm, which WCLI claims first.
+    doctor_calls=$(grep -rnE --exclude-dir=agentnotch '(^|[^A-Za-z0-9_])doctor::' "$UP" \
+                       | grep -vE "^$UP/doctor\.rs:" | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
+    doctor_ok=0
+    if [[ -n "$doctor_calls" && $(grep -c . <<< "$doctor_calls") -eq 1 && "$doctor_calls" == "$UP/main.rs:"*'doctor::run()'* ]]; then
+        n=$(cut -d: -f2 <<< "$doctor_calls")
+        sed -n "$((n > 1 ? n - 1 : 1))p" "$UP/main.rs" | grep -qE '^[[:space:]]*"doctor"[[:space:]]*=>' && doctor_ok=1
+    fi
+    [[ $doctor_ok -eq 1 ]] || fail "upstream's doctor (it reads Claude's credential) must be called only from main's \"doctor\" arm, which WCLI makes unreachable: ${doctor_calls:-none found}"
 
     # GLM's key read, pinned.
     for name in ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY; do
