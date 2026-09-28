@@ -78,22 +78,14 @@ pub fn default_weekly_ring() -> String {
 
 /// Whether this run is sealed (`AGENTNOTCH_SAFE_MODE`, fails closed), decided once per process.
 pub fn sealed() -> bool {
-    engine::is_sealed(flags())
+    static SEALED: OnceLock<bool> = OnceLock::new();
+    *SEALED.get_or_init(engine::is_sealed)
 }
 
 /// Upstream's config folder name (WR-DIR): a sealed run keeps its config and logs apart, so it
 /// never edits the real app's `config.json`.
 pub fn data_folder_name() -> &'static str {
-    if sealed() {
-        "Agent Notch Sealed"
-    } else {
-        "Agent Notch"
-    }
-}
-
-fn flags() -> &'static engine::DevFlags {
-    static FLAGS: OnceLock<engine::DevFlags> = OnceLock::new();
-    FLAGS.get_or_init(engine::dev_flags)
+    engine::data_folder_name(sealed())
 }
 
 /// The running hub, once `setup` has started it.

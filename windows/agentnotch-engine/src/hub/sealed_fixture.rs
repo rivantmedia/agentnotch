@@ -519,7 +519,7 @@ impl HubBackend for SealedFixture {
             state.started = true;
             state.snapshot.generated_at_ms = self.now_ms();
             vec![
-                HubEvent::Log("an: hub started (sealed fixtures)".into()),
+                HubEvent::Log("hub started (sealed fixtures)".into()),
                 HubEvent::Snapshot(state.snapshot.clone()),
                 HubEvent::Settings(state.settings.clone()),
                 HubEvent::Cloud(state.settings.cloud.clone()),

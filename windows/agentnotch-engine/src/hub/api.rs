@@ -453,7 +453,8 @@ pub enum HubEvent {
     TrayBadge(u32),
     /// `an:notice` → notch.
     Notice(String),
-    /// Upstream's `applog("an: …")`: never prompts, inputs, replies, tokens.
+    /// A line for upstream's run.log; the glue adds the `an: ` prefix. Never prompts, inputs,
+    /// replies, tokens.
     Log(String),
     /// A graceful `app.exit(0)` (control op `quit`).
     Quit,

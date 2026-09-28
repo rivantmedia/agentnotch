@@ -4,7 +4,8 @@
 //! that touches a window hops to the main thread inside `panel`. Nothing here may block, and
 //! nothing may call back into the hub synchronously (the hub is the caller).
 
-use agentnotch_engine::hub::{HubEvent, UpstreamUsage};
+use agentnotch_engine::hub::HubEvent;
+use agentnotch_engine::model::UpstreamUsage;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 

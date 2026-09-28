@@ -20,6 +20,12 @@ use tauri::AppHandle;
 use super::{deeplink, emit, selftest, IDENTIFIER};
 
 pub fn setup(app: &AppHandle) {
+    // Upstream makes its config folder only when it first saves a setting, so on a first launch
+    // run.log has nowhere to go yet. This launch's lines need it, and so does the hub, whose
+    // `data` root it is (the sealed folder when sealed: WR-DIR).
+    if let Some(folder) = crate::config::config_path().parent() {
+        let _ = std::fs::create_dir_all(folder);
+    }
     match panic::catch_unwind(AssertUnwindSafe(|| start(app))) {
         Ok(Ok(())) => {
             let mode = if super::sealed() { "sealed" } else { "live" };
@@ -69,11 +75,15 @@ fn start(app: &AppHandle) -> Result<(), String> {
 /// runs, the compiled-in `VERSION` for the command line.
 pub(super) fn hub_config(app_version: String, exe: &Path) -> Result<HubConfig, String> {
     let roots = roots(exe)?;
+    let mut flags = super::engine::dev_flags(&roots.home);
+    // One answer for the whole process: the one upstream's config folder already followed.
+    // Both come from the same variables through the same rule, so this only ever seals.
+    flags.sealed |= super::sealed();
     Ok(HubConfig {
         roots,
         app_version,
         website: super::website::website(),
-        flags: super::flags().clone(),
+        flags,
         hook_exe: exe.with_file_name("agentnotch-hook.exe"),
         pipe_name: pipe_name(),
     })

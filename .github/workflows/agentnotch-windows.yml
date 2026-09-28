@@ -152,6 +152,11 @@ jobs:
       - name: Clippy (fork crates)
         run: cargo clippy --locked --all-targets $env:FORK_CRATES.Split(' ') -- -D warnings
 
+      # Every member against the committed lock, upstream's app and hook crates
+      # included: the one place the glue meets the engine's real API on Windows.
+      - name: Check the workspace
+        run: cargo check --locked --workspace --all-targets
+
       # AGENTNOTCH_CI_ADMIN lets win_admin.rs create a local user and spawn
       # medium-integrity processes: allowed on this throwaway runner only.
       - name: Tests (fork crates)

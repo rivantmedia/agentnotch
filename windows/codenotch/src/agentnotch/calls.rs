@@ -1,36 +1,21 @@
 //! `an_call` (DESIGN-WIN §3.5, §3.7): the pages' one way into the fork.
 //!
-//! Each call is first checked against the window it came from, then either handled here (the
-//! glue-level methods: windows, clipboard, Explorer, logs) or deserialised into the engine's
-//! `Call` and run by the hub on a blocking thread. The JSON shape `{method, args}` is the
-//! contract; the glue never builds a `Call` any other way, so it depends on the table in §3.5,
-//! not on how the engine spells its variants.
+//! Each call is first checked against the window it came from (the engine's
+//! `allowed_from_window`, so the rule lives in one place), then either handled here (the
+//! glue-level methods: windows, clipboard, Explorer, logs) or turned into the engine's `Call` by
+//! `Call::from_parts` and run by the hub on a blocking thread. The JSON shape `{method, args}` is
+//! the contract; the glue never builds a `Call` any other way, so it depends on the table in
+//! §3.5, not on how the engine spells its variants.
 
-use agentnotch_engine::hub::{Call, CallError, Hub};
+use agentnotch_engine::hub::{allowed_from_window, Call, CallError, Hub};
 use serde_json::{json, Value};
 use tauri::AppHandle;
 
 use super::panel;
 
-/// Calls only the glue itself makes; no page may send them.
-const GLUE_ONLY: [&str; 2] = ["panel_state", "hotkey_status"];
-/// What the notch page may ask, besides the `panel_*` family.
-const NOTCH: [&str; 5] = ["snapshot", "refresh_usage", "focus", "mark_reviewed", "log"];
-/// What Settings may not ask: it answers nothing and types nothing.
-const NOT_FROM_SETTINGS: [&str; 2] = ["answer", "send_message"];
-
 /// Whether the window labelled `label` may make the call `method` (§3.7).
 pub(super) fn allowed(label: &str, method: &str) -> bool {
-    if GLUE_ONLY.contains(&method) {
-        return false;
-    }
-    match label {
-        panel::LABEL => true,
-        "notch" => NOTCH.contains(&method) || method.starts_with("panel_"),
-        "settings" => !NOT_FROM_SETTINGS.contains(&method),
-        // The drop-zone overlay, and any window this list doesn't know, may call nothing.
-        _ => false,
-    }
+    allowed_from_window(label, method)
 }
 
 pub(super) async fn dispatch(
@@ -64,14 +49,7 @@ pub(super) async fn dispatch(
 
 /// Runs `{method, args}` on the hub (blocking; at most the hub's call timeout).
 pub(super) fn engine_call(hub: &Hub, method: &str, args: Value) -> Result<Value, CallError> {
-    let request = if args.is_null() {
-        json!({ "method": method })
-    } else {
-        json!({ "method": method, "args": args })
-    };
-    let call: Call =
-        serde_json::from_value(request).map_err(|e| error("invalid", format!("{method}: {e}")))?;
-    hub.call(call)
+    hub.call(Call::from_parts(method, args)?)
 }
 
 /// `engine_call` on its own thread, waited for at most `wait`: `None` when the hub hasn't answered
@@ -188,12 +166,14 @@ mod tests {
 
     #[test]
     fn the_notch_calls_only_its_own_list() {
+        // `open_settings`: the notch's "Turn on in Settings" chip (§7.5 step 7).
         for method in [
             "snapshot",
             "refresh_usage",
             "focus",
             "mark_reviewed",
             "panel_toggle",
+            "open_settings",
             "log",
         ] {
             assert!(allowed("notch", method), "{method}");
