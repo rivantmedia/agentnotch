@@ -31,8 +31,13 @@ pub fn dev_flags(home: &Path) -> DevFlags {
 }
 
 /// Whether this process's environment seals the run (fails closed).
+///
+/// Read lossily: a value that isn't valid Unicode is still a value, and any value but the
+/// clear "off" words seals. (`env::var(..).ok()` would read it as unset: a live run.)
 pub fn is_sealed() -> bool {
-    agentnotch_engine::core::sealed::is_sealed(|name: &str| std::env::var(name).ok())
+    agentnotch_engine::core::sealed::is_sealed(|name: &str| {
+        std::env::var_os(name).map(|value| value.to_string_lossy().into_owned())
+    })
 }
 
 /// Upstream's name for the app, as its copy spells it.
