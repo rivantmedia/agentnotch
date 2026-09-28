@@ -2,8 +2,9 @@
 # sessions, usage, hooks, control, cloud. Platform-independent: every OS service
 # is a trait (platform.rs) implemented by agentnotch-win, so `cargo test` runs on
 # macOS, Linux and Windows. No Tauri, no `windows*` crate, no C dependency:
-# check-seams.sh rejects them by name, and fork.yml's "no C dependencies" step
-# checks the resolved tree.
+# check-seams.sh rejects tauri*, wry, tao, webview2-com, windows*, winapi, libc,
+# cc, ring, openssl*, libsqlite3-sys and zstd-sys by name, and fork.yml's
+# "no C dependencies" step checks the resolved tree.
 [package]
 name = "agentnotch-engine"
 version = "0.0.0"
@@ -11,7 +12,7 @@ edition = "2021"
 rust-version = "1.88"
 publish = false
 license = "Apache-2.0"
-description = "Agent Notch: Claude Code session control, platform-independent"
+description = "Agent Notch for Windows: all Claude Code logic (accounts, sessions, usage, hooks, cloud) behind platform traits. No Tauri, no windows crates, no C."
 
 [dependencies]
 agentnotch-proto = { path = "../agentnotch-proto" }
@@ -32,6 +33,8 @@ crossbeam-channel = "0.5"
 
 [dev-dependencies]
 tempfile = "3"
+# The engine's own integration tests use its testkit too.
+agentnotch-engine = { path = ".", features = ["testkit"] }
 
 [features]
 testkit = []                    # exposes engine::testkit to other crates' tests

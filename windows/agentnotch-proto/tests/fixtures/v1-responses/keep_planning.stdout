@@ -1,0 +1,1 @@
+{"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": "deny", "message": "The user reviewed the plan and wants to keep planning. Stay in plan mode and ask what to change before implementing."}}}

@@ -1,0 +1,202 @@
+{
+  "accounts": [
+    {
+      "identity_id": "uuid:5f0c3a1e-0000-4000-8000-000000000001",
+      "ring_id": "claude-acct-5f3e1d2c0b9a",
+      "label": "Personal",
+      "default_label": "Claude Personal",
+      "has_custom_label": true,
+      "color_index": 0,
+      "is_default": true,
+      "identity_line": "me@personal.example · Max 5x",
+      "folder_summary": "Runs in ~\\.claude",
+      "folders": [
+        {
+          "id": "C:\\Users\\me\\.claude",
+          "title": "~\\.claude",
+          "role": "Default",
+          "state": "Hooks and live status line",
+          "status_line_note": null,
+          "not_hookable": null,
+          "codenotch_hooks": false
+        }
+      ],
+      "usage_line": "5-hour 34% · weekly 41% · 4m ago",
+      "usage_stale": false,
+      "hook_state": "Hooks installed",
+      "hook_state_tone": "ok",
+      "live_status_line": true,
+      "hook_problem": null,
+      "hook_problem_critical": false,
+      "is_tracked": true,
+      "ring_shown": true,
+      "is_signed_in": true,
+      "launch_command": "claude",
+      "can_install": true,
+      "install_label": "Reinstall hooks",
+      "can_forget": false,
+      "forget_caption": "This app's hooks are removed from its settings.json and it stops being tracked. The folder and its sessions are left alone."
+    },
+    {
+      "identity_id": "uuid:8a7b6c5d-0000-4000-8000-000000000002/org-work-0002",
+      "ring_id": "claude-acct-8a7b6c5d4e3f",
+      "label": "Work",
+      "default_label": "Claude Work",
+      "has_custom_label": true,
+      "color_index": 3,
+      "is_default": false,
+      "identity_line": "me@work.example · Team",
+      "folder_summary": "Runs in ~\\.claude-work",
+      "folders": [
+        {
+          "id": "C:\\Users\\me\\.claude-work",
+          "title": "~\\.claude-work",
+          "role": "Folder",
+          "state": "Hooks installed",
+          "status_line_note": "Status line left alone: its command uses Windows paths",
+          "not_hookable": null,
+          "codenotch_hooks": false
+        }
+      ],
+      "usage_line": "5-hour 72% · weekly 55% · 4m ago",
+      "usage_stale": false,
+      "hook_state": "Hooks installed",
+      "hook_state_tone": "ok",
+      "live_status_line": false,
+      "hook_problem": null,
+      "hook_problem_critical": false,
+      "is_tracked": true,
+      "ring_shown": true,
+      "is_signed_in": true,
+      "launch_command": "$env:CLAUDE_CONFIG_DIR='C:\\Users\\me\\.claude-work'; claude",
+      "can_install": true,
+      "install_label": "Reinstall hooks",
+      "can_forget": true,
+      "forget_caption": "This app's hooks are removed from its settings.json and it stops being tracked. The folder and its sessions are left alone."
+    }
+  ],
+  "suggestions": [
+    {
+      "path": "~\\.claude-old",
+      "reason": "Named like a backup copy."
+    }
+  ],
+  "unsigned_folders": [],
+  "hooks": {
+    "consent": true,
+    "enabled": true,
+    "enabled_locked": false,
+    "summary": "Installed in all 2 tracked accounts.",
+    "summary_warning": false,
+    "status_line": true,
+    "pipe_name": "\\\\.\\pipe\\agentnotch-hook-S-1-5-21-1000000001-1000000002-1000000003-1001",
+    "claude_version": "2.1.282",
+    "claude_path": "C:\\Users\\me\\.local\\bin\\claude.exe",
+    "claude_path_chosen": false,
+    "claude_caption": "Hooks are written for the oldest claude found, so every version reads them.",
+    "last_change": "Last change: settings.json in ~\\.claude-work. The previous version is kept as settings.json.agentnotch-20260921-141000-000.bak.",
+    "install_allowed": true,
+    "busy": false,
+    "footnotes": [
+      "Sessions inside WSL aren't tracked yet.",
+      "Uninstalling keeps Claude Code's hooks unless you tick Delete the application data; turn Claude Code control off first to remove them."
+    ]
+  },
+  "usage": {
+    "interval_minutes": 5,
+    "interval_options": [
+      0,
+      5,
+      10,
+      15,
+      30
+    ],
+    "interval_caption": "Every 5 min, only when nothing fresher has arrived, this app runs Claude Code's own usage check in each signed-in account (Claude Code may update its own files there); this app never reads your login token.",
+    "desktop_cache": true,
+    "desktop_caption": "Claude Desktop keeps the limits it last saw on disk; no token is involved.",
+    "desktop_format": "absent",
+    "accounts": [
+      {
+        "ring_id": "claude-acct-5f3e1d2c0b9a",
+        "label": "Personal",
+        "color_index": 0,
+        "line": "5-hour 34% · weekly 41% · 4m ago"
+      },
+      {
+        "ring_id": "claude-acct-8a7b6c5d4e3f",
+        "label": "Work",
+        "color_index": 3,
+        "line": "5-hour 72% · weekly 55% · 4m ago"
+      }
+    ],
+    "refreshing": false
+  },
+  "cloud": {
+    "website_url": "https://agentnotch.rivant.in",
+    "website_is_overridden": false,
+    "auth": {
+      "signed_in": {
+        "email": "me@personal.example"
+      }
+    },
+    "sync_enabled": true,
+    "summaries_enabled": false,
+    "summaries_available": true,
+    "is_syncing": false,
+    "last_sync_at_ms": 1789999820000,
+    "last_error": null,
+    "pending_sessions": 1,
+    "pending_usage": 4,
+    "summarized_sessions": 0,
+    "dashboard_url": "https://agentnotch.rivant.in/dashboard",
+    "pools_url": "https://agentnotch.rivant.in/pools",
+    "settings_url": "https://agentnotch.rivant.in/settings"
+  },
+  "attention": {
+    "panel_open_mode": "never",
+    "hold_open": "never",
+    "ring_badges": true,
+    "resting_marks": true,
+    "ring_click": "openPanel",
+    "hover_click": "smart",
+    "hotkey": "off",
+    "panel_pinned": false,
+    "peek": true,
+    "peek_seconds": 5,
+    "type_replies": false,
+    "sound": true,
+    "tray_badge": true
+  },
+  "notifications": {
+    "notify_needs_input": true,
+    "notify_ready_for_review": true,
+    "permission": "allowed",
+    "permission_text": "Allowed",
+    "permission_warning": false
+  },
+  "advanced": {
+    "session_count": 15,
+    "review_count": 3
+  },
+  "sealed": true,
+  "setup": {
+    "hook_consent": true,
+    "needs_hook_consent": false,
+    "consent_files": [
+      {
+        "path": "~\\.claude\\settings.json",
+        "account": "me@personal.example"
+      },
+      {
+        "path": "~\\.claude-work\\settings.json",
+        "account": "me@work.example"
+      }
+    ],
+    "codenotch_hooks_folders": [],
+    "new_install_folders": [],
+    "transport_error": null,
+    "control_off": false,
+    "missing_hooks_accounts": [],
+    "install_disabled": false
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "agent_id": null,
+  "agent_type": null,
+  "attended": true,
+  "config_dir_env": "C:\\Users\\me\\.claude-work",
+  "cwd": "C:\\Users\\me\\code\\app",
+  "entrypoint": "cli",
+  "event": "PermissionRequest",
+  "hook_pid": 6789,
+  "permission_mode": "default",
+  "permission_suggestions": [
+    {
+      "behavior": "allow",
+      "destination": "localSettings",
+      "rules": [
+        {
+          "ruleContent": "npm run test:*",
+          "toolName": "Bash"
+        }
+      ],
+      "type": "addRules"
+    }
+  ],
+  "pid": 4242,
+  "protocol": 1,
+  "session_id": "5d1e0a7b-3c21-4f7e-9a0b-1c2d3e4f5a6b",
+  "status": "waiting_for_approval",
+  "terminal": {
+    "term_program": null,
+    "wt_session": "0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0"
+  },
+  "tool": "Bash",
+  "tool_input": {
+    "command": "npm run test -- --watch=false",
+    "description": "Run the auth suite"
+  },
+  "transcript_path": "C:\\Users\\me\\.claude-work\\projects\\C--Users-me-code-app\\5d1e0a7b-3c21-4f7e-9a0b-1c2d3e4f5a6b.jsonl"
+}

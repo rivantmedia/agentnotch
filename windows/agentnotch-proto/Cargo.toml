@@ -1,7 +1,8 @@
 # Agent Notch's hook ⇄ app wire protocol (DESIGN-WIN §1.4, §3.1): framing, the
 # hook's messages, argv parsing and the PermissionRequest answer. Pure Rust, no
 # OS calls, no C, so the hook exe, the engine and every test share one copy and
-# `cargo test` runs on any OS. check-seams.sh rejects a platform crate here.
+# `cargo test` runs on any OS. check-seams.sh rejects a platform crate or an
+# argument parser here: the hook exe links this and must fail open.
 [package]
 name = "agentnotch-proto"
 version = "0.0.0"          # never shown: the app's version is tauri.conf.json's (= VERSION)
@@ -9,7 +10,7 @@ edition = "2021"
 rust-version = "1.88"
 publish = false
 license = "Apache-2.0"
-description = "Agent Notch: the hook ⇄ app wire protocol"
+description = "Agent Notch for Windows: the hook ⇄ app wire protocol (frames, messages, permission output). Pure; used by the hook exe and the engine."
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

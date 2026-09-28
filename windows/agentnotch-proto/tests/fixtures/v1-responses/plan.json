@@ -1,0 +1,7 @@
+{
+  "stdin": "permission_request_plan",
+  "response": {
+    "decision": "allow",
+    "updated_input": {}
+  }
+}

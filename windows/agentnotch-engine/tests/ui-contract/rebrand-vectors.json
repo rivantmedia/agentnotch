@@ -1,0 +1,42 @@
+[
+  {
+    "input": "Quit Codenotch",
+    "expected": "Quit Agent Notch"
+  },
+  {
+    "input": "Codenotch Settings",
+    "expected": "Agent Notch Settings"
+  },
+  {
+    "input": "Opens a Codenotch window for that account",
+    "expected": "Opens an Agent Notch window for that account"
+  },
+  {
+    "input": "A Codenotch ring",
+    "expected": "An Agent Notch ring"
+  },
+  {
+    "input": "Codenotch-Einstellungen",
+    "expected": "Agent-Notch-Einstellungen"
+  },
+  {
+    "input": "Refresh all",
+    "expected": "Refresh all"
+  },
+  {
+    "input": "Codenotch for Windows, installable",
+    "expected": "Codenotch for Windows, installable"
+  },
+  {
+    "input": "Download Codenotch-Setup.exe",
+    "expected": "Download Codenotch-Setup.exe"
+  },
+  {
+    "input": "Scan this code with the Codenotch app on your phone.",
+    "expected": "Scan this code with the Codenotch app on your phone."
+  },
+  {
+    "input": "Made by hivinz.com",
+    "expected": "Made by hivinz.com"
+  }
+]

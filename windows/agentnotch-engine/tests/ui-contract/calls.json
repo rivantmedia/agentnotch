@@ -1,0 +1,523 @@
+[
+  {
+    "call": {
+      "method": "snapshot"
+    },
+    "reply_fixture": "snapshot.json"
+  },
+  {
+    "call": {
+      "method": "settings"
+    },
+    "reply_fixture": "settings.json"
+  },
+  {
+    "call": {
+      "method": "answer",
+      "args": {
+        "session_id": "needs-permission",
+        "tool_use_id": "toolu_sample_bash",
+        "answer": {
+          "allow": {
+            "always": false
+          }
+        }
+      }
+    },
+    "reply": {
+      "result": "delivered"
+    }
+  },
+  {
+    "call": {
+      "method": "answer",
+      "args": {
+        "session_id": "needs-permission",
+        "tool_use_id": "toolu_gone",
+        "answer": {
+          "deny": {
+            "reason": null
+          }
+        }
+      }
+    },
+    "reply": {
+      "result": "not_pending"
+    }
+  },
+  {
+    "call": {
+      "method": "answer",
+      "args": {
+        "session_id": "needs-question",
+        "tool_use_id": "toolu_sample_question",
+        "answer": {
+          "questions": {
+            "answers": {
+              "Which charting library should the dashboard use?": "Recharts"
+            }
+          }
+        }
+      }
+    },
+    "reply": {
+      "result": "delivered"
+    }
+  },
+  {
+    "call": {
+      "method": "answer",
+      "args": {
+        "session_id": "needs-plan",
+        "tool_use_id": "toolu_sample_plan",
+        "answer": "approve_plan"
+      }
+    },
+    "reply": {
+      "result": "delivered"
+    }
+  },
+  {
+    "call": {
+      "method": "answer",
+      "args": {
+        "session_id": "needs-plan",
+        "tool_use_id": "toolu_sample_plan",
+        "answer": "keep_planning"
+      }
+    },
+    "reply": {
+      "result": "delivered"
+    }
+  },
+  {
+    "call": {
+      "method": "send_message",
+      "args": {
+        "session_id": "work-ci",
+        "text": "Also check the retry wrapper."
+      }
+    },
+    "reply": {
+      "outcome": "refused",
+      "reason": "Typing replies is off. Turn it on in Settings › Claude Code."
+    }
+  },
+  {
+    "call": {
+      "method": "message_route",
+      "args": {
+        "session_id": "work-ci"
+      }
+    },
+    "reply": {
+      "available": false,
+      "reason": "Typing replies is off. Turn it on in Settings › Claude Code."
+    }
+  },
+  {
+    "call": {
+      "method": "focus",
+      "args": {
+        "session_id": "work-ci"
+      }
+    },
+    "reply": {
+      "outcome": "not_found",
+      "reason": "Sealed: no terminal to show."
+    }
+  },
+  {
+    "call": {
+      "method": "mark_reviewed",
+      "args": {
+        "session_id": "review-darkmode",
+        "at_ms": 1790000000000
+      }
+    },
+    "reply": {}
+  },
+  {
+    "call": {
+      "method": "mark_viewed",
+      "args": {
+        "session_id": "review-just-finished",
+        "completed_at_ms": 1789999980000
+      }
+    },
+    "reply": {}
+  },
+  {
+    "call": {
+      "method": "mark_all_reviewed",
+      "args": {
+        "session_ids": [
+          "review-just-finished",
+          "review-darkmode",
+          "review-devserver"
+        ],
+        "at_ms": 1790000000000
+      }
+    },
+    "reply": {}
+  },
+  {
+    "call": {
+      "method": "dismiss_failure",
+      "args": {
+        "session_id": "needs-ratelimit"
+      }
+    },
+    "reply": {}
+  },
+  {
+    "call": {
+      "method": "reset_review_queue"
+    },
+    "reply": {}
+  },
+  {
+    "call": {
+      "method": "chat_open",
+      "args": {
+        "session_id": "needs-permission"
+      }
+    },
+    "reply": {}
+  },
+  {
+    "call": {
+      "method": "chat_close",
+      "args": {
+        "session_id": "needs-permission"
+      }
+    },
+    "reply": {}
+  },
+  {
+    "call": {
+      "method": "chat_more",
+      "args": {
+        "session_id": "needs-permission",
+        "before_id": "u-0001-text-0"
+      }
+    },
+    "reply": {}
+  },
+  {
+    "call": {
+      "method": "chat_image",
+      "args": {
+        "session_id": "needs-permission",
+        "image_id": "u-0003-image-0"
+      }
+    },
+    "reply": {
+      "data_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAwS2OUAAAAABJRU5ErkJggg=="
+    }
+  },
+  {
+    "call": {
+      "method": "refresh_usage",
+      "args": {
+        "ring_id": "claude-acct-5f3e1d2c0b9a",
+        "reason": "ring_click"
+      }
+    },
+    "reply": {
+      "coming": false
+    }
+  },
+  {
+    "call": {
+      "method": "refresh_usage",
+      "args": {
+        "reason": "manual"
+      }
+    },
+    "reply": {
+      "coming": false
+    }
+  },
+  {
+    "call": {
+      "method": "hook_consent",
+      "args": {
+        "grant": true
+      }
+    },
+    "reply": {}
+  },
+  {
+    "call": {
+      "method": "hooks_enabled",
+      "args": {
+        "on": false
+      }
+    },
+    "reply": {}
+  },
+  {
+    "call": {
+      "method": "status_line_enabled",
+      "args": {
+        "on": true
+      }
+    },
+    "reply": {}
+  },
+  {
+    "call": {
+      "method": "hooks_reinstall",
+      "args": {
+        "account_id": "uuid:5f0c3a1e-0000-4000-8000-000000000001"
+      }
+    },
+    "reply": {}
+  },
+  {
+    "call": {
+      "method": "remove_codenotch_hooks",
+      "args": {
+        "folder": "C:\\Users\\me\\.claude"
+      }
+    },
+    "reply": {
+      "removed": 0
+    }
+  },
+  {
+    "call": {
+      "method": "acknowledge_scope"
+    },
+    "reply": {}
+  },
+  {
+    "call": {
+      "method": "account",
+      "args": {
+        "action": {
+          "rename": {
+            "id": "uuid:5f0c3a1e-0000-4000-8000-000000000001",
+            "label": "Home"
+          }
+        }
+      }
+    },
+    "reply": {}
+  },
+  {
+    "call": {
+      "method": "account",
+      "args": {
+        "action": {
+          "track": {
+            "id": "uuid:5f0c3a1e-0000-4000-8000-000000000001",
+            "on": true
+          }
+        }
+      }
+    },
+    "reply": {}
+  },
+  {
+    "call": {
+      "method": "account",
+      "args": {
+        "action": {
+          "ring_shown": {
+            "ring_id": "claude-acct-8a7b6c5d4e3f",
+            "on": false
+          }
+        }
+      }
+    },
+    "reply": {}
+  },
+  {
+    "call": {
+      "method": "account",
+      "args": {
+        "action": {
+          "forget": {
+            "id": "uuid:8a7b6c5d-0000-4000-8000-000000000002/org-work-0002"
+          }
+        }
+      }
+    },
+    "error": "sealed"
+  },
+  {
+    "call": {
+      "method": "account",
+      "args": {
+        "action": {
+          "add_folder": {
+            "path": "D:\\claude-profiles\\.claude-lab"
+          }
+        }
+      }
+    },
+    "error": "sealed"
+  },
+  {
+    "call": {
+      "method": "account",
+      "args": {
+        "action": {
+          "create": {
+            "name": "side"
+          }
+        }
+      }
+    },
+    "error": "sealed"
+  },
+  {
+    "call": {
+      "method": "account",
+      "args": {
+        "action": {
+          "suggestion_dismiss": {
+            "path": "~\\.claude-old"
+          }
+        }
+      }
+    },
+    "error": "sealed"
+  },
+  {
+    "call": {
+      "method": "account",
+      "args": {
+        "action": {
+          "suggestion_add": {
+            "path": "~\\.claude-old"
+          }
+        }
+      }
+    },
+    "error": "sealed"
+  },
+  {
+    "call": {
+      "method": "set_setting",
+      "args": {
+        "key": "autoOpen",
+        "value": "needsInput"
+      }
+    },
+    "reply": {}
+  },
+  {
+    "call": {
+      "method": "set_setting",
+      "args": {
+        "key": "peekSeconds",
+        "value": 7
+      }
+    },
+    "error": "invalid"
+  },
+  {
+    "call": {
+      "method": "set_setting",
+      "args": {
+        "key": "noSuchSetting",
+        "value": true
+      }
+    },
+    "error": "invalid"
+  },
+  {
+    "call": {
+      "method": "choose_claude_binary",
+      "args": {}
+    },
+    "reply": {
+      "version": null
+    }
+  },
+  {
+    "call": {
+      "method": "cloud",
+      "args": {
+        "action": "set_sync",
+        "on": false
+      }
+    },
+    "reply": {}
+  },
+  {
+    "call": {
+      "method": "cloud",
+      "args": {
+        "action": "sync_now"
+      }
+    },
+    "reply": {}
+  },
+  {
+    "call": {
+      "method": "cloud_url",
+      "args": {
+        "target": "dashboard"
+      }
+    },
+    "reply": {
+      "url": "https://agentnotch.rivant.in/dashboard"
+    }
+  },
+  {
+    "call": {
+      "method": "session_state_text"
+    },
+    "reply_contains": "Fix the login redirect loop [needs you] acme-web tasks 3/7"
+  },
+  {
+    "call": {
+      "method": "launch_command",
+      "args": {
+        "account_id": "uuid:8a7b6c5d-0000-4000-8000-000000000002/org-work-0002"
+      }
+    },
+    "reply": {
+      "command": "$env:CLAUDE_CONFIG_DIR='C:\\Users\\me\\.claude-work'; claude"
+    }
+  },
+  {
+    "call": {
+      "method": "reveal_target",
+      "args": {
+        "kind": "config_dir",
+        "id": "C:\\Users\\me\\.claude"
+      }
+    },
+    "error": "sealed"
+  },
+  {
+    "call": {
+      "method": "panel_state",
+      "args": {
+        "open": true,
+        "route": "sessions",
+        "ring_id": "claude-acct-5f3e1d2c0b9a",
+        "reason": "ring_click",
+        "engaged": false,
+        "focused": true,
+        "pinned": false
+      }
+    },
+    "reply": {}
+  },
+  {
+    "call": {
+      "method": "hotkey_status",
+      "args": {
+        "ok": false,
+        "message": "That shortcut is taken by another app."
+      }
+    },
+    "reply": {}
+  }
+]

@@ -1,0 +1,11 @@
+{
+  "stdin": "permission_request_question",
+  "response": {
+    "decision": "allow",
+    "updated_input": {
+      "answers": {
+        "Which charting library should the dashboard use?": "Recharts"
+      }
+    }
+  }
+}

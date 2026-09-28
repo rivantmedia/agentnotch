@@ -1,0 +1,5 @@
+{
+  "event": "AgentNotchControl",
+  "op": "quit",
+  "protocol": 1
+}

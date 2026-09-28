@@ -1,13 +1,13 @@
 Agent Notch for Windows: the fork crates (windows/agentnotch-* in Agent Notch)
 
 agentnotch-engine, agentnotch-proto, agentnotch-win, agentnotch-hook and
-agentnotch-release are licensed under the Apache License, Version 2.0 (the text
-is in Packages/ClaudeControl/LICENSE). The rest of windows/ is Codenotch for
-Windows under its own MIT licence (see windows/LICENSE and the LICENSE file at
-the repository root).
+agentnotch-release are licensed under the Apache License, Version 2.0 (see
+LICENSE beside this file). The rest of windows/ is Codenotch for Windows under
+its own MIT licence (see windows/LICENSE and the LICENSE file at the repository
+root).
 
-These crates are a Rust port of ClaudeControl (Packages/ClaudeControl in Agent
-Notch), which is derived from:
+These crates are a Rust port, for Windows, of ClaudeControl
+(Packages/ClaudeControl in Agent Notch), which is derived from:
 
 - Superpowered Vibe Notch (https://github.com/paraswtf/superpowered-vibe-notch),
   a fork of Vibe Notch by paraswtf.
@@ -15,5 +15,5 @@ Notch), which is derived from:
 - Vibe Notch, previously Claude Island (https://github.com/farouqaldori/vibe-notch),
   Copyright 2025 Farouq Aldori, licensed under the Apache License, Version 2.0.
 
-Changes made for Agent Notch are Copyright 2026 paraswtf, licensed under the
-Apache License, Version 2.0.
+The port is Copyright 2026 paraswtf, licensed under the Apache License,
+Version 2.0.
