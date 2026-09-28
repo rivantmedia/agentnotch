@@ -74,6 +74,21 @@ pub(super) fn engine_call(hub: &Hub, method: &str, args: Value) -> Result<Value,
     hub.call(call)
 }
 
+/// `engine_call` on its own thread, waited for at most `wait`: `None` when the hub hasn't answered
+/// by then (the call still completes). For callers on the main thread, which must not stall.
+pub(super) fn engine_call_within(
+    hub: Hub,
+    method: &'static str,
+    args: Value,
+    wait: std::time::Duration,
+) -> Option<Result<Value, CallError>> {
+    let (reply, answer) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = reply.send(engine_call(&hub, method, args));
+    });
+    answer.recv_timeout(wait).ok()
+}
+
 /// The methods that never reach the engine. `None` = not one of them.
 fn glue_method(
     app: &AppHandle,

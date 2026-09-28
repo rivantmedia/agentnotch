@@ -138,6 +138,10 @@ pub fn second_instance(_app: &AppHandle, args: &[String]) -> bool {
 
 /// Upstream's refresh path for a Claude ring (WU1d): the notch's ring click, the tray's and the
 /// notch menu's "Refresh". Answers whether a reading is on its way, as upstream's did.
+///
+/// Upstream reaches this from synchronous commands and menu handlers, which run on the main
+/// thread, so the hub gets a short while to answer: the refresh goes ahead either way, only the
+/// ring's press animation waits on the answer.
 pub fn refresh_claude(_app: &AppHandle, provider: &str) -> bool {
     let Some(hub) = hub() else {
         return false;
@@ -149,8 +153,8 @@ pub fn refresh_claude(_app: &AppHandle, provider: &str) -> bool {
     } else {
         serde_json::json!({ "ring_id": provider, "reason": "ring_click" })
     };
-    calls::engine_call(&hub, "refresh_usage", args)
-        .ok()
+    calls::engine_call_within(hub, "refresh_usage", args, MAIN_THREAD_WAIT)
+        .and_then(Result::ok)
         .and_then(|reply| reply.get("coming").and_then(Value::as_bool))
         .unwrap_or(false)
 }
@@ -164,23 +168,29 @@ pub fn hooks_switch_get() -> bool {
 }
 
 /// Upstream's switch turned on or off (WH7). Turning on needs the consent the Claude Code pane
-/// asks for; upstream's switch never grants it on its own.
+/// asks for; upstream's switch never grants it on its own. A synchronous command (the main
+/// thread): the hub gets a short while to answer, and the change goes ahead either way.
 pub fn hooks_switch_set(on: bool) -> Result<String, String> {
     let hub =
         hub().ok_or_else(|| format!("{DISPLAY_NAME}'s Claude Code control isn't running."))?;
     if on && hub.snapshot().setup.hook_consent != Some(true) {
         return Err(TURN_ON_FIRST.into());
     }
-    calls::engine_call(&hub, "hooks_enabled", serde_json::json!({ "on": on }))
-        .map(|_| {
-            if on {
-                "Claude Code hooks are on.".to_string()
-            } else {
-                "Claude Code hooks are off.".to_string()
-            }
-        })
-        .map_err(|e| e.message)
+    let state = if on { "on" } else { "off" };
+    match calls::engine_call_within(
+        hub,
+        "hooks_enabled",
+        serde_json::json!({ "on": on }),
+        MAIN_THREAD_WAIT,
+    ) {
+        Some(Ok(_)) => Ok(format!("Claude Code hooks are {state}.")),
+        Some(Err(e)) => Err(e.message),
+        None => Ok(format!("Claude Code hooks are being turned {state}.")),
+    }
 }
+
+/// How long a call made on the main thread waits for the hub before the UI moves on.
+const MAIN_THREAD_WAIT: std::time::Duration = std::time::Duration::from_millis(750);
 
 fn log(line: &str) {
     crate::applog(&format!("an: {line}"));
