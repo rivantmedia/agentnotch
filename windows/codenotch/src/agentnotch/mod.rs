@@ -70,6 +70,12 @@ pub fn tray_tooltip() -> String {
 /// Sessions needing the user, as the hub last reported (`HubEvent::TrayBadge`).
 static NEEDS_YOU: AtomicU32 = AtomicU32::new(0);
 
+/// The weekly ring's place on a fresh install (WC): outside the session ring, the Mac fork's
+/// default. Upstream's own fallback for an unknown value stays "off" (its test pins that).
+pub fn default_weekly_ring() -> String {
+    "outside".into()
+}
+
 /// Whether this run is sealed (`AGENTNOTCH_SAFE_MODE`, fails closed), decided once per process.
 pub fn sealed() -> bool {
     engine::is_sealed(flags())

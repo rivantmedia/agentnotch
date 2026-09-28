@@ -12,6 +12,7 @@
 //! whatever else argv holds.
 
 use std::io::Write;
+use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
 use agentnotch_engine::hub::{DoctorExtras, Hub};
@@ -40,7 +41,7 @@ pub fn run(args: &[String]) -> Option<i32> {
     crate::attach_console();
     let rest: Vec<&str> = args.iter().skip(2).map(String::as_str).collect();
     let quiet = command == "uninstall-hooks" && rest.contains(&"--quiet");
-    let (code, text) = match command {
+    let outcome = panic::catch_unwind(AssertUnwindSafe(|| match command {
         "doctor" => doctor(&rest),
         "inspect-accounts" => inspect_accounts(),
         "install-hooks" => (
@@ -51,9 +52,15 @@ pub fn run(args: &[String]) -> Option<i32> {
         ),
         "uninstall-hooks" => uninstall_hooks(quiet),
         "control" => control(&rest),
-        "autostart" => autostart(&rest),
-        _ => return None,
-    };
+        // "autostart", the last of COMMANDS.
+        _ => autostart(&rest),
+    }));
+    // A command that panics still ends with its exit code and a line in its log, never with a
+    // bare 101: the uninstaller's `uninstall-hooks --quiet` in particular must never fail.
+    let (code, text) = outcome.unwrap_or_else(|_| {
+        let code = if quiet || command == "doctor" { 0 } else { 1 };
+        (code, format!("{command}: failed unexpectedly"))
+    });
     if !quiet {
         print(&text);
     }

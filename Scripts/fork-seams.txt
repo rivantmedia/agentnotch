@@ -238,7 +238,11 @@ FORBID	WH	windows/codenotch/src/main.rs	server::start(
 FORBID	WH	windows/codenotch/src/main.rs	watcher::start(
 SEAM	WR-DIR	windows/codenotch/src/config.rs	.join(crate::agentnotch::data_folder_name()) // Fork: WR-DIR
 FORBID	WR-DIR	windows/codenotch/src/config.rs	.join("codenotch")
-SEAM	WC	windows/codenotch/src/config.rs	"outside".into() // Fork: WC
+# WC: a fresh install's weekly ring sits outside (the Mac fork's default). The
+# config's two default sites call the glue; upstream's default_weekly_ring stays
+# "off", because weekly_ring_or_off falls back to it and upstream's test
+# (only_the_two_placements_are_kept) pins that an unknown value turns it off.
+SEAM	WC	windows/codenotch/src/config.rs	crate::agentnotch::default_weekly_ring	2
 SEAM	WR-RUN	windows/codenotch/src/autostart.rs	const NAME: &str = "Agent Notch"; // Fork: WR-RUN
 SEAM	WR-TRAY	windows/codenotch/src/tray.rs	crate::agentnotch::tray_tooltip()	2
 SEAM	WR-TRAY	windows/codenotch/src/tray.rs	format!("{} — {}", crate::agentnotch::DISPLAY_NAME, parts.join(" · ")) // Fork: WR-TRAY
