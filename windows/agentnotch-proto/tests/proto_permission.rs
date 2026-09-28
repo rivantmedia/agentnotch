@@ -34,7 +34,12 @@ fn cases() -> Vec<Case> {
         let response_frame = extract_response(&raw);
         let stdout = std::fs::read(path.with_extension("stdout")).unwrap();
         let expected = (!stdout.is_empty()).then(|| String::from_utf8(stdout).unwrap());
-        cases.push(Case { name, stdin, response_frame, expected });
+        cases.push(Case {
+            name,
+            stdin,
+            response_frame,
+            expected,
+        });
     }
     cases.sort_by(|a, b| a.name.cmp(&b.name));
     assert!(cases.len() >= 8);
@@ -100,7 +105,12 @@ fn the_typed_response_gives_the_same_json() {
                 // Same JSON; only key order may differ.
                 let expected: Value = serde_json::from_str(expected).unwrap();
                 for text in [from_stdin.unwrap(), from_value.unwrap()] {
-                    assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), expected, "{}", case.name);
+                    assert_eq!(
+                        serde_json::from_str::<Value>(&text).unwrap(),
+                        expected,
+                        "{}",
+                        case.name
+                    );
                 }
             }
         }
@@ -125,10 +135,17 @@ fn the_documented_answers() {
         permission_output_for_stdin(bash, &PermissionResponse::deny(None)).unwrap()
     );
     let keep = PermissionResponse::deny(Some(KEEP_PLANNING_REASON.into()));
-    assert!(permission_output_for_stdin(br#"{"tool_input": {"plan": "p"}}"#, &keep).unwrap().contains(KEEP_PLANNING_REASON));
+    assert!(
+        permission_output_for_stdin(br#"{"tool_input": {"plan": "p"}}"#, &keep)
+            .unwrap()
+            .contains(KEEP_PLANNING_REASON)
+    );
 
     // Plan approval: an empty update echoes the original input verbatim.
-    let plan = PermissionResponse { updated_input: Some(Default::default()), ..PermissionResponse::allow() };
+    let plan = PermissionResponse {
+        updated_input: Some(Default::default()),
+        ..PermissionResponse::allow()
+    };
     assert_eq!(
         permission_output_for_stdin(br#"{"tool_input": {"plan": "1. a\n2. b"}}"#, &plan).unwrap(),
         r#"{"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": "allow", "updatedInput": {"plan": "1. a\n2. b"}}}}"#
@@ -148,24 +165,52 @@ fn the_documented_answers() {
 #[test]
 fn ask_unknown_and_broken_responses_print_nothing() {
     let stdin = br#"{"tool_input": {"command": "ls"}}"#;
-    for frame in [&br#"{"decision":"ask"}"#[..], br#"{"decision":"maybe"}"#, br#"{}"#, b"[1]", b"", b"not json"] {
-        assert_eq!(permission_output_for_frames(stdin, frame), None, "{}", String::from_utf8_lossy(frame));
+    for frame in [
+        &br#"{"decision":"ask"}"#[..],
+        br#"{"decision":"maybe"}"#,
+        br#"{}"#,
+        b"[1]",
+        b"",
+        b"not json",
+    ] {
+        assert_eq!(
+            permission_output_for_frames(stdin, frame),
+            None,
+            "{}",
+            String::from_utf8_lossy(frame)
+        );
     }
     // Wrongly typed fields are ignored, not fatal (the Mac's isinstance checks).
     assert_eq!(
-        permission_output_for_frames(stdin, br#"{"decision":"allow","updated_input":"x","updated_permissions":{}}"#).unwrap(),
+        permission_output_for_frames(
+            stdin,
+            br#"{"decision":"allow","updated_input":"x","updated_permissions":{}}"#
+        )
+        .unwrap(),
         r#"{"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": "allow"}}}"#
     );
     assert_eq!(
-        permission_output_for_frames(stdin, br#"{"decision":"deny","reason":5,"interrupt":"yes"}"#).unwrap(),
+        permission_output_for_frames(
+            stdin,
+            br#"{"decision":"deny","reason":5,"interrupt":"yes"}"#
+        )
+        .unwrap(),
         r#"{"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": "deny", "message": "Denied by user via Agent Notch"}}}"#
     );
 }
 
 #[test]
 fn the_response_frame_shape() {
-    let r = PermissionResponse { reason: Some("No".into()), interrupt: Some(true), ..PermissionResponse::deny(None) };
-    assert_eq!(String::from_utf8(r.to_json()).unwrap(), r#"{"decision":"deny","reason":"No","interrupt":true}"#);
-    let parsed: PermissionResponse = serde_json::from_str(r#"{"decision":"allow","future":1}"#).unwrap();
+    let r = PermissionResponse {
+        reason: Some("No".into()),
+        interrupt: Some(true),
+        ..PermissionResponse::deny(None)
+    };
+    assert_eq!(
+        String::from_utf8(r.to_json()).unwrap(),
+        r#"{"decision":"deny","reason":"No","interrupt":true}"#
+    );
+    let parsed: PermissionResponse =
+        serde_json::from_str(r#"{"decision":"allow","future":1}"#).unwrap();
     assert_eq!(parsed, PermissionResponse::allow());
 }

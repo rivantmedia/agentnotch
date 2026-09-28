@@ -56,12 +56,18 @@ impl HookEnv {
 
     /// `CLAUDE_PID` when it parses (as Python's `int()`) to 1..=2³¹−1.
     pub fn claude_pid_value(&self) -> Option<u32> {
-        self.claude_pid.as_deref().and_then(python_int).and_then(valid_pid)
+        self.claude_pid
+            .as_deref()
+            .and_then(python_int)
+            .and_then(valid_pid)
     }
 
     /// The hook event's `pid`: `CLAUDE_PID`, else the walk's guess, else none.
     fn hook_pid_field(&self) -> Value {
-        match self.claude_pid_value().or(self.pid_guess.and_then(|p| valid_pid(p as i64))) {
+        match self
+            .claude_pid_value()
+            .or(self.pid_guess.and_then(|p| valid_pid(p as i64)))
+        {
             Some(pid) => json!(pid),
             None => Value::Null,
         }
@@ -95,8 +101,10 @@ pub fn status_for(event: &str, data: &Map<String, Value>) -> &'static str {
                 "notification"
             }
         }
-        "UserPromptSubmit" | "PostToolUse" | "PostToolUseFailure" | "PermissionDenied" | "SubagentStart"
-        | "SubagentStop" | "PostCompact" | "TaskCreated" | "TaskCompleted" => "processing",
+        "UserPromptSubmit" | "PostToolUse" | "PostToolUseFailure" | "PermissionDenied"
+        | "SubagentStart" | "SubagentStop" | "PostCompact" | "TaskCreated" | "TaskCompleted" => {
+            "processing"
+        }
         _ => "unknown",
     }
 }
@@ -115,7 +123,10 @@ pub fn build_hook_message(stdin: &Value, env: &HookEnv) -> Option<Value> {
     let mut m = Map::new();
     m.insert("protocol".into(), json!(PROTOCOL));
     m.insert("event".into(), event);
-    m.insert("session_id".into(), or_default(data.get("session_id"), "unknown"));
+    m.insert(
+        "session_id".into(),
+        or_default(data.get("session_id"), "unknown"),
+    );
     m.insert("cwd".into(), or_default(data.get("cwd"), ""));
     m.insert("transcript_path".into(), get("transcript_path"));
     m.insert("pid".into(), env.hook_pid_field());
@@ -131,7 +142,11 @@ pub fn build_hook_message(stdin: &Value, env: &HookEnv) -> Option<Value> {
 
     let is_tool_event = matches!(
         event_name.as_str(),
-        "PreToolUse" | "PostToolUse" | "PostToolUseFailure" | "PermissionRequest" | "PermissionDenied"
+        "PreToolUse"
+            | "PostToolUse"
+            | "PostToolUseFailure"
+            | "PermissionRequest"
+            | "PermissionDenied"
     );
     if is_tool_event {
         m.insert("tool".into(), get("tool_name"));
@@ -147,19 +162,30 @@ pub fn build_hook_message(stdin: &Value, env: &HookEnv) -> Option<Value> {
         }
     }
 
-    if event_name == "PostToolUse" && data.get("tool_name").and_then(Value::as_str) == Some("TaskCreate") {
-        let task = data.get("tool_response").and_then(Value::as_object).and_then(|r| r.get("task"));
+    if event_name == "PostToolUse"
+        && data.get("tool_name").and_then(Value::as_str) == Some("TaskCreate")
+    {
+        let task = data
+            .get("tool_response")
+            .and_then(Value::as_object)
+            .and_then(|r| r.get("task"));
         if let Some(Value::Object(task)) = task {
             if let Some(id) = task.get("id").filter(|v| !v.is_null()) {
                 m.insert("task_id".into(), json!(python_str(id)));
             }
-            m.insert("task_subject".into(), text_or_none(task.get("subject"), MAX_TEXT));
+            m.insert(
+                "task_subject".into(),
+                text_or_none(task.get("subject"), MAX_TEXT),
+            );
         }
     }
 
     match event_name.as_str() {
         "PostToolUseFailure" => {
-            m.insert("tool_error".into(), text_or_none(dumped(data.get("error")).as_ref(), MAX_TOOL_ERROR));
+            m.insert(
+                "tool_error".into(),
+                text_or_none(dumped(data.get("error")).as_ref(), MAX_TOOL_ERROR),
+            );
             if let Some(flag @ Value::Bool(_)) = data.get("is_interrupt") {
                 m.insert("is_interrupt".into(), flag.clone());
             }
@@ -175,23 +201,37 @@ pub fn build_hook_message(stdin: &Value, env: &HookEnv) -> Option<Value> {
         }
         "Notification" => {
             m.insert("notification_type".into(), get("notification_type"));
-            m.insert("message".into(), text_or_none(data.get("message"), MAX_TEXT));
+            m.insert(
+                "message".into(),
+                text_or_none(data.get("message"), MAX_TEXT),
+            );
             m.insert("title".into(), text_or_none(data.get("title"), MAX_TEXT));
         }
         "Stop" | "StopFailure" | "SubagentStop" => {
             m.insert(
                 "last_assistant_message".into(),
-                text_or_none(data.get("last_assistant_message"), MAX_LAST_ASSISTANT_MESSAGE),
+                text_or_none(
+                    data.get("last_assistant_message"),
+                    MAX_LAST_ASSISTANT_MESSAGE,
+                ),
             );
             match event_name.as_str() {
                 "Stop" => {
                     let background = data.get("background_tasks").and_then(Value::as_array);
-                    m.insert("background_task_count".into(), json!(background.map_or(0, Vec::len)));
+                    m.insert(
+                        "background_task_count".into(),
+                        json!(background.map_or(0, Vec::len)),
+                    );
                     if let Some(tasks) = background {
                         let types: Vec<Value> = tasks
                             .iter()
                             .take(MAX_BACKGROUND_TYPES)
-                            .filter_map(|task| task.as_object()?.get("type").filter(|t| t.is_string()).cloned())
+                            .filter_map(|task| {
+                                task.as_object()?
+                                    .get("type")
+                                    .filter(|t| t.is_string())
+                                    .cloned()
+                            })
                             .collect();
                         m.insert("background_task_types".into(), Value::Array(types));
                     }
@@ -209,7 +249,10 @@ pub fn build_hook_message(stdin: &Value, env: &HookEnv) -> Option<Value> {
                     };
                     m.insert("stop_error".into(), error);
                     let details = dumped(data.get("error_details"));
-                    m.insert("stop_error_details".into(), text_or_none(details.as_ref(), MAX_TOOL_ERROR));
+                    m.insert(
+                        "stop_error_details".into(),
+                        text_or_none(details.as_ref(), MAX_TOOL_ERROR),
+                    );
                 }
                 _ => {
                     m.insert("agent_transcript_path".into(), get("agent_transcript_path"));
@@ -220,18 +263,34 @@ pub fn build_hook_message(stdin: &Value, env: &HookEnv) -> Option<Value> {
             if let Some(id) = data.get("task_id").filter(|v| !v.is_null()) {
                 m.insert("task_id".into(), json!(python_str(id)));
             }
-            m.insert("task_subject".into(), text_or_none(data.get("task_subject"), MAX_TEXT));
+            m.insert(
+                "task_subject".into(),
+                text_or_none(data.get("task_subject"), MAX_TEXT),
+            );
         }
         "SessionStart" => {
             m.insert("source".into(), get("source"));
-            let model = data.get("model").filter(|v| v.is_string()).cloned().unwrap_or(Value::Null);
+            let model = data
+                .get("model")
+                .filter(|v| v.is_string())
+                .cloned()
+                .unwrap_or(Value::Null);
             m.insert("model".into(), model);
-            m.insert("session_title".into(), text_or_none(data.get("session_title"), MAX_SESSION_TITLE));
+            m.insert(
+                "session_title".into(),
+                text_or_none(data.get("session_title"), MAX_SESSION_TITLE),
+            );
         }
         "UserPromptSubmit" => {
             m.insert("source".into(), get("source"));
-            m.insert("session_title".into(), text_or_none(data.get("session_title"), MAX_SESSION_TITLE));
-            m.insert("prompt".into(), text_or_none(data.get("prompt"), MAX_PROMPT));
+            m.insert(
+                "session_title".into(),
+                text_or_none(data.get("session_title"), MAX_SESSION_TITLE),
+            );
+            m.insert(
+                "prompt".into(),
+                text_or_none(data.get("prompt"), MAX_PROMPT),
+            );
         }
         "SessionEnd" => {
             m.insert("reason".into(), get("reason"));
@@ -256,7 +315,11 @@ pub fn encode_hook_message(msg: &Value) -> Vec<u8> {
         return payload;
     }
     let mut smaller = msg.clone();
-    let reduced = truncate_deep(&msg["tool_input"], MAX_TOOL_INPUT_STRING_REDUCED, Some(MAX_LIST_ITEMS));
+    let reduced = truncate_deep(
+        &msg["tool_input"],
+        MAX_TOOL_INPUT_STRING_REDUCED,
+        Some(MAX_LIST_ITEMS),
+    );
     smaller["tool_input"] = reduced;
     let payload = to_bytes(&smaller);
     if payload.len() <= MAX_CLIENT_MESSAGE {
@@ -272,8 +335,14 @@ pub fn build_statusline_message(stdin: &Value, env: &HookEnv) -> Option<Value> {
     let data = stdin.as_object()?;
     let get = |key: &str| data.get(key).cloned().unwrap_or(Value::Null);
     let empty = Map::new();
-    let context = data.get("context_window").and_then(Value::as_object).unwrap_or(&empty);
-    let cost = data.get("cost").and_then(Value::as_object).unwrap_or(&empty);
+    let context = data
+        .get("context_window")
+        .and_then(Value::as_object)
+        .unwrap_or(&empty);
+    let cost = data
+        .get("cost")
+        .and_then(Value::as_object)
+        .unwrap_or(&empty);
     let field = |map: &Map<String, Value>, key: &str| map.get(key).cloned().unwrap_or(Value::Null);
     Some(json!({
         "protocol": PROTOCOL,
@@ -315,7 +384,11 @@ fn python_int(raw: &str) -> Option<i64> {
         b'-' => (true, &text[1..]),
         _ => (false, text),
     };
-    if digits.is_empty() || digits.starts_with('_') || digits.ends_with('_') || digits.contains("__") {
+    if digits.is_empty()
+        || digits.starts_with('_')
+        || digits.ends_with('_')
+        || digits.contains("__")
+    {
         return None;
     }
     let mut value: i64 = 0;
@@ -398,12 +471,19 @@ fn clamp(s: &str, limit: usize) -> String {
 fn truncate_deep(value: &Value, limit: usize, max_items: Option<usize>) -> Value {
     match value {
         Value::String(s) => Value::String(clamp(s, limit)),
-        Value::Object(map) => {
-            Value::Object(map.iter().map(|(k, v)| (k.clone(), truncate_deep(v, limit, max_items))).collect())
-        }
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(k, v)| (k.clone(), truncate_deep(v, limit, max_items)))
+                .collect(),
+        ),
         Value::Array(items) => {
             let kept = max_items.map_or(items.len(), |max| max.min(items.len()));
-            Value::Array(items[..kept].iter().map(|v| truncate_deep(v, limit, max_items)).collect())
+            Value::Array(
+                items[..kept]
+                    .iter()
+                    .map(|v| truncate_deep(v, limit, max_items))
+                    .collect(),
+            )
         }
         other => other.clone(),
     }

@@ -16,7 +16,14 @@ pub struct ProcLink {
 
 /// Shells a string-form hook command runs under (Git Bash or PowerShell;
 /// cmd for completeness), which exit right after the hook.
-const SHELLS: [&str; 6] = ["bash.exe", "sh.exe", "dash.exe", "cmd.exe", "pwsh.exe", "powershell.exe"];
+const SHELLS: [&str; 6] = [
+    "bash.exe",
+    "sh.exe",
+    "dash.exe",
+    "cmd.exe",
+    "pwsh.exe",
+    "powershell.exe",
+];
 /// What Claude Code runs as: the native build, or Node or Bun running the npm
 /// package.
 const CLAUDE_IMAGES: [&str; 3] = ["claude.exe", "node.exe", "bun.exe"];
@@ -69,7 +76,11 @@ mod tests {
     use super::*;
 
     fn link(pid: u32, image: &str, created: u64) -> ProcLink {
-        ProcLink { pid, image: image.into(), created }
+        ProcLink {
+            pid,
+            image: image.into(),
+            created,
+        }
     }
 
     fn hook() -> ProcLink {
@@ -78,14 +89,23 @@ mod tests {
 
     #[test]
     fn exec_form_takes_the_parent() {
-        assert_eq!(pid_guess(true, &hook(), &[link(40, "claude.exe", 10)]), Some(40));
+        assert_eq!(
+            pid_guess(true, &hook(), &[link(40, "claude.exe", 10)]),
+            Some(40)
+        );
         // Whatever it is: in exec form Claude Code spawned the exe itself.
-        assert_eq!(pid_guess(true, &hook(), &[link(41, "C:\\x\\node.exe", 10)]), Some(41));
+        assert_eq!(
+            pid_guess(true, &hook(), &[link(41, "C:\\x\\node.exe", 10)]),
+            Some(41)
+        );
     }
 
     #[test]
     fn bash_then_claude() {
-        let chain = [link(50, "C:\\Program Files\\Git\\usr\\bin\\bash.exe", 900), link(40, "claude.exe", 10)];
+        let chain = [
+            link(50, "C:\\Program Files\\Git\\usr\\bin\\bash.exe", 900),
+            link(40, "claude.exe", 10),
+        ];
         assert_eq!(pid_guess(false, &hook(), &chain), Some(40));
     }
 
@@ -97,13 +117,24 @@ mod tests {
 
     #[test]
     fn cmd_then_bash_then_claude() {
-        let chain = [link(52, "cmd.exe", 950), link(50, "bash.exe", 900), link(40, "claude.exe", 10)];
+        let chain = [
+            link(52, "cmd.exe", 950),
+            link(50, "bash.exe", 900),
+            link(40, "claude.exe", 10),
+        ];
         assert_eq!(pid_guess(false, &hook(), &chain), Some(40));
     }
 
     #[test]
     fn bun_counts() {
-        assert_eq!(pid_guess(false, &hook(), &[link(50, "sh.exe", 900), link(42, "bun.exe", 10)]), Some(42));
+        assert_eq!(
+            pid_guess(
+                false,
+                &hook(),
+                &[link(50, "sh.exe", 900), link(42, "bun.exe", 10)]
+            ),
+            Some(42)
+        );
     }
 
     #[test]
@@ -111,12 +142,19 @@ mod tests {
         // The shell's recorded parent pid was reused by a newer process.
         let chain = [link(50, "bash.exe", 900), link(40, "claude.exe", 950)];
         assert_eq!(pid_guess(false, &hook(), &chain), None);
-        assert_eq!(pid_guess(true, &hook(), &[link(40, "claude.exe", 1001)]), None);
+        assert_eq!(
+            pid_guess(true, &hook(), &[link(40, "claude.exe", 1001)]),
+            None
+        );
     }
 
     #[test]
     fn vs_code_as_first_non_shell_is_none() {
-        let chain = [link(50, "pwsh.exe", 900), link(30, "Code.exe", 10), link(40, "claude.exe", 5)];
+        let chain = [
+            link(50, "pwsh.exe", 900),
+            link(30, "Code.exe", 10),
+            link(40, "claude.exe", 5),
+        ];
         assert_eq!(pid_guess(false, &hook(), &chain), None);
     }
 
@@ -136,6 +174,9 @@ mod tests {
             link(40, "claude.exe", 10),
         ];
         assert_eq!(pid_guess(false, &hook(), &chain), None);
-        assert_eq!(pid_guess(false, &hook(), &[&chain[1..4], &chain[4..]].concat()), Some(40));
+        assert_eq!(
+            pid_guess(false, &hook(), &[&chain[1..4], &chain[4..]].concat()),
+            Some(40)
+        );
     }
 }

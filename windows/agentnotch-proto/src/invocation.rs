@@ -37,8 +37,15 @@ pub struct TypeArgs {
 impl TypeArgs {
     /// The argv after the exe for this request, as the engine spawns it.
     pub fn to_args(&self) -> Vec<String> {
-        let window = self.expect_window.map_or_else(|| "none".to_owned(), |hwnd| format!("{hwnd:x}"));
-        let shells = self.allowed_shells.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+        let window = self
+            .expect_window
+            .map_or_else(|| "none".to_owned(), |hwnd| format!("{hwnd:x}"));
+        let shells = self
+            .allowed_shells
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(",");
         vec![
             "type".into(),
             "--pid".into(),
@@ -55,21 +62,27 @@ impl TypeArgs {
 
 /// argv after the exe → what to do.
 pub fn parse_invocation(args: &[OsString]) -> Invocation {
-    let Some(args) = args.iter().map(|a| a.to_str()).collect::<Option<Vec<&str>>>() else {
+    let Some(args) = args
+        .iter()
+        .map(|a| a.to_str())
+        .collect::<Option<Vec<&str>>>()
+    else {
         return Invocation::Ignore;
     };
     match args.as_slice() {
         ["hook"] => Invocation::Hook { exec_form: false },
         ["hook", "--exec"] => Invocation::Hook { exec_form: true },
         ["statusline"] => Invocation::StatusLine,
-        ["console-info", "--pid", pid] => parse_pid(pid).map_or(Invocation::Ignore, |pid| Invocation::ConsoleInfo { pid }),
+        ["console-info", "--pid", pid] => {
+            parse_pid(pid).map_or(Invocation::Ignore, |pid| Invocation::ConsoleInfo { pid })
+        }
         ["type", rest @ ..] => parse_type(rest).map_or(Invocation::Ignore, Invocation::Type),
         _ => Invocation::Ignore,
     }
 }
 
 fn parse_type(rest: &[&str]) -> Option<TypeArgs> {
-    if rest.len() % 2 != 0 {
+    if !rest.len().is_multiple_of(2) {
         return None;
     }
     let (mut pid, mut started, mut window, mut shells) = (None, None, None, None);
@@ -102,7 +115,9 @@ fn parse_u64(text: &str) -> Option<u64> {
 }
 
 fn parse_pid(text: &str) -> Option<u32> {
-    parse_u64(text).filter(|pid| (1..=i32::MAX as u64).contains(pid)).map(|pid| pid as u32)
+    parse_u64(text)
+        .filter(|pid| (1..=i32::MAX as u64).contains(pid))
+        .map(|pid| pid as u32)
 }
 
 /// `none`, or a window handle in hex (optionally `0x`-prefixed).
@@ -136,7 +151,10 @@ mod tests {
     #[test]
     fn hook_forms() {
         assert_eq!(parse(&["hook"]), Invocation::Hook { exec_form: false });
-        assert_eq!(parse(&["hook", "--exec"]), Invocation::Hook { exec_form: true });
+        assert_eq!(
+            parse(&["hook", "--exec"]),
+            Invocation::Hook { exec_form: true }
+        );
         assert_eq!(parse(&["statusline"]), Invocation::StatusLine);
     }
 
@@ -161,15 +179,39 @@ mod tests {
 
     #[test]
     fn console_info() {
-        assert_eq!(parse(&["console-info", "--pid", "4242"]), Invocation::ConsoleInfo { pid: 4242 });
+        assert_eq!(
+            parse(&["console-info", "--pid", "4242"]),
+            Invocation::ConsoleInfo { pid: 4242 }
+        );
     }
 
     #[test]
     fn type_round_trip() {
-        let args = TypeArgs { pid: 77, started_ms: 1_790_000_000_123, expect_window: Some(0x1a2b), allowed_shells: vec![5, 6] };
+        let args = TypeArgs {
+            pid: 77,
+            started_ms: 1_790_000_000_123,
+            expect_window: Some(0x1a2b),
+            allowed_shells: vec![5, 6],
+        };
         let argv = args.to_args();
-        assert_eq!(argv, ["type", "--pid", "77", "--started", "1790000000123", "--expect-window", "1a2b", "--shells", "5,6"]);
-        assert_eq!(parse(&argv.iter().map(String::as_str).collect::<Vec<_>>()), Invocation::Type(args));
+        assert_eq!(
+            argv,
+            [
+                "type",
+                "--pid",
+                "77",
+                "--started",
+                "1790000000123",
+                "--expect-window",
+                "1a2b",
+                "--shells",
+                "5,6"
+            ]
+        );
+        assert_eq!(
+            parse(&argv.iter().map(String::as_str).collect::<Vec<_>>()),
+            Invocation::Type(args)
+        );
     }
 
     #[test]
@@ -177,10 +219,25 @@ mod tests {
         let minimal = parse(&["type", "--started", "5", "--pid", "9"]);
         assert_eq!(
             minimal,
-            Invocation::Type(TypeArgs { pid: 9, started_ms: 5, expect_window: None, allowed_shells: vec![] })
+            Invocation::Type(TypeArgs {
+                pid: 9,
+                started_ms: 5,
+                expect_window: None,
+                allowed_shells: vec![]
+            })
         );
         assert_eq!(
-            parse(&["type", "--pid", "9", "--started", "5", "--expect-window", "none", "--shells", ""]),
+            parse(&[
+                "type",
+                "--pid",
+                "9",
+                "--started",
+                "5",
+                "--expect-window",
+                "none",
+                "--shells",
+                ""
+            ]),
             minimal
         );
         for args in [
@@ -190,7 +247,15 @@ mod tests {
             &["type", "--pid", "9", "--pid", "9", "--started", "5"],
             &["type", "--pid", "9", "--started", "5", "--shells", "1,,2"],
             &["type", "--pid", "9", "--started", "-5"],
-            &["type", "--pid", "9", "--started", "5", "--expect-window", "zz"],
+            &[
+                "type",
+                "--pid",
+                "9",
+                "--started",
+                "5",
+                "--expect-window",
+                "zz",
+            ],
             &["type", "--pid", "9", "--started", "5", "--text", "hi"],
         ] {
             assert_eq!(parse(args), Invocation::Ignore, "{args:?}");
@@ -201,6 +266,9 @@ mod tests {
     #[test]
     fn non_utf8_is_ignored() {
         use std::os::unix::ffi::OsStringExt;
-        assert_eq!(parse_invocation(&[OsString::from_vec(vec![0x68, 0xff])]), Invocation::Ignore);
+        assert_eq!(
+            parse_invocation(&[OsString::from_vec(vec![0x68, 0xff])]),
+            Invocation::Ignore
+        );
     }
 }

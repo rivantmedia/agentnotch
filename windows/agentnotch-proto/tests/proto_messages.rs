@@ -107,8 +107,18 @@ fn base_fields() {
     assert_eq!(m["config_dir_env"], r"C:\Users\me\.claude-work");
     assert_eq!(m["agent_id"], Value::Null);
     assert_eq!(m["hook_pid"], 6789);
-    assert_eq!(m["terminal"], json!({"wt_session": "0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0", "term_program": null}));
-    assert_eq!(m["last_assistant_message"].as_str().unwrap().chars().count(), 1500);
+    assert_eq!(
+        m["terminal"],
+        json!({"wt_session": "0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0", "term_program": null})
+    );
+    assert_eq!(
+        m["last_assistant_message"]
+            .as_str()
+            .unwrap()
+            .chars()
+            .count(),
+        1500
+    );
     assert_eq!(m["background_task_count"], 2);
     // Entries without a string "type" are skipped, not sent as null.
     assert_eq!(m["background_task_types"], json!([]));
@@ -116,7 +126,8 @@ fn base_fields() {
 
 #[test]
 fn missing_or_empty_ids_get_the_scripts_defaults() {
-    let m = build_hook_message(&json!({"session_id": "", "cwd": null}), &HookEnv::default()).unwrap();
+    let m =
+        build_hook_message(&json!({"session_id": "", "cwd": null}), &HookEnv::default()).unwrap();
     assert_eq!(m["event"], "");
     assert_eq!(m["session_id"], "unknown");
     assert_eq!(m["cwd"], "");
@@ -131,7 +142,11 @@ fn missing_or_empty_ids_get_the_scripts_defaults() {
 fn pid_precedence() {
     let stdin = json!({"hook_event_name": "PreToolUse", "session_id": "s"});
     let with = |pid: Option<&str>, guess: Option<u32>| {
-        let env = HookEnv { claude_pid: pid.map(str::to_owned), pid_guess: guess, ..HookEnv::default() };
+        let env = HookEnv {
+            claude_pid: pid.map(str::to_owned),
+            pid_guess: guess,
+            ..HookEnv::default()
+        };
         build_hook_message(&stdin, &env).unwrap()["pid"].clone()
     };
     assert_eq!(with(Some("4242"), Some(7)), 4242);
@@ -147,9 +162,21 @@ fn pid_precedence() {
 #[test]
 fn attended_flag() {
     let stdin = json!({"hook_event_name": "Stop", "session_id": "s"});
-    for (raw, expected) in [(Some("1"), json!(true)), (Some("0"), json!(false)), (Some("yes"), Value::Null), (None, Value::Null)] {
-        let env = HookEnv { attended: raw.map(str::to_owned), ..HookEnv::default() };
-        assert_eq!(build_hook_message(&stdin, &env).unwrap()["attended"], expected, "{raw:?}");
+    for (raw, expected) in [
+        (Some("1"), json!(true)),
+        (Some("0"), json!(false)),
+        (Some("yes"), Value::Null),
+        (None, Value::Null),
+    ] {
+        let env = HookEnv {
+            attended: raw.map(str::to_owned),
+            ..HookEnv::default()
+        };
+        assert_eq!(
+            build_hook_message(&stdin, &env).unwrap()["attended"],
+            expected,
+            "{raw:?}"
+        );
     }
 }
 
@@ -163,8 +190,16 @@ fn coarse_status_per_event() {
         ("SessionStart", json!({}), "waiting_for_input"),
         ("SessionEnd", json!({}), "ended"),
         ("PreCompact", json!({}), "compacting"),
-        ("Notification", json!({"notification_type": "idle_prompt"}), "waiting_for_input"),
-        ("Notification", json!({"notification_type": "permission_prompt"}), "notification"),
+        (
+            "Notification",
+            json!({"notification_type": "idle_prompt"}),
+            "waiting_for_input",
+        ),
+        (
+            "Notification",
+            json!({"notification_type": "permission_prompt"}),
+            "notification",
+        ),
         ("UserPromptSubmit", json!({}), "processing"),
         ("PostToolUse", json!({}), "processing"),
         ("PostToolUseFailure", json!({}), "processing"),
@@ -177,8 +212,15 @@ fn coarse_status_per_event() {
         ("SomeFutureEvent", json!({}), "unknown"),
     ] {
         let mut stdin = json!({"hook_event_name": event, "session_id": "s"});
-        stdin.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
-        assert_eq!(build_hook_message(&stdin, &HookEnv::default()).unwrap()["status"], status, "{event}");
+        stdin
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        assert_eq!(
+            build_hook_message(&stdin, &HookEnv::default()).unwrap()["status"],
+            status,
+            "{event}"
+        );
     }
 }
 
@@ -191,7 +233,13 @@ fn tool_fields() {
     let m = build_hook_message(&stdin, &HookEnv::default()).unwrap();
     assert_eq!(m["tool"], "AskUserQuestion");
     // Every nested string is clamped; no tool_use_id on a PermissionRequest.
-    assert_eq!(m["tool_input"]["questions"][0]["options"][0]["description"].as_str().unwrap().len(), 20_000);
+    assert_eq!(
+        m["tool_input"]["questions"][0]["options"][0]["description"]
+            .as_str()
+            .unwrap()
+            .len(),
+        20_000
+    );
     assert!(m.get("tool_use_id").is_none());
     assert_eq!(m["permission_suggestions"], json!([]));
 
@@ -229,10 +277,16 @@ fn failure_and_task_fields() {
     let stop_failure = json!({"hook_event_name": "StopFailure", "session_id": "s", "error": 5, "error_details": "d".repeat(900)});
     let m = build_hook_message(&stop_failure, &HookEnv::default()).unwrap();
     assert_eq!(m["stop_error"], "unknown");
-    assert_eq!(m["stop_error_details"].as_str().unwrap().len(), MAX_TOOL_ERROR);
+    assert_eq!(
+        m["stop_error_details"].as_str().unwrap().len(),
+        MAX_TOOL_ERROR
+    );
 
     let denied = json!({"hook_event_name": "PermissionDenied", "session_id": "s", "reason": "", "message": "Blocked"});
-    assert_eq!(build_hook_message(&denied, &HookEnv::default()).unwrap()["denial_reason"], "Blocked");
+    assert_eq!(
+        build_hook_message(&denied, &HookEnv::default()).unwrap()["denial_reason"],
+        "Blocked"
+    );
 }
 
 #[test]
@@ -241,7 +295,10 @@ fn prompt_and_title_limits() {
         "session_title": "t".repeat(500), "source": "user"});
     let m = build_hook_message(&stdin, &HookEnv::default()).unwrap();
     assert_eq!(m["prompt"].as_str().unwrap().len(), MAX_PROMPT);
-    assert_eq!(m["session_title"].as_str().unwrap().len(), MAX_SESSION_TITLE);
+    assert_eq!(
+        m["session_title"].as_str().unwrap().len(),
+        MAX_SESSION_TITLE
+    );
     assert_eq!(m["source"], "user");
 
     let start = json!({"hook_event_name": "SessionStart", "session_id": "s", "model": {"id": "x"}, "source": "clear"});
@@ -253,7 +310,9 @@ fn prompt_and_title_limits() {
 #[test]
 fn a_huge_message_is_cut_to_one_mebibyte() {
     // Strings are already clamped to 20k; many of them still add up.
-    let edits: Vec<Value> = (0..200).map(|i| json!({"old_string": "o".repeat(20_000), "new_string": format!("{i}")})).collect();
+    let edits: Vec<Value> = (0..200)
+        .map(|i| json!({"old_string": "o".repeat(20_000), "new_string": format!("{i}")}))
+        .collect();
     let stdin = json!({"hook_event_name": "PreToolUse", "session_id": "s", "tool_name": "MultiEdit",
         "tool_input": {"file_path": "C:/x.rs", "edits": edits}, "tool_use_id": "toolu_big"});
     let message = build_hook_message(&stdin, &HookEnv::default()).unwrap();
@@ -261,12 +320,23 @@ fn a_huge_message_is_cut_to_one_mebibyte() {
     let bytes = encode_hook_message(&message);
     assert!(bytes.len() <= MAX_CLIENT_MESSAGE);
     let sent: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(sent["tool_input"]["edits"].as_array().unwrap().len(), MAX_LIST_ITEMS);
-    assert_eq!(sent["tool_input"]["edits"][0]["old_string"].as_str().unwrap().len(), 500);
+    assert_eq!(
+        sent["tool_input"]["edits"].as_array().unwrap().len(),
+        MAX_LIST_ITEMS
+    );
+    assert_eq!(
+        sent["tool_input"]["edits"][0]["old_string"]
+            .as_str()
+            .unwrap()
+            .len(),
+        500
+    );
     assert_eq!(sent["tool_use_id"], "toolu_big");
 
     // Too big even then: the input is dropped, the event still goes.
-    let wide: serde_json::Map<String, Value> = (0..4000).map(|i| (format!("k{i:05}"), json!("v".repeat(400)))).collect();
+    let wide: serde_json::Map<String, Value> = (0..4000)
+        .map(|i| (format!("k{i:05}"), json!("v".repeat(400))))
+        .collect();
     let stdin = json!({"hook_event_name": "PreToolUse", "session_id": "s", "tool_name": "X", "tool_input": wide});
     let message = build_hook_message(&stdin, &HookEnv::default()).unwrap();
     let sent: Value = serde_json::from_slice(&encode_hook_message(&message)).unwrap();
@@ -274,8 +344,15 @@ fn a_huge_message_is_cut_to_one_mebibyte() {
     assert_eq!(sent["event"], "PreToolUse");
 
     // A small message is passed through untouched.
-    let small = build_hook_message(&json!({"hook_event_name": "Stop", "session_id": "s"}), &HookEnv::default()).unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&encode_hook_message(&small)).unwrap(), small);
+    let small = build_hook_message(
+        &json!({"hook_event_name": "Stop", "session_id": "s"}),
+        &HookEnv::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&encode_hook_message(&small)).unwrap(),
+        small
+    );
 }
 
 #[test]
@@ -284,15 +361,30 @@ fn status_line_message() {
     let m = build_statusline_message(&stdin, &fixture_env()).unwrap();
     assert_eq!(m["event"], STATUS_LINE_EVENT);
     assert_eq!(m["pid"], 4242);
-    assert_eq!(m["status_line"]["rate_limits"]["five_hour"]["used_percentage"], 42.5);
-    assert_eq!(m["status_line"]["context_window"], json!({"used_percentage": 37, "context_window_size": 200000}));
+    assert_eq!(
+        m["status_line"]["rate_limits"]["five_hour"]["used_percentage"],
+        42.5
+    );
+    assert_eq!(
+        m["status_line"]["context_window"],
+        json!({"used_percentage": 37, "context_window_size": 200000})
+    );
     assert_eq!(m["status_line"]["cost"], json!({"total_cost_usd": 1.25}));
     assert_eq!(m["status_line"]["model"]["display_name"], "Opus 4.5");
     // No parent-pid fallback: the wrapper runs under a shell.
-    let env = HookEnv { claude_pid: None, pid_guess: Some(99), ..fixture_env() };
-    assert_eq!(build_statusline_message(&stdin, &env).unwrap()["pid"], Value::Null);
+    let env = HookEnv {
+        claude_pid: None,
+        pid_guess: Some(99),
+        ..fixture_env()
+    };
+    assert_eq!(
+        build_statusline_message(&stdin, &env).unwrap()["pid"],
+        Value::Null
+    );
     // Missing parts come through as nulls, not as a refusal.
-    let bare = build_statusline_message(&json!({"session_id": "s", "cost": 3}), &HookEnv::default()).unwrap();
+    let bare =
+        build_statusline_message(&json!({"session_id": "s", "cost": 3}), &HookEnv::default())
+            .unwrap();
     assert_eq!(bare["status_line"]["cost"], json!({"total_cost_usd": null}));
     assert_eq!(bare["status_line"]["rate_limits"], Value::Null);
     assert!(build_statusline_message(&json!(null), &HookEnv::default()).is_none());

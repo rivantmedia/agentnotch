@@ -25,7 +25,11 @@ pub struct ControlRequest {
 
 impl ControlRequest {
     pub fn new(op: ControlOp) -> Self {
-        ControlRequest { protocol: PROTOCOL, event: CONTROL_EVENT.into(), op }
+        ControlRequest {
+            protocol: PROTOCOL,
+            event: CONTROL_EVENT.into(),
+            op,
+        }
     }
 
     pub fn to_json(&self) -> Vec<u8> {
@@ -81,15 +85,27 @@ pub struct ControlResponse {
 
 impl ControlResponse {
     pub fn status(status: ControlStatus) -> Self {
-        ControlResponse { ok: true, status: Some(status), error: None }
+        ControlResponse {
+            ok: true,
+            status: Some(status),
+            error: None,
+        }
     }
 
     pub fn ok() -> Self {
-        ControlResponse { ok: true, status: None, error: None }
+        ControlResponse {
+            ok: true,
+            status: None,
+            error: None,
+        }
     }
 
     pub fn error(message: impl Into<String>) -> Self {
-        ControlResponse { ok: false, status: None, error: Some(message.into()) }
+        ControlResponse {
+            ok: false,
+            status: None,
+            error: Some(message.into()),
+        }
     }
 
     pub fn to_json(&self) -> Vec<u8> {
@@ -111,10 +127,14 @@ mod tests {
 
     #[test]
     fn responses_ignore_unknown_fields() {
-        let parsed: ControlResponse =
-            serde_json::from_str(r#"{"ok":true,"status":{"version":"1.1.0","sessions":3,"future":1},"later":[]}"#)
-                .unwrap();
+        let parsed: ControlResponse = serde_json::from_str(
+            r#"{"ok":true,"status":{"version":"1.1.0","sessions":3,"future":1},"later":[]}"#,
+        )
+        .unwrap();
         assert_eq!(parsed.status.unwrap().sessions, 3);
-        assert_eq!(String::from_utf8(ControlResponse::ok().to_json()).unwrap(), r#"{"ok":true}"#);
+        assert_eq!(
+            String::from_utf8(ControlResponse::ok().to_json()).unwrap(),
+            r#"{"ok":true}"#
+        );
     }
 }

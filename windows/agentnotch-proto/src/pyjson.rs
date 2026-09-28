@@ -50,10 +50,14 @@ impl Ordered {
             serde_json::Value::Bool(b) => Ordered::Bool(*b),
             serde_json::Value::Number(n) => Ordered::Number(n.clone()),
             serde_json::Value::String(s) => Ordered::String(s.clone()),
-            serde_json::Value::Array(items) => Ordered::Array(items.iter().map(Ordered::from_value).collect()),
-            serde_json::Value::Object(map) => {
-                Ordered::Object(map.iter().map(|(k, v)| (k.clone(), Ordered::from_value(v))).collect())
+            serde_json::Value::Array(items) => {
+                Ordered::Array(items.iter().map(Ordered::from_value).collect())
             }
+            serde_json::Value::Object(map) => Ordered::Object(
+                map.iter()
+                    .map(|(k, v)| (k.clone(), Ordered::from_value(v)))
+                    .collect(),
+            ),
         }
     }
 
@@ -88,7 +92,9 @@ impl<'de> Deserialize<'de> for Ordered {
                 Ok(Ordered::Number(v.into()))
             }
             fn visit_f64<E: de::Error>(self, v: f64) -> Result<Ordered, E> {
-                Number::from_f64(v).map(Ordered::Number).ok_or_else(|| E::custom("not a JSON number"))
+                Number::from_f64(v)
+                    .map(Ordered::Number)
+                    .ok_or_else(|| E::custom("not a JSON number"))
             }
             fn visit_str<E>(self, v: &str) -> Result<Ordered, E> {
                 Ok(Ordered::String(v.to_owned()))
@@ -191,8 +197,10 @@ mod tests {
 
     #[test]
     fn matches_python_separators_and_escapes() {
-        let value = Ordered::from_slice(br#"{"b": [1, 2.5, true, null], "a": "\u00e9\ud83d\ude00\"\\\n\u0001\u007f~"}"#)
-            .unwrap();
+        let value = Ordered::from_slice(
+            br#"{"b": [1, 2.5, true, null], "a": "\u00e9\ud83d\ude00\"\\\n\u0001\u007f~"}"#,
+        )
+        .unwrap();
         // Keys stay in document order; escapes are Python's.
         assert_eq!(
             dumps(&value),
@@ -202,7 +210,10 @@ mod tests {
 
     #[test]
     fn empty_containers() {
-        assert_eq!(dumps(&Ordered::from_slice(b"{\"a\": {}, \"b\": []}").unwrap()), r#"{"a": {}, "b": []}"#);
+        assert_eq!(
+            dumps(&Ordered::from_slice(b"{\"a\": {}, \"b\": []}").unwrap()),
+            r#"{"a": {}, "b": []}"#
+        );
     }
 
     #[test]

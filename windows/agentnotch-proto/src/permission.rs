@@ -50,7 +50,11 @@ impl PermissionResponse {
     }
 
     pub fn deny(reason: Option<String>) -> Self {
-        PermissionResponse { decision: Decision::Deny, reason, ..PermissionResponse::allow() }
+        PermissionResponse {
+            decision: Decision::Deny,
+            reason,
+            ..PermissionResponse::allow()
+        }
     }
 
     /// The frame's bytes.
@@ -72,9 +76,18 @@ impl PermissionResponse {
         };
         Some(PermissionResponse {
             decision,
-            reason: object.get("reason").and_then(Value::as_str).map(str::to_owned),
-            updated_input: object.get("updated_input").and_then(Value::as_object).cloned(),
-            updated_permissions: object.get("updated_permissions").and_then(Value::as_array).cloned(),
+            reason: object
+                .get("reason")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            updated_input: object
+                .get("updated_input")
+                .and_then(Value::as_object)
+                .cloned(),
+            updated_permissions: object
+                .get("updated_permissions")
+                .and_then(Value::as_array)
+                .cloned(),
             interrupt: object.get("interrupt").and_then(Value::as_bool),
         })
     }
@@ -84,7 +97,10 @@ impl PermissionResponse {
 /// print nothing. The original input's keys come out sorted; the hook exe
 /// uses [`permission_output_for_frames`] to keep Claude Code's own order.
 pub fn permission_output(original_tool_input: &Value, r: &PermissionResponse) -> Option<String> {
-    output(&Ordered::from_value(original_tool_input), &Answer::from_response(r))
+    output(
+        &Ordered::from_value(original_tool_input),
+        &Answer::from_response(r),
+    )
 }
 
 /// [`permission_output`] with the original `tool_input` taken from Claude
@@ -103,7 +119,9 @@ pub fn permission_output_for_frames(stdin: &[u8], response_frame: &[u8]) -> Opti
 }
 
 fn original_input(stdin: &[u8]) -> Ordered {
-    Ordered::from_slice(stdin).and_then(|data| data.get("tool_input").cloned()).unwrap_or(Ordered::Null)
+    Ordered::from_slice(stdin)
+        .and_then(|data| data.get("tool_input").cloned())
+        .unwrap_or(Ordered::Null)
 }
 
 /// A response with its parts in the order they arrived.
@@ -117,12 +135,19 @@ struct Answer {
 
 impl Answer {
     fn from_response(r: &PermissionResponse) -> Answer {
-        let object = |map: &Map<String, Value>| map.iter().map(|(k, v)| (k.clone(), Ordered::from_value(v))).collect();
+        let object = |map: &Map<String, Value>| {
+            map.iter()
+                .map(|(k, v)| (k.clone(), Ordered::from_value(v)))
+                .collect()
+        };
         Answer {
             decision: r.decision,
             reason: r.reason.clone(),
             updated_input: r.updated_input.as_ref().map(object),
-            updated_permissions: r.updated_permissions.as_ref().map(|list| list.iter().map(Ordered::from_value).collect()),
+            updated_permissions: r
+                .updated_permissions
+                .as_ref()
+                .map(|list| list.iter().map(Ordered::from_value).collect()),
             interrupt: r.interrupt,
         }
     }
@@ -130,7 +155,9 @@ impl Answer {
     /// The Mac script's `isinstance` checks: a field of the wrong type is
     /// ignored; an unknown decision prints nothing.
     fn from_ordered(response: &Ordered) -> Option<Answer> {
-        let Ordered::Object(_) = response else { return None };
+        let Ordered::Object(_) = response else {
+            return None;
+        };
         let decision = match response.get("decision") {
             Some(Ordered::String(s)) if s == "allow" => Decision::Allow,
             Some(Ordered::String(s)) if s == "deny" => Decision::Deny,
@@ -175,12 +202,23 @@ fn output(original: &Ordered, r: &Answer) -> Option<String> {
                 }
                 result.push(("updatedInput".into(), Ordered::Object(merged)));
             }
-            if let Some(permissions) = r.updated_permissions.as_ref().filter(|list| !list.is_empty()) {
-                result.push(("updatedPermissions".into(), Ordered::Array(permissions.clone())));
+            if let Some(permissions) = r
+                .updated_permissions
+                .as_ref()
+                .filter(|list| !list.is_empty())
+            {
+                result.push((
+                    "updatedPermissions".into(),
+                    Ordered::Array(permissions.clone()),
+                ));
             }
         }
         Decision::Deny => {
-            let message = r.reason.as_deref().filter(|reason| !reason.is_empty()).unwrap_or(DEFAULT_DENY_MESSAGE);
+            let message = r
+                .reason
+                .as_deref()
+                .filter(|reason| !reason.is_empty())
+                .unwrap_or(DEFAULT_DENY_MESSAGE);
             result.push(("behavior".into(), Ordered::String("deny".into())));
             result.push(("message".into(), Ordered::String(message.into())));
             if let Some(interrupt) = r.interrupt {
@@ -192,7 +230,10 @@ fn output(original: &Ordered, r: &Answer) -> Option<String> {
     let output = Ordered::Object(vec![(
         "hookSpecificOutput".into(),
         Ordered::Object(vec![
-            ("hookEventName".into(), Ordered::String("PermissionRequest".into())),
+            (
+                "hookEventName".into(),
+                Ordered::String("PermissionRequest".into()),
+            ),
             ("decision".into(), Ordered::Object(result)),
         ]),
     )]);

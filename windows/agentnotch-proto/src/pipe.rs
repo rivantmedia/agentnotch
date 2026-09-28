@@ -18,7 +18,10 @@ pub fn pipe_name(user_sid: &str) -> String {
 /// the app always honours it (`honour_without_dev`). Only a pipe path is
 /// accepted: anything else (empty, a file path, a Unix socket path left over
 /// from the Mac) is ignored rather than opened.
-pub fn dev_pipe_override(get_env: impl Fn(&str) -> Option<String>, honour_without_dev: bool) -> Option<String> {
+pub fn dev_pipe_override(
+    get_env: impl Fn(&str) -> Option<String>,
+    honour_without_dev: bool,
+) -> Option<String> {
     if !honour_without_dev && get_env("AGENTNOTCH_DEV").as_deref() != Some("1") {
         return None;
     }
@@ -38,7 +41,10 @@ mod tests {
     use std::collections::HashMap;
 
     fn env(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
-        let map: HashMap<String, String> = pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let map: HashMap<String, String> = pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
         move |key| map.get(key).cloned()
     }
 
@@ -53,25 +59,51 @@ mod tests {
     #[test]
     fn the_hook_needs_the_dev_switch() {
         let pipe = r"\\.\pipe\agentnotch-test-1";
-        assert_eq!(dev_pipe_override(env(&[("AGENTNOTCH_SOCKET", pipe)]), false), None);
         assert_eq!(
-            dev_pipe_override(env(&[("AGENTNOTCH_SOCKET", pipe), ("AGENTNOTCH_DEV", "1")]), false),
+            dev_pipe_override(env(&[("AGENTNOTCH_SOCKET", pipe)]), false),
+            None
+        );
+        assert_eq!(
+            dev_pipe_override(
+                env(&[("AGENTNOTCH_SOCKET", pipe), ("AGENTNOTCH_DEV", "1")]),
+                false
+            ),
             Some(pipe.to_string())
         );
-        assert_eq!(dev_pipe_override(env(&[("AGENTNOTCH_SOCKET", pipe), ("AGENTNOTCH_DEV", "true")]), false), None);
+        assert_eq!(
+            dev_pipe_override(
+                env(&[("AGENTNOTCH_SOCKET", pipe), ("AGENTNOTCH_DEV", "true")]),
+                false
+            ),
+            None
+        );
     }
 
     #[test]
     fn the_app_honours_it_always() {
         let pipe = r"\\.\PIPE\agentnotch-test-2";
-        assert_eq!(dev_pipe_override(env(&[("AGENTNOTCH_SOCKET", pipe)]), true), Some(pipe.to_string()));
+        assert_eq!(
+            dev_pipe_override(env(&[("AGENTNOTCH_SOCKET", pipe)]), true),
+            Some(pipe.to_string())
+        );
         assert_eq!(dev_pipe_override(env(&[]), true), None);
     }
 
     #[test]
     fn only_pipe_paths_count() {
-        for bad in ["", "/tmp/agentnotch/hook.sock", r"\\.\pipe\", r"C:\pipe\x", r"\\.\pipe\a\b", r"\\.\pipe\a/b"] {
-            assert_eq!(dev_pipe_override(env(&[("AGENTNOTCH_SOCKET", bad)]), true), None, "{bad:?}");
+        for bad in [
+            "",
+            "/tmp/agentnotch/hook.sock",
+            r"\\.\pipe\",
+            r"C:\pipe\x",
+            r"\\.\pipe\a\b",
+            r"\\.\pipe\a/b",
+        ] {
+            assert_eq!(
+                dev_pipe_override(env(&[("AGENTNOTCH_SOCKET", bad)]), true),
+                None,
+                "{bad:?}"
+            );
         }
     }
 }

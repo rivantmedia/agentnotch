@@ -78,8 +78,14 @@ mod tests {
         write_frame(&mut buffer, br#"{"event":"Stop"}"#).unwrap();
         assert_eq!(&buffer[..4], &16u32.to_le_bytes());
         let mut reader = Cursor::new(buffer);
-        assert_eq!(read_frame(&mut reader, 1024).unwrap(), br#"{"event":"Stop"}"#);
-        assert!(matches!(read_frame(&mut reader, 1024), Err(FrameError::Eof)));
+        assert_eq!(
+            read_frame(&mut reader, 1024).unwrap(),
+            br#"{"event":"Stop"}"#
+        );
+        assert!(matches!(
+            read_frame(&mut reader, 1024),
+            Err(FrameError::Eof)
+        ));
     }
 
     #[test]
@@ -101,15 +107,23 @@ mod tests {
     #[test]
     fn a_big_frame_is_refused_before_it_is_read() {
         let mut reader = Cursor::new((9u32 << 20).to_le_bytes().to_vec());
-        assert!(matches!(read_frame(&mut reader, 8 << 20), Err(FrameError::TooLarge(len)) if len == 9 << 20));
+        assert!(
+            matches!(read_frame(&mut reader, 8 << 20), Err(FrameError::TooLarge(len)) if len == 9 << 20)
+        );
     }
 
     #[test]
     fn a_cut_frame_is_an_error_not_a_frame() {
         let mut short_header = Cursor::new(vec![5u8, 0]);
-        assert!(matches!(read_frame(&mut short_header, 64), Err(FrameError::Io(_))));
+        assert!(matches!(
+            read_frame(&mut short_header, 64),
+            Err(FrameError::Io(_))
+        ));
         let mut short_body = Cursor::new([&5u32.to_le_bytes()[..], b"ab"].concat());
-        assert!(matches!(read_frame(&mut short_body, 64), Err(FrameError::Io(_))));
+        assert!(matches!(
+            read_frame(&mut short_body, 64),
+            Err(FrameError::Io(_))
+        ));
     }
 
     /// A reader that hands out one byte at a time, like a pipe under load.

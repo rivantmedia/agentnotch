@@ -25,7 +25,10 @@ pub enum TypePhase {
     /// The text is in the console's input buffer; waiting for line 2.
     Typed,
     /// Final: `delivered`, `refused`, `typed_not_submitted` or `failed`.
-    Outcome { outcome: String, reason: Option<String> },
+    Outcome {
+        outcome: String,
+        reason: Option<String>,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -50,8 +53,13 @@ impl TypePhase {
     /// The line (without its newline).
     pub fn to_line(&self) -> String {
         let wire = match self {
-            TypePhase::Typed => Wire::Typed { phase: "typed".into() },
-            TypePhase::Outcome { outcome, reason } => Wire::Outcome { outcome: outcome.clone(), reason: reason.clone() },
+            TypePhase::Typed => Wire::Typed {
+                phase: "typed".into(),
+            },
+            TypePhase::Outcome { outcome, reason } => Wire::Outcome {
+                outcome: outcome.clone(),
+                reason: reason.clone(),
+            },
         };
         serde_json::to_string(&wire).unwrap_or_default()
     }
@@ -77,8 +85,14 @@ mod tests {
             outcome: TypePhase::REFUSED.into(),
             reason: Some("Another program is reading this console".into()),
         };
-        assert_eq!(refused.to_line(), r#"{"outcome":"refused","reason":"Another program is reading this console"}"#);
-        let delivered = TypePhase::Outcome { outcome: TypePhase::DELIVERED.into(), reason: None };
+        assert_eq!(
+            refused.to_line(),
+            r#"{"outcome":"refused","reason":"Another program is reading this console"}"#
+        );
+        let delivered = TypePhase::Outcome {
+            outcome: TypePhase::DELIVERED.into(),
+            reason: None,
+        };
         assert_eq!(delivered.to_line(), r#"{"outcome":"delivered"}"#);
         for phase in [TypePhase::Typed, refused, delivered] {
             assert_eq!(TypePhase::from_line(&phase.to_line()), Some(phase));
