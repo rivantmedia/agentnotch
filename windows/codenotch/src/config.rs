@@ -62,7 +62,7 @@ pub struct Config {
     #[serde(default = "default_scale")]
     pub scale: f64,
     /// Where the weekly limit gets a ring of its own: "off", "inside" or "outside".
-    #[serde(default = "default_weekly_ring")]
+    #[serde(default = "crate::agentnotch::default_weekly_ring")] // Fork: WC
     pub weekly_ring: String,
     /// How a usage ring changes colour: "hard_step" or "ramp".
     #[serde(default = "default_color_transition")]
@@ -247,7 +247,7 @@ impl Default for Config {
             notch_edge: default_notch_edge(),
             notch_monitor: None,
             scale: default_scale(),
-            weekly_ring: default_weekly_ring(),
+            weekly_ring: crate::agentnotch::default_weekly_ring(), // Fork: WC
             color_transition: default_color_transition(),
             theme: default_theme(),
             notch_providers: Vec::new(), // empty = show them all
@@ -266,7 +266,7 @@ impl Default for Config {
 pub fn config_path() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("codenotch")
+        .join(crate::agentnotch::data_folder_name()) // Fork: WR-DIR
         .join("config.json")
 }
 

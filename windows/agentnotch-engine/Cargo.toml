@@ -1,0 +1,42 @@
+# All of Agent Notch's Claude logic for Windows (DESIGN-WIN §2.3): accounts,
+# sessions, usage, hooks, control, cloud. Platform-independent: every OS service
+# is a trait (platform.rs) implemented by agentnotch-win, so `cargo test` runs on
+# macOS, Linux and Windows. No Tauri, no `windows*` crate, no C dependency:
+# check-seams.sh rejects them by name, and fork.yml's "no C dependencies" step
+# checks the resolved tree.
+[package]
+name = "agentnotch-engine"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.88"
+publish = false
+license = "Apache-2.0"
+description = "Agent Notch: Claude Code session control, platform-independent"
+
+[dependencies]
+agentnotch-proto = { path = "../agentnotch-proto" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+sha2 = "0.10"
+hmac = "0.12"
+base64 = "0.22"
+getrandom = "0.2"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+regex = "1"
+fancy-regex = "0.14"            # lookaround in the redaction/scrub patterns (CL§9.6)
+unicode-segmentation = "1"      # grapheme-safe UTF-16 clamps (CL§1.5)
+url = "2"                       # parsing only; canonical strings are built by hand (CL§3.1)
+ruzstd = "0.8"                  # pure-Rust zstd for Claude Desktop's Simple Cache bodies (AU§12)
+crossbeam-channel = "0.5"
+
+[dev-dependencies]
+tempfile = "3"
+
+[features]
+testkit = []                    # exposes engine::testkit to other crates' tests
+
+[lints.rust]
+# The engine never touches an OS API itself (that is agentnotch-win's job), so it
+# has no reason for unsafe.
+unsafe_code = "forbid"

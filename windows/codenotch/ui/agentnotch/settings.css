@@ -1,0 +1,12 @@
+/* Agent Notch's additions to upstream's Settings page (DESIGN-WIN §5.4). Loaded by seam WSS5,
+   after the page's own <style>. */
+
+/* The Claude Code tab's badge, beside upstream's blue, indigo and grey ones: Claude's orange. */
+.badge.b-claude { background: linear-gradient(#e8916f, #c96442); }
+
+/* Upstream's own "Let Claude Code notify …" switch and its note: Claude Code control lives in
+   the Claude Code tab, where turning it on asks first (seams WH6/WH7 reroute the switch anyway). */
+.acct-sub:has([data-remote="hooks"]),
+.acct-sub:has([data-remote="hooks"]) + .acct-detail { display: none; }
+
+#pane-claude .an-caption { color: var(--text2); }

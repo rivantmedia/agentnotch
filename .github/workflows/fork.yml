@@ -12,10 +12,13 @@ name: Fork
 # Plus the Command Line Tools build path, which is how the fork is built day
 # to day (Scripts/spm-build-app.sh), and a check that such a build never reads
 # an update feed. The Release workflow (release.yml) runs all of this first.
+# The `rust` job checks the Windows port's fork crates on Linux, the Windows
+# target included, so Windows code is linted on every push even when
+# agentnotch-windows.yml's path filter skips one.
 
 on:
   push:
-    branches: [main]
+    branches: [main, windows-port]
   pull_request:
   workflow_dispatch:
   # The Release workflow runs these same checks before it builds anything.
@@ -140,3 +143,84 @@ jobs:
             echo "$refusal"
             echo "::error::--with-updates did not refuse a .dev bundle id (exit $status)"; exit 1
           fi
+
+  rust:
+    if: github.repository != 'vinzdg/codenotch'
+    name: Windows fork crates (Rust)
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+      FORK_CRATES: -p agentnotch-proto -p agentnotch-engine -p agentnotch-win -p agentnotch-hook -p agentnotch-release
+    defaults:
+      run:
+        working-directory: windows
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Pinned by commit; the Windows target lets clippy type-check the
+      # cfg(windows) code here. No fork crate builds C, so no Windows SDK or
+      # C toolchain is needed for that.
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: 1.98.1
+          targets: x86_64-pc-windows-msvc
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: windows
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Format
+        run: |
+          read -ra crates <<< "$FORK_CRATES"
+          cargo fmt --check "${crates[@]}"
+
+      - name: Clippy (Linux)
+        run: |
+          read -ra crates <<< "$FORK_CRATES"
+          cargo clippy --locked --all-targets "${crates[@]}" -- -D warnings
+
+      - name: Clippy (Windows target)
+        run: |
+          read -ra crates <<< "$FORK_CRATES"
+          cargo clippy --locked --all-targets --target x86_64-pc-windows-msvc "${crates[@]}" -- -D warnings
+
+      - name: Tests
+        run: |
+          read -ra crates <<< "$FORK_CRATES"
+          cargo test --locked "${crates[@]}"
+
+      # The engine promises macOS, Linux and Windows builds with nothing but
+      # Rust: a crate that compiles C would break the cross-checks above and the
+      # release tool's C-free build (DESIGN-WIN §2.2).
+      - name: No C dependencies
+        run: |
+          set -euo pipefail
+          bad=0
+          for crate in agentnotch-proto agentnotch-engine agentnotch-win agentnotch-hook agentnotch-release; do
+            for target in x86_64-pc-windows-msvc x86_64-unknown-linux-gnu; do
+              if found=$(cargo tree --locked -e normal,build -p "$crate" --target "$target" --prefix none \
+                           | grep -E '^(cc|ring|openssl-sys|libsqlite3-sys|zstd-sys|bindgen) v' | sort -u); then
+                echo "::error::$crate ($target) depends on: $found"
+                bad=1
+              fi
+            done
+          done
+          exit "$bad"
+
+      # Upstream's page checks and the fork's own UI tests (once they exist).
+      - name: UI checks
+        run: |
+          set -euo pipefail
+          node scripts/check-ui-scripts.mjs
+          node --test test-light-surface.cjs
+          node scripts/test-claude-auth-ui.cjs
+          node --test scripts/test-ko-i18n.cjs
+          node --test test-codex-headline.cjs
+          if [[ -d agentnotch-ui-tests ]]; then node --test agentnotch-ui-tests; fi

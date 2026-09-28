@@ -1,0 +1,30 @@
+# The Windows update key and feed (DESIGN-WIN §6.4): derives the updater's
+# Ed25519 key from the Sparkle seed (read from stdin only), signs the installer in
+# minisign's prehashed format, verifies with the updater's own crate and writes
+# latest.json. C-free: it is built on ubuntu in a job without secrets and the
+# jobs holding the seed only run the hash-checked binary.
+[package]
+name = "agentnotch-release"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.88"
+publish = false
+license = "Apache-2.0"
+description = "Agent Notch: Windows update signing and feed"
+
+[[bin]]
+name = "agentnotch-release"
+path = "src/main.rs"
+
+[dependencies]
+ed25519-dalek = "2"
+hkdf = "0.12"
+sha2 = "0.10"
+blake2 = "0.10"
+base64 = "0.22"
+serde_json = "1"
+zeroize = "1"
+minisign-verify = "=0.2.5"      # the exact crate and version tauri-plugin-updater verifies with
+
+[lints.rust]
+unsafe_code = "forbid"

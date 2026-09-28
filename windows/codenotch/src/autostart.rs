@@ -5,7 +5,7 @@
 use std::process::Command;
 
 const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
-const NAME: &str = "Codenotch";
+const NAME: &str = "Agent Notch"; // Fork: WR-RUN (the uninstaller deletes the Run value named after productName)
 
 fn reg(args: &[&str]) -> Option<(bool, String)> {
     let mut c = Command::new("reg");

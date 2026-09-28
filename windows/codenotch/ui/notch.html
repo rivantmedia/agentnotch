@@ -276,6 +276,7 @@
   <div id="rest"></div><!-- after the pill, so its outline is drawn over the clipped pill -->
   <div id="notice"></div>
 </div>
+<link rel="stylesheet" href="agentnotch/notch.css"><script src="agentnotch/notch.js"></script><!-- Fork: WS1 -->
 <script>
 const invoke = window.__TAURI__.core.invoke;
 const listen = window.__TAURI__.event.listen;
@@ -973,6 +974,7 @@ function slotFor(id){
 // would have had on their own, so headlineOf and weeklyOf need no rule about accounts. `base` is the
 // provider the cell belongs to (glyph, activity, slot choice); `id` is what makes the cell unique.
 function claudeCells(){
+  if(window.agentnotch){const c=agentnotch.claudeCells();if(c)return c;} // Fork: WS2
   const ws=Array.isArray(usage.windows)?usage.windows:[];
   const accounts=[];
   for(const w of ws){
@@ -1107,6 +1109,7 @@ function renderRing(){
     else pct.textContent=p.snap.windows.length?'—':'…'; // its declared window is missing: a dash, not a wait
     glyph.classList.toggle('dim', !!(h && h.used>=1));
     wrap.classList.toggle('stale', staleOf(p.snap));
+    if(window.agentnotch)agentnotch.decorateCell(p,cell); // Fork: WS3
   }
   reportHot(); // a provider appearing or leaving resizes the pill
 }
@@ -1202,7 +1205,7 @@ function renderCard(){
     if(snap.note) html+=`<div class="c-note">${esc(textCopy(snap.note))}</div>`;
   }
   if(offersClaudeSignIn(p)) html+=claudeAuthHtml(claudeAuth,claudeActionMessage);
-  if(p.base==='claude'){ // live sessions (a full list with jump-to-session is a follow-up)
+  if(p.base==='claude'&&window.agentnotch){html+=agentnotch.cardSessions(p);}else if(p.base==='claude'){ // Fork: WS4
     const act=stateSnap.sessions.filter(s=>s.state!=='idle');
     if(act.length){
       html+=`<div class="c-sessions">`;
@@ -1427,7 +1430,7 @@ document.addEventListener('mousemove',e=>{
 });
 document.addEventListener('mouseup',e=>{
   if(e.button!==0)return;
-  if(press&&!dragging&&press.id) refreshRing(press.id);
+  if(press&&!dragging&&press.id&&!(window.agentnotch&&agentnotch.ringClick(press.id))) refreshRing(press.id); // Fork: WS5
   press=null;
 });
 // The Mac's right-click menu, naming the ring or card under the pointer; WebView2's own menu never shows

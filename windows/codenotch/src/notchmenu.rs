@@ -37,12 +37,13 @@ pub fn show_notch_menu(window: Window, provider: Option<String>) -> Result<(), S
         .map_err(err)?;
         menu = menu.item(&open);
     }
+    menu = crate::agentnotch::notch_menu_items(app, menu, provider.as_deref()); // Fork: WNM
     // Checked while the notch is always open; unticking it is Show on hover
     let keep_open = CheckMenuItemBuilder::with_id(format!("{PREFIX}keep_open"), tr(&lang, "keep_open"))
         .checked(crate::keeps_open(app))
         .build(app)
         .map_err(err)?;
-    let quit = MenuItemBuilder::with_id(format!("{PREFIX}quit"), tr(&lang, "quit_app"))
+    let quit = MenuItemBuilder::with_id(format!("{PREFIX}quit"), crate::agentnotch::rebrand(tr(&lang, "quit_app"))) // Fork: WR-QUIT
         .build(app)
         .map_err(err)?;
     let menu = menu.separator().item(&keep_open).separator().item(&quit).build().map_err(err)?;
@@ -82,6 +83,7 @@ fn handle(app: &AppHandle, id: &str) {
     let Some(item) = id.strip_prefix(PREFIX) else {
         return;
     };
+    if crate::agentnotch::notch_menu_event(app, item) { return; } // Fork: WNM
     if let Some(provider) = item.strip_prefix("open:") {
         crate::open_provider_page(provider);
         return;

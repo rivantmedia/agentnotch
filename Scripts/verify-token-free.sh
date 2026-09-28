@@ -27,6 +27,36 @@
 #    place and those upstream sites to stay where they are (AppDelegate only,
 #    at most one of each); a new one anywhere is a failure.
 #
+# Windows (upstream's Tauri port in windows/, DESIGN-WIN §1.8, §6.7). The
+# Windows patterns, added to the Mac's for the Windows fork's code:
+#   claudeAiOauth  api/oauth/usage  oauth-2025-04-20  CredReadW  CredEnumerateW
+#   read_credentials(  probe_credentials(  run_renewal(  maybe_renew(
+#   start_login(  auth login  setup-token  sessions\*.key  usage::start(
+#   claude_auth::
+#  - The fork's own Windows code (windows/agentnotch-*, the glue and its pages,
+#    the NSIS hooks, the smoke and build scripts, windows/tools; not target,
+#    gen or node_modules): none of them, comments included, except
+#    ALLOWED_LINES.
+#  - Lines the fork added to upstream files under windows/: none of them.
+#  - Upstream's Claude token path stays dormant: its Claude-only markers
+#    (claudeAiOauth, api/oauth/usage, oauth-2025-04-20) only in usage.rs and
+#    claude_auth.rs; usage::read_credentials( and usage::probe_credentials(
+#    called only from usage.rs and doctor.rs (the doctor is unreachable: WD and
+#    WCLI); claude_auth:: used outside usage.rs and claude_auth.rs only for the
+#    Sign-in card's busy flag in main.rs (claude_auth::state(),
+#    claude_auth::AuthState: no credential); start_login only in
+#    claude_auth.rs; seams WU1a-e, WD and WCLI in place; usage::start( and
+#    usage::request_refresh() on no code line of main.rs. (Upstream's other
+#    providers read their own credentials with functions of the same names, in
+#    grok.rs, cursor.rs and antigravity.rs; those are not Claude's.)
+#  - GLM's one read of a key from Claude Code's settings.json (glm.rs
+#    claude_code_key: an API key for Z.ai, not a Claude login, kept as upstream
+#    ships it) stays exactly that: ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY
+#    appear in windows/codenotch/src only in glm.rs and in claude_auth.rs (which
+#    removes them from its child's environment), and the function's text hashes
+#    to GLM_CLAUDE_KEY_PIN. An upstream merge that changes it fails here until
+#    someone reviews the change and records the new hash.
+#
 # Exit 0 when clean, 1 with the offending lines otherwise. Reads only.
 set -euo pipefail
 
@@ -54,6 +84,27 @@ PATTERNS=(
 ALLOWED_LINES=(
     'XCTAssertEqual(Fork.keychainService("Claude Code-credentials"), "Claude Code-credentials")'
 )
+# The Windows fork's code: the Mac's patterns plus these (DESIGN-WIN §6.7).
+WIN_PATTERNS=(
+    'claudeAiOauth'
+    'api/oauth/usage'
+    'oauth-2025-04-20'
+    'CredReadW'
+    'CredEnumerateW'
+    'read_credentials('
+    'probe_credentials('
+    'run_renewal('
+    'maybe_renew('
+    'start_login('
+    'auth login'
+    'setup-token'
+    'sessions\*.key'
+    'usage::start('
+    'claude_auth::'
+)
+# sha256 of glm.rs's `fn claude_code_key` (its line through the closing `}` at
+# the start of a line), as reviewed at upstream 642d329.
+GLM_CLAUDE_KEY_PIN=2bb3f6781cc33352d259fbaf95e25c3ebffd7e73b7759a2a76ed1489edd3ee37
 problems=0
 fail() { echo "FAIL: $*"; problems=$((problems + 1)); }
 
@@ -110,8 +161,100 @@ else
     fail "no '$REF' to compare Sources/ and Tests/ against (git fetch upstream, or set UPSTREAM_REF)"
 fi
 
+# --- Windows ------------------------------------------------------------------
+UP=windows/codenotch/src
+win_args=("${grep_args[@]}")
+for pattern in "${WIN_PATTERNS[@]}"; do win_args+=(-e "$pattern"); done
+
+# The fork's own Windows code: nothing at all, comments included.
+win_paths=()
+for path in windows/agentnotch-proto windows/agentnotch-engine windows/agentnotch-win \
+            windows/agentnotch-hook windows/agentnotch-release windows/agentnotch-ui-tests \
+            "$UP/agentnotch" windows/codenotch/ui/agentnotch windows/codenotch/nsis \
+            windows/codenotch/capabilities/agentnotch.json windows/scripts/agentnotch-build.ps1 \
+            windows/scripts/agentnotch-smoke.ps1 windows/scripts/smoke \
+            windows/scripts/check-claude-code-facts.mjs windows/tools; do
+    [[ -e "$path" ]] && win_paths+=("$path")
+done
+if [[ ${#win_paths[@]} -gt 0 ]]; then
+    hits=$(grep -rnF --exclude-dir=target --exclude-dir=gen --exclude-dir=node_modules \
+               "${win_args[@]}" "${win_paths[@]}" || true)
+    while IFS= read -r hit; do
+        [[ -n "$hit" ]] || continue
+        rest="${hit#*:}"; text="${rest#*:}"
+        is_allowed_line "$text" || fail "Windows fork code: $hit"
+    done <<< "$hits"
+fi
+
+# Lines the fork added to upstream's files under windows/ (the fork's own
+# files are covered above, where ALLOWED_LINES apply).
+if [[ -n "${BASE:-}" ]]; then
+    added=$(git diff "$BASE" -- windows ':!windows/agentnotch-*' ":!$UP/agentnotch" \
+                ':!windows/codenotch/ui/agentnotch' ':!windows/codenotch/nsis' ':!windows/Cargo.lock' \
+                ':!windows/codenotch/capabilities/agentnotch.json' ':!windows/scripts/agentnotch-*' \
+                ':!windows/scripts/smoke' ':!windows/scripts/check-claude-code-facts.mjs' ':!windows/tools' \
+            | grep -E '^\+' | grep -vE '^\+\+\+ ' || true)
+    if hits=$(grep -F "${win_args[@]}" <<< "$added"); then
+        while IFS= read -r hit; do
+            is_allowed_line "${hit#+}" || fail "fork line in an upstream file under windows/: ${hit#+}"
+        done <<< "$hits"
+    fi
+fi
+
+# Upstream's Claude token path: compiled, never reachable.
+if [[ -d "$UP" ]]; then
+    for pattern in 'claudeAiOauth' 'api/oauth/usage' 'oauth-2025-04-20'; do
+        elsewhere=$(grep -rlF --exclude-dir=agentnotch -e "$pattern" "$UP" \
+                        | grep -vxE "$UP/(usage|claude_auth)\.rs" || true)
+        [[ -z "$elsewhere" ]] || fail "$pattern outside usage.rs and claude_auth.rs: $(echo $elsewhere)"
+    done
+    for pattern in 'usage::read_credentials(' 'usage::probe_credentials('; do
+        elsewhere=$(grep -rlF --exclude-dir=agentnotch -e "$pattern" "$UP" \
+                        | grep -vxE "$UP/(usage|doctor)\.rs" || true)
+        [[ -z "$elsewhere" ]] || fail "$pattern called outside usage.rs and doctor.rs: $(echo $elsewhere)"
+    done
+    while IFS= read -r hit; do
+        [[ -n "$hit" ]] || continue
+        file="${hit%%:*}"; rest="${hit#*:}"; text="${rest#*:}"
+        stripped="${text//claude_auth::state()/}"
+        stripped="${stripped//claude_auth::AuthState/}"
+        if [[ "$file" != "$UP/main.rs" || "$stripped" == *'claude_auth::'* ]]; then
+            fail "claude_auth used outside upstream's dormant token path: $hit"
+        fi
+    done < <(grep -rnF --exclude-dir=agentnotch -e 'claude_auth::' "$UP" \
+                 | grep -vE "^$UP/(usage|claude_auth)\.rs:" || true)
+    elsewhere=$(grep -rlF --exclude-dir=agentnotch -e 'start_login' "$UP" | grep -vxF "$UP/claude_auth.rs" || true)
+    [[ -z "$elsewhere" ]] || fail "start_login outside claude_auth.rs: $(echo $elsewhere)"
+    for seam in '#[allow(dead_code)] mod usage; // Fork: WU1' \
+                '#[allow(dead_code)] mod claude_auth; // Fork: WU1' \
+                'fn claude_sign_in() -> Result<(), String> { Err(agentnotch::SIGN_IN_REFUSED.into()) } // Fork: WU1' \
+                'p if p == "claude" || p.starts_with("claude-") => return agentnotch::refresh_claude(app, p), // Fork: WU1' \
+                '// Fork: WU1 usage::start never runs' \
+                '#[allow(dead_code)] mod doctor; // Fork: WD' \
+                'if let Some(code) = agentnotch::cli::run(&args) { std::process::exit(code); } // Fork: WCLI'; do
+        grep -qF -- "$seam" "$UP/main.rs" || fail "seam missing from $UP/main.rs (it keeps upstream's Claude token path dormant): $seam"
+    done
+    code=$(grep -nF -e 'usage::start(' -e 'usage::request_refresh()' "$UP/main.rs" \
+               | grep -vE '^[0-9]+:[[:space:]]*//' || true)
+    [[ -z "$code" ]] || fail "upstream's Claude poller is started or refreshed in $UP/main.rs: $code"
+
+    # GLM's key read, pinned.
+    for name in ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY; do
+        elsewhere=$(grep -rlF --exclude-dir=agentnotch -e "$name" "$UP" \
+                        | grep -vxE "$UP/(glm|claude_auth)\.rs" || true)
+        [[ -z "$elsewhere" ]] || fail "$name read outside glm.rs: $(echo $elsewhere)"
+    done
+    sha256() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi | cut -d' ' -f1; }
+    glm=$(awk '/^(pub(\([a-z]+\))? )?fn claude_code_key\(/ { on = 1 } on { print } on && /^}$/ { exit }' "$UP/glm.rs" 2>/dev/null || true)
+    if [[ -z "$glm" ]]; then
+        fail "glm.rs has no fn claude_code_key to check (review upstream's change, then update GLM_CLAUDE_KEY_PIN)"
+    elif [[ "$(sha256 <<< "$glm")" != "$GLM_CLAUDE_KEY_PIN" ]]; then
+        fail "glm.rs's claude_code_key changed (sha256 $(sha256 <<< "$glm")): review that it still reads only a Z.ai key and sends it nowhere else, then record the new hash in GLM_CLAUDE_KEY_PIN"
+    fi
+fi
+
 if [[ $problems -gt 0 ]]; then
     echo "verify-token-free: $problems problem(s)"
     exit 1
 fi
-echo "verify-token-free: OK (bridge, package and the fork's lines in Sources/ and Tests/ are token-free; U1 keeps upstream's Claude token paths dormant)"
+echo "verify-token-free: OK (bridge, package and the fork's lines in Sources/ and Tests/ are token-free; U1 keeps upstream's Claude token paths dormant; on Windows the fork's code and its lines in windows/ are token-free, WU1/WD/WCLI keep upstream's Claude token path dormant, and GLM's key read is pinned)"

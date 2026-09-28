@@ -2,17 +2,17 @@
 
 mod autostart;
 mod config;
-mod doctor;
+#[allow(dead_code)] mod doctor; // Fork: WD (the fork's doctor runs instead: WCLI)
 mod focus;
-mod hooks_install;
+#[allow(dead_code)] mod hooks_install; // Fork: WH
 mod i18n;
 mod notchmenu;
-mod server;
+#[allow(dead_code)] mod server; // Fork: WH
 mod state;
 mod tray;
 mod traymenu;
-mod usage;
-mod claude_auth;
+#[allow(dead_code)] mod usage; // Fork: WU1 upstream's Claude token path: compiled, never started
+#[allow(dead_code)] mod claude_auth; // Fork: WU1
 mod codex;
 mod cursor;
 mod grok;
@@ -24,10 +24,11 @@ mod trayicon;
 mod activity;
 mod diag;
 mod dropzones;
-mod watcher;
+#[allow(dead_code)] mod watcher; // Fork: WH
 mod settings_window;
 mod topmost;
 mod updater;
+mod agentnotch; // Fork: WB1
 
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
@@ -664,7 +665,7 @@ fn get_usage(state: tauri::State<AppState>) -> usage::UsageSnapshot {
 }
 
 #[tauri::command]
-fn claude_sign_in() -> Result<(), String> { claude_auth::start_login() }
+fn claude_sign_in() -> Result<(), String> { Err(agentnotch::SIGN_IN_REFUSED.into()) } // Fork: WU1
 
 #[tauri::command]
 fn get_claude_auth() -> claude_auth::AuthState { claude_auth::state() }
@@ -673,12 +674,7 @@ fn get_claude_auth() -> claude_auth::AuthState { claude_auth::state() }
 /// wait stands, as on the Mac: asking early spends a request and can double the wait.
 pub(crate) fn refresh_provider(app: &AppHandle, provider: &str) -> bool {
     match provider {
-        "claude" => {
-            if app.state::<AppState>().usage.lock().unwrap().backoff_until > now_ms() {
-                return false;
-            }
-            usage::request_refresh();
-        }
+        p if p == "claude" || p.starts_with("claude-") => return agentnotch::refresh_claude(app, p), // Fork: WU1
         "codex" => codex::request_refresh(),
         "cursor" => cursor::request_refresh(),
         "grok" => grok::request_refresh(),
@@ -1523,16 +1519,12 @@ fn set_autostart(on: bool) -> Result<String, String> {
 
 #[tauri::command]
 fn get_hooks_installed() -> bool {
-    hooks_install::is_installed()
+    agentnotch::hooks_switch_get() // Fork: WH
 }
 
 #[tauri::command]
 fn set_hooks_installed(on: bool) -> Result<String, String> {
-    if on {
-        hooks_install::install()
-    } else {
-        hooks_install::uninstall()
-    }
+    agentnotch::hooks_switch_set(on) // Fork: WH
 }
 
 #[tauri::command]
@@ -1747,6 +1739,7 @@ const CONSOLE_CMDS: [&str; 4] = ["install-hooks", "uninstall-hooks", "autostart"
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    if let Some(code) = agentnotch::cli::run(&args) { std::process::exit(code); } // Fork: WCLI
     if let Some(cmd) = args.get(1) {
         // Attaching on the GUI path too tied the notch to whatever cmd.exe launched it: closing that
         // window sends CTRL_CLOSE_EVENT to every process on the console, and with no handler the
@@ -1790,6 +1783,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if agentnotch::second_instance(app, &_args) { return; } // Fork: WSI
             // Opening Codenotch again while it runs brings Settings forward, as on the Mac: with the
             // tray icon hidden it is the way back. Logged too, for a rebuild that was not picked up.
             applog(&format!("single instance: another launch was refused; the running instance is build={BUILD} — quit it from the tray first if you just rebuilt"));
@@ -1808,6 +1802,7 @@ fn main() {
             activity: Mutex::new(Vec::new()),
         })
         .invoke_handler(tauri::generate_handler![
+            agentnotch::an_call, // Fork: WB3
             get_state,
             get_usage,
             claude_sign_in,
@@ -1886,9 +1881,10 @@ fn main() {
             updater::check_on_launch(&handle);
             // Honours the saved switches: a notch hidden last time stays hidden.
             apply_visibility(&handle);
-            server::start(handle.clone(), port);
-            watcher::start(handle.clone());
-            usage::start(handle.clone());
+            agentnotch::setup(&handle); // Fork: WB2
+            let _ = port; // Fork: WH upstream's TCP hook server stays off; hooks reach the bridge's named pipe
+            // Fork: WH upstream's transcript watcher stays off; the engine reads transcripts
+            // Fork: WU1 usage::start never runs: the bridge feeds AppState.usage and "usage"
             codex::start(handle.clone());
             cursor::start(handle.clone());
             grok::start(handle.clone());

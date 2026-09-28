@@ -9,8 +9,8 @@
 #                          with <n>: on at least n lines (one per call path)
 #   FORBID <id>   <file>   <text that must not appear on a line of the file
 #                          that isn't a comment (#, //, @# after indentation)>
-#   ALLOW  <path or glob>          a path under Sources/ or Tests/ that may
-#                                  differ from upstream (everything else may not)
+#   ALLOW  <path or glob>          a path under Sources/, Tests/ or windows/ that
+#                                  may differ from upstream (everything else may not)
 #
 # Globs: a trailing /** matches everything below a folder.
 
@@ -203,3 +203,116 @@ ALLOW	Tests/UpdaterOutcomeTests.swift
 ALLOW	Sources/ClaudeBridge/**
 ALLOW	Tests/ClaudeBridgeTests.swift
 ALLOW	Tests/ForkSPM/**
+
+# --- Windows (upstream's Tauri port in windows/): DESIGN-WIN §2.5 -----------
+# Upstream's Claude token path (usage.rs, claude_auth.rs) stays compiled but is
+# never started (WU1); upstream's TCP hook server, transcript watcher and hook
+# installer are off (WH); the bridge (windows/codenotch/src/agentnotch) feeds
+# "usage" and the fork's own events. JSON has no comments: its seams are content.
+SEAM	WWS	windows/Cargo.toml	"agentnotch-proto", "agentnotch-engine", "agentnotch-win", "agentnotch-hook", "agentnotch-release"] # Fork: WWS
+SEAM	WB	windows/codenotch/Cargo.toml	agentnotch-engine = { path = "../agentnotch-engine" } # Fork: WB
+SEAM	WB	windows/codenotch/Cargo.toml	agentnotch-win = { path = "../agentnotch-win" } # Fork: WB
+SEAM	WB	windows/codenotch/Cargo.toml	webview2-com = "0.38" # Fork: WB
+SEAM	WB1	windows/codenotch/src/main.rs	mod agentnotch; // Fork: WB1
+SEAM	WU1	windows/codenotch/src/main.rs	#[allow(dead_code)] mod usage; // Fork: WU1
+SEAM	WU1	windows/codenotch/src/main.rs	#[allow(dead_code)] mod claude_auth; // Fork: WU1
+SEAM	WH	windows/codenotch/src/main.rs	#[allow(dead_code)] mod server; // Fork: WH
+SEAM	WH	windows/codenotch/src/main.rs	#[allow(dead_code)] mod watcher; // Fork: WH
+SEAM	WH	windows/codenotch/src/main.rs	#[allow(dead_code)] mod hooks_install; // Fork: WH
+SEAM	WD	windows/codenotch/src/main.rs	#[allow(dead_code)] mod doctor; // Fork: WD
+SEAM	WU1	windows/codenotch/src/main.rs	fn claude_sign_in() -> Result<(), String> { Err(agentnotch::SIGN_IN_REFUSED.into()) } // Fork: WU1
+SEAM	WU1	windows/codenotch/src/main.rs	p if p == "claude" || p.starts_with("claude-") => return agentnotch::refresh_claude(app, p), // Fork: WU1
+SEAM	WU1	windows/codenotch/src/main.rs	// Fork: WU1 usage::start never runs
+SEAM	WH	windows/codenotch/src/main.rs	let _ = port; // Fork: WH
+SEAM	WH	windows/codenotch/src/main.rs	// Fork: WH upstream's transcript watcher stays off
+SEAM	WB2	windows/codenotch/src/main.rs	agentnotch::setup(&handle); // Fork: WB2
+SEAM	WB3	windows/codenotch/src/main.rs	agentnotch::an_call, // Fork: WB3
+SEAM	WSI	windows/codenotch/src/main.rs	if agentnotch::second_instance(app, &_args) { return; } // Fork: WSI
+SEAM	WCLI	windows/codenotch/src/main.rs	if let Some(code) = agentnotch::cli::run(&args) { std::process::exit(code); } // Fork: WCLI
+SEAM	WH	windows/codenotch/src/main.rs	agentnotch::hooks_switch_get() // Fork: WH
+SEAM	WH	windows/codenotch/src/main.rs	agentnotch::hooks_switch_set(on) // Fork: WH
+FORBID	WU1	windows/codenotch/src/main.rs	usage::start(
+FORBID	WU1	windows/codenotch/src/main.rs	claude_auth::start_login
+FORBID	WU1	windows/codenotch/src/main.rs	usage::request_refresh()
+FORBID	WH	windows/codenotch/src/main.rs	server::start(
+FORBID	WH	windows/codenotch/src/main.rs	watcher::start(
+SEAM	WR-DIR	windows/codenotch/src/config.rs	.join(crate::agentnotch::data_folder_name()) // Fork: WR-DIR
+FORBID	WR-DIR	windows/codenotch/src/config.rs	.join("codenotch")
+# WC: a fresh install's weekly ring sits outside (the Mac fork's default). The
+# config's two default sites call the glue; upstream's default_weekly_ring stays
+# "off", because weekly_ring_or_off falls back to it and upstream's test
+# (only_the_two_placements_are_kept) pins that an unknown value turns it off.
+SEAM	WC	windows/codenotch/src/config.rs	crate::agentnotch::default_weekly_ring	2
+SEAM	WR-RUN	windows/codenotch/src/autostart.rs	const NAME: &str = "Agent Notch"; // Fork: WR-RUN
+SEAM	WR-TRAY	windows/codenotch/src/tray.rs	crate::agentnotch::tray_tooltip()	2
+SEAM	WR-TRAY	windows/codenotch/src/tray.rs	format!("{} — {}", crate::agentnotch::DISPLAY_NAME, parts.join(" · ")) // Fork: WR-TRAY
+SEAM	WR-QUIT	windows/codenotch/src/tray.rs	crate::agentnotch::rebrand(tr(&lang, "quit_app"))
+SEAM	WR-QUIT	windows/codenotch/src/notchmenu.rs	crate::agentnotch::rebrand(tr(&lang, "quit_app"))
+SEAM	WR-TITLE	windows/codenotch/src/settings_window.rs	.title(crate::agentnotch::SETTINGS_TITLE) // Fork: WR-TITLE
+SEAM	WR-TITLE	windows/codenotch/src/dropzones.rs	.title(crate::agentnotch::DROPZONES_TITLE) // Fork: WR-TITLE
+SEAM	WUP	windows/codenotch/src/updater.rs	&& !crate::agentnotch::sealed() // Fork: WUP
+SEAM	WUP2	windows/codenotch/src/updater.rs	let Some(update) = crate::agentnotch::updater(&app)?.check().await? else { // Fork: WUP2
+SEAM	WNM	windows/codenotch/src/notchmenu.rs	menu = crate::agentnotch::notch_menu_items(app, menu, provider.as_deref()); // Fork: WNM
+SEAM	WNM	windows/codenotch/src/notchmenu.rs	if crate::agentnotch::notch_menu_event(app, item) { return; } // Fork: WNM
+SEAM	WR	windows/codenotch/tauri.conf.json	"productName": "Agent Notch",
+SEAM	WR	windows/codenotch/tauri.conf.json	"mainBinaryName": "agentnotch",
+SEAM	WR	windows/codenotch/tauri.conf.json	"identifier": "com.rivantmedia.agentnotch",
+SEAM	WR	windows/codenotch/tauri.conf.json	"publisher": "Rivant Media"
+SEAM	WNS	windows/codenotch/tauri.conf.json	"installerHooks": "nsis/agentnotch-hooks.nsh"
+SEAM	WUP	windows/codenotch/tauri.conf.json	"pubkey": ""
+SEAM	WSI	windows/codenotch/tauri.conf.json	"schemes": ["agentnotch"]
+SEAM	WCSP	windows/codenotch/tauri.conf.json	"csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
+SEAM	WCSP	windows/codenotch/tauri.conf.json	"dangerousDisableAssetCspModification": ["style-src"]
+FORBID	WCSP	windows/codenotch/tauri.conf.json	"csp": null
+FORBID	WR	windows/codenotch/tauri.conf.json	com.immidi.codenotch
+FORBID	WUP	windows/codenotch/tauri.conf.json	vinzdg/codenotch
+FORBID	WUP	windows/codenotch/tauri.conf.json	releases/latest/download/latest.json
+FORBID	WUP	windows/codenotch/tauri.conf.json	"createUpdaterArtifacts": true
+FORBID	WUP	windows/codenotch/tauri.conf.json	dW50cnVzdGVkIGNvbW1lbnQ6
+SEAM	WR	windows/codenotch/tauri.bundle.conf.json	"../target/hook/release/agentnotch-hook.exe": "agentnotch-hook.exe"
+FORBID	WR	windows/codenotch/tauri.bundle.conf.json	codenotch-hook.exe
+SEAM	WS1	windows/codenotch/ui/notch.html	<script src="agentnotch/notch.js"></script><!-- Fork: WS1 -->
+SEAM	WS2	windows/codenotch/ui/notch.html	if(window.agentnotch){const c=agentnotch.claudeCells();if(c)return c;} // Fork: WS2
+SEAM	WS3	windows/codenotch/ui/notch.html	if(window.agentnotch)agentnotch.decorateCell(p,cell); // Fork: WS3
+SEAM	WS4	windows/codenotch/ui/notch.html	if(p.base==='claude'&&window.agentnotch){html+=agentnotch.cardSessions(p);}else if(p.base==='claude'){ // Fork: WS4
+SEAM	WS5	windows/codenotch/ui/notch.html	!(window.agentnotch&&agentnotch.ringClick(press.id))) refreshRing(press.id); // Fork: WS5
+SEAM	WSS1	windows/codenotch/ui/settings.html	<button class="row" id="tab-claude" role="tab" aria-controls="pane-claude"
+SEAM	WSS2	windows/codenotch/ui/settings.html	<section class="pane" id="pane-claude" role="tabpanel" aria-labelledby="tab-claude" hidden></section><!-- Fork: WSS2 -->
+SEAM	WSS3	windows/codenotch/ui/settings.html	const TABS = ['claude', 'accounts', 'appearance', 'general']; // Fork: WSS3
+SEAM	WSS4	windows/codenotch/ui/settings.html	const TITLES = { claude:'Claude Code', accounts:'Accounts', appearance:'Appearance', general:'General' }; // Fork: WSS4
+SEAM	WSS5	windows/codenotch/ui/settings.html	<script src="agentnotch/settings.js"></script><!-- Fork: WSS5 -->
+FORBID	ISO	.github/workflows/release.yml	Codenotch-Setup
+FORBID	ISO	.github/workflows/release.yml	taskkill /IM
+FORBID	ISO	.github/workflows/agentnotch-windows.yml	taskkill /IM
+FORBID	ISO	windows/scripts/agentnotch-smoke.ps1	taskkill /IM
+FORBID	ISO	windows/codenotch/nsis/agentnotch-hooks.nsh	codenotch.exe
+ALLOW	windows/Cargo.toml
+ALLOW	windows/Cargo.lock
+ALLOW	windows/codenotch/Cargo.toml
+ALLOW	windows/codenotch/tauri.conf.json
+ALLOW	windows/codenotch/tauri.bundle.conf.json
+ALLOW	windows/codenotch/src/main.rs
+ALLOW	windows/codenotch/src/config.rs
+ALLOW	windows/codenotch/src/autostart.rs
+ALLOW	windows/codenotch/src/tray.rs
+ALLOW	windows/codenotch/src/notchmenu.rs
+ALLOW	windows/codenotch/src/settings_window.rs
+ALLOW	windows/codenotch/src/dropzones.rs
+ALLOW	windows/codenotch/src/updater.rs
+ALLOW	windows/codenotch/ui/notch.html
+ALLOW	windows/codenotch/ui/settings.html
+ALLOW	windows/codenotch/capabilities/agentnotch.json
+ALLOW	windows/codenotch/nsis/**
+ALLOW	windows/codenotch/src/agentnotch/**
+ALLOW	windows/codenotch/ui/agentnotch/**
+ALLOW	windows/agentnotch-proto/**
+ALLOW	windows/agentnotch-engine/**
+ALLOW	windows/agentnotch-win/**
+ALLOW	windows/agentnotch-hook/**
+ALLOW	windows/agentnotch-release/**
+ALLOW	windows/agentnotch-ui-tests/**
+ALLOW	windows/scripts/agentnotch-build.ps1
+ALLOW	windows/scripts/agentnotch-smoke.ps1
+ALLOW	windows/scripts/smoke/**
+ALLOW	windows/scripts/check-claude-code-facts.mjs
+ALLOW	windows/tools/**

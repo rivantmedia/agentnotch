@@ -68,7 +68,7 @@ fn configured(app: &AppHandle) -> bool {
         .get("updater")
         .and_then(|u| u.get("pubkey"))
         .and_then(|k| k.as_str())
-        .is_some_and(|k| !k.is_empty() && k != UNSET_PUBKEY)
+        .is_some_and(|k| !k.is_empty() && k != UNSET_PUBKEY) && !crate::agentnotch::sealed() // Fork: WUP
 }
 
 /// Looks for a newer release. Answers immediately; the result arrives as `update_state`.
@@ -119,7 +119,7 @@ pub fn install_update(app: AppHandle) {
     set(&app, UpdateState { installing: true, ..Default::default() });
     std::thread::spawn(move || {
         let outcome = tauri::async_runtime::block_on(async {
-            let Some(update) = app.updater()?.check().await? else {
+            let Some(update) = crate::agentnotch::updater(&app)?.check().await? else { // Fork: WUP2
                 return Ok::<bool, tauri_plugin_updater::Error>(false);
             };
             // The signature is checked against the public key in tauri.conf.json before a

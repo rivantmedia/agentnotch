@@ -1,0 +1,22 @@
+/* Agent Notch's design tokens for the fork's pages (DESIGN-WIN §5.1, UI§1), keyed on upstream's
+   `data-theme` so the fork follows the appearance the user picked for the notch. */
+:root {
+  --an-text: #ffffff;
+  --an-text-2: #808080;
+  --an-needs-you: #f2ff00;
+  --an-review: #00ff88;
+  --an-critical: #ff3f00;
+  --an-track: rgba(255, 255, 255, .188);
+  --an-card: #000000;
+  --an-font: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --an-mono: "Cascadia Mono", Consolas, monospace;
+}
+:root[data-theme="light"] {
+  --an-text: #000000;
+  --an-text-2: #6b6b6b;
+  --an-needs-you: #b08800;
+  --an-review: #00a356;
+  --an-critical: #ff3f00;
+  --an-track: rgba(0, 0, 0, .16);
+  --an-card: #ffffff;
+}
