@@ -130,7 +130,7 @@ export default async function Home() {
             ],
             [
               "Open the app's settings",
-              "In Agent Notch, open Settings > Claude Code > Cloud and save this website's address under Website.",
+              "In Agent Notch, open Settings > Claude Code > Cloud. If it asks for a Website, save this website's address there.",
             ],
             [
               "Sign in and turn on sync",

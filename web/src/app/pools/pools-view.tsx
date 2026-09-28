@@ -136,7 +136,7 @@ function ShareList() {
           <Link href="/settings" className="link">
             Settings
           </Link>{" "}
-          for this website&apos;s address.
+          for how to connect a Mac.
         </p>
       </div>
     );

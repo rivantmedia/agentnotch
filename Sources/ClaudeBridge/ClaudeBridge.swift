@@ -198,6 +198,9 @@ final class ClaudeBridge {
             // cached usage. Neither reads a token.
             live.externalTabFocus = CodenotchTabFocus.select
             live.externalUsageSource = DesktopUsageSource.shared
+            // The website cloud sync talks to: app-config.json's, which
+            // Scripts/spm-build-app.sh writes into the Info.plist.
+            live.websiteURL = ClaudeControlConfiguration.websiteURL(infoDictionary: Bundle.main.infoDictionary)
             configuration = live
         }
         let hub = ClaudeControlHub.bootstrap(configuration)

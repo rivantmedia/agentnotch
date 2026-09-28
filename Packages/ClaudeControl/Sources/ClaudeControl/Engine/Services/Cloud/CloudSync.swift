@@ -12,19 +12,24 @@
 //  and has turned sync on; summaries need their own switch (off by default)
 //  because they spend the account's usage. Sessions are captured, and usage
 //  readings recorded, only while both hold. The switches belong to one
-//  sign-in on one website: signing out (or being signed out), or changing
-//  the website, turns both off, and a new sign-in starts with them off.
-//  Turning sync off stops a pass in flight; turning summaries off (or sync,
-//  or signing out) stops a summary in flight. Turning summaries off (which
-//  signing out and changing the website do too) deletes the summaries the
-//  website doesn't have yet; those it has stay there. A pass belongs to the
-//  sign-in and website it started with. Only visible, remembered,
-//  signed-in accounts are ever mentioned, and a session the engine can't
-//  attribute for certain is never guessed onto one: while it can't, its new
-//  responses count for no account (`SessionLedger`). A session Claude
-//  Desktop hosts is attributed by the hub from Desktop's own record of it
-//  (`DesktopHostedSessions`); one found only on disk can't be, and isn't
-//  backfilled.
+//  sign-in on one website: signing out (or being signed out) turns both
+//  off, and a new sign-in starts with them off. The website is the build's
+//  (`ClaudeControlConfiguration.websiteURL`, from `app-config.json`) or
+//  `AGENTNOTCH_WEB_URL`'s, fixed for the run; the user doesn't choose it.
+//  The first launch that finds the website the user used to type in
+//  Settings replaced by another counts as the website changing: the
+//  switches go off, and the sign-in made there is set aside (kept on disk,
+//  not used). Turning sync off stops a pass in flight; turning summaries
+//  off (or sync, or signing out) stops a summary in flight. Turning
+//  summaries off (which signing out and a website change do too) deletes
+//  the summaries the website doesn't have yet; those it has stay there. A
+//  pass belongs to the sign-in and website it started with. Only visible,
+//  remembered, signed-in accounts are ever mentioned, and a session the
+//  engine can't attribute for certain is never guessed onto one: while it
+//  can't, its new responses count for no account (`SessionLedger`). A
+//  session Claude Desktop hosts is attributed by the hub from Desktop's own
+//  record of it (`DesktopHostedSessions`); one found only on disk can't be,
+//  and isn't backfilled.
 //
 //  Schedule: every 5 minutes while on, 30 seconds after a session ends or a
 //  summary is written, and on demand; at most five requests a pass, the rest
@@ -673,6 +678,8 @@ final class CloudSync: ObservableObject {
         var home: String
         var appVersion: String
         var deviceName: String
+        /// The build's website (`ClaudeControlConfiguration.websiteURL`).
+        var website: String?
         /// `AGENTNOTCH_WEB_URL`.
         var websiteOverride: String?
         /// This run may launch Claude Code for a summary.
@@ -695,6 +702,7 @@ final class CloudSync: ObservableObject {
                 home: home,
                 appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0",
                 deviceName: CloudSync.computerName(),
+                website: sealed ? nil : AppIdentity.configuration.websiteURL,
                 websiteOverride: sealed ? nil : DevFlags.webURLOverride,
                 summariesAllowed: { CloudSync.summariesAllowedByDefault }
             )
@@ -780,6 +788,7 @@ final class CloudSync: ObservableObject {
         }
         let stores = CloudStores(directory: deps.directory, persists: deps.persists, home: deps.home)
         self.stores = stores
+        retireTypedWebsite()
         // Summaries turned on before they kept a date: from now on.
         if deps.settings.cloudSummariesEnabled, stores.summaries.enabledAt == nil {
             stores.summaries.noteEnabled(at: deps.clock())
@@ -814,8 +823,10 @@ final class CloudSync: ObservableObject {
         stores?.saveNow()
     }
 
-    /// The saved session, if it is for the website set now (another
-    /// website's is set aside, not deleted: signing in replaces it).
+    /// The saved session, if it is for the website this run uses. Another
+    /// website's (one the user typed before the website came from the
+    /// build, or a run pointed elsewhere with `AGENTNOTCH_WEB_URL`) is set
+    /// aside, not deleted: signing in replaces it.
     func restoreSession() async {
         guard let auth, let deps, !deps.sealed else { return }
         let generation = authGeneration
@@ -842,39 +853,35 @@ final class CloudSync: ObservableObject {
         deps?.settings ?? ClaudeControlSettings.store
     }
 
-    /// The website in use: `AGENTNOTCH_WEB_URL`, else the one the user typed.
+    /// The website in use: `AGENTNOTCH_WEB_URL`, else the build's
+    /// (`ClaudeControlConfiguration.websiteURL`); nil when neither is one
+    /// the app accepts (https, or http to this Mac), or before `start`.
+    /// Fixed for the run: the user can't change it.
     var effectiveWebsite: URL? {
-        if let override = deps?.websiteOverride, let url = CloudWebsite.validated(override) { return url }
-        return CloudWebsite.validated(settings.cloudWebsiteURL)
+        guard let deps else { return nil }
+        if let override = deps.websiteOverride, let url = CloudWebsite.validated(override) { return url }
+        return CloudWebsite.validated(deps.website)
     }
 
-    /// Set (or, with nil or blank, clear) the website's address. False when
-    /// it isn't one the app accepts (https, or http to this Mac). Another
-    /// website turns sync and summaries off (they were agreed to for the old
-    /// one) and signs out of the old one, a sign-in in progress included.
-    @discardableResult
-    func setWebsite(_ text: String?) async -> Bool {
-        guard let deps, !deps.sealed else { return false }
-        let trimmed = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let newValue: String?
-        if trimmed.isEmpty {
-            newValue = nil
-        } else {
-            guard let url = CloudWebsite.validated(trimmed) else { return false }
-            newValue = url.absoluteString
+    /// The website used to be typed in Settings; it comes from the build
+    /// now. A saved one is deleted, so it can't linger. When it named
+    /// another website than this run uses, the website changed: sync and
+    /// summaries go off, as they did when the user saved another website
+    /// (they were agreed to for the old one). The sign-in made there is
+    /// `restoreSession`'s to set aside, not deleted. With
+    /// `AGENTNOTCH_WEB_URL` set, the run used that one then as now: nothing
+    /// changed. Not when sealed (`start` returns before).
+    private func retireTypedWebsite() {
+        guard let deps, !deps.sealed else { return }
+        let retired = deps.settings.takeRetiredCloudWebsiteURL()
+        guard retired.found else { return }
+        let before = CloudWebsite.validated(deps.websiteOverride) ?? CloudWebsite.validated(retired.address)
+        guard before?.absoluteString != effectiveWebsite?.absoluteString else {
+            Self.logger.notice("The website saved in Settings is the one this run uses: its setting is deleted")
+            return
         }
-        let before = effectiveWebsite
-        settings.cloudWebsiteURL = newValue
-        if effectiveWebsite != before {
-            turnSwitchesOff()
-            switch authState {
-            case .signedIn, .signingIn: await signOut()
-            case .signedOut, .error: break
-            }
-        }
-        lastError = nil
-        publish()
-        return true
+        Self.logger.notice("The website saved in Settings isn't the one this run uses: its setting is deleted, and sync and summaries are off")
+        turnSwitchesOff()
     }
 
     func setSyncEnabled(_ enabled: Bool) {
@@ -944,16 +951,17 @@ final class CloudSync: ObservableObject {
     // MARK: Signing in
 
     /// Google sign-in through the website's Supabase project; `browser` is
-    /// the host's (an ASWebAuthenticationSession). True when signed in. A
-    /// sign-in is bound to the website it started with: if that changed
-    /// meanwhile (or the user signed out), its result is thrown away and its
-    /// session ended on Supabase. A new sign-in starts with sync and
+    /// the host's (an ASWebAuthenticationSession). True when signed in.
+    /// Refused when this run has no website. A sign-in is bound to the
+    /// website it started with and to the sign-in state: if the user signed
+    /// out meanwhile (or the service stopped), its result is thrown away and
+    /// its session ended on Supabase. A new sign-in starts with sync and
     /// summaries off, for the user to turn on.
     @discardableResult
     func signIn(presentingBrowser browser: @escaping ClaudeCloudBrowser) async -> Bool {
         guard let deps, !deps.sealed, let auth else { return false }
         guard let website = effectiveWebsite else {
-            lastError = CloudAPIError.invalidWebsite.errorDescription
+            lastError = CloudAPIError.noWebsite.errorDescription
             publish()
             return false
         }

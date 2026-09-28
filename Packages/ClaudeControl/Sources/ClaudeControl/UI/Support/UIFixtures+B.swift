@@ -398,14 +398,22 @@ enum UIFixtures {
     /// The example website the Cloud fixtures use.
     static let cloudWebsite = "https://agentnotch.example.com"
 
-    /// Signed out with no website: the Cloud section on a first look.
+    /// The build's website, not signed in yet: the Cloud section on a
+    /// first look.
     static func cloudSignedOut() -> ClaudeCloudState {
+        ClaudeCloudState(websiteURL: cloudWebsite)
+    }
+
+    /// A build with no website (an Xcode build without app-config.json's
+    /// address, say): nothing to sign in to.
+    static func cloudNoWebsite() -> ClaudeCloudState {
         ClaudeCloudState()
     }
 
-    /// A website saved, not signed in yet.
-    static func cloudWebsiteSet() -> ClaudeCloudState {
-        ClaudeCloudState(websiteURL: cloudWebsite)
+    /// A development run pointed at a local website with
+    /// AGENTNOTCH_WEB_URL, not signed in there yet.
+    static func cloudOverridden() -> ClaudeCloudState {
+        ClaudeCloudState(websiteURL: "http://localhost:3000", websiteIsOverridden: true)
     }
 
     /// Signed in, sync on, summaries off; synced three minutes ago, with a

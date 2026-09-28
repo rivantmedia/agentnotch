@@ -1,15 +1,17 @@
 /**
- * The address people paste into the Mac app (Settings > Claude Code > Cloud). The app calls
- * `<address>/api/app/v1/config`, so it is the site's origin (plus a base path, if the site has
- * one), without a trailing slash.
+ * The website's address, as a copy of the Mac app that still asks for one takes it (Settings >
+ * Claude Code > Cloud; newer copies are built with it, from the repository's app-config.json).
+ * The app calls `<address>/api/app/v1/config`, so it is the site's origin (plus a base path, if
+ * the site has one), without a trailing slash.
  */
 
 const HOST = /^(?:[a-z0-9-]+(?:\.[a-z0-9-]+)*|\[[0-9a-f:.]+\])(?::\d{1,5})?$/i;
 const LOCAL = /^(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/i;
 
 /**
- * `NEXT_PUBLIC_SITE_URL` when it is set (what the app API reports too); otherwise the address
- * this request came in on, from the Host / X-Forwarded-* headers. Null when neither is usable.
+ * The site's address from src/env.js when it has one (NEXT_PUBLIC_SITE_URL, else the Vercel
+ * project's production domain; what the app API reports too); otherwise the address this request
+ * came in on, from the Host / X-Forwarded-* headers. Null when neither is usable.
  */
 export function siteAddressFrom(
   configured: string | null | undefined,

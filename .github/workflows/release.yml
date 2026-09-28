@@ -387,6 +387,11 @@ jobs:
   # so no secret is shared with it. A job of its own, so no step that builds or
   # signs can mint such a token, and one that never fails the run: the cache
   # expires by itself anyway.
+  #
+  # The website is app-config.json's websiteURL at the released commit, the
+  # address the Mac app is built with (Scripts/spm-build-app.sh). Its origin
+  # must be the website's own: NEXT_PUBLIC_SITE_URL, else its Vercel production
+  # domain (web/src/lib/site-url.js).
   website:
     name: Refresh the website's download page
     needs: release
@@ -395,17 +400,32 @@ jobs:
     timeout-minutes: 5
     continue-on-error: true
     permissions:
+      contents: read
       id-token: write
     environment: release
     steps:
+      # app-config.json alone. Should the checkout fail, the next step finds no
+      # file and says so in a warning.
+      - name: Get app-config.json
+        uses: actions/checkout@v7
+        continue-on-error: true
+        timeout-minutes: 2
+        with:
+          sparse-checkout: /app-config.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - name: Refresh
-        env:
-          # The website's address: its origin must be NEXT_PUBLIC_SITE_URL's.
-          WEBSITE: ${{ vars.WEBSITE_URL || 'https://agentnotch.rivant.in' }}
         run: |
           set -u
           warn() { echo "::warning::$1 /download shows the latest release within 5 minutes anyway."; exit 0; }
-          # The origin, as the website reads NEXT_PUBLIC_SITE_URL's: lowercase
+          config=app-config.json
+          [[ -f "$config" ]] || warn "There is no $config in this commit, so the website's address is unknown."
+          # Exactly one JSON object with a websiteURL string, or nothing (-s
+          # reads every value in the file, so a second one is refused too).
+          WEBSITE="$(jq -rs 'if length == 1 and (.[0] | type) == "object" then .[0].websiteURL | strings else empty end' "$config" 2>/dev/null)" || WEBSITE=""
+          [[ -n "$WEBSITE" ]] || warn "$config has no websiteURL (or isn't JSON), so the website's address is unknown."
+          # The origin, as the website reads its own address's: lowercase
           # scheme and host, no path, no default port.
           origin="$(python3 - "$WEBSITE" <<'PY'
           import sys, urllib.parse as u
@@ -416,7 +436,7 @@ jobs:
               print(f"{p.scheme.lower()}://{p.hostname}{port}")
           PY
           )" || origin=""
-          [[ -n "$origin" ]] || warn "WEBSITE ($WEBSITE) isn't a web address."
+          [[ -n "$origin" ]] || warn "$config's websiteURL ($WEBSITE) isn't a web address."
           audience="$(jq -rn --arg a "$origin" '$a | @uri')"
           if ! answer="$(curl -fsS --connect-timeout 10 --max-time 30 \
             -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" \

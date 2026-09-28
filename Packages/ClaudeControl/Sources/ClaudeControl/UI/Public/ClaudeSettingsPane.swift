@@ -212,9 +212,9 @@ public struct ClaudeSettingsPane: View {
                 Task { await hub.refreshUsage(ringID: account.ringID, reason: .forced) }
             }
         }
-        // The website. The hub does nothing when sealed; a sealed run's
-        // links (to its example website) don't open either.
-        actions.saveCloudWebsite = { address in Task { await hub.setCloudWebsite(address) } }
+        // The website (the build's; shown, never edited). The hub does
+        // nothing when sealed; a sealed run's links (to its example
+        // website) don't open either.
         actions.cloudSignIn = {
             Task { await hub.cloudSignIn(presentingBrowser: { url in try await host.presentWebsiteSignIn(url) }) }
         }

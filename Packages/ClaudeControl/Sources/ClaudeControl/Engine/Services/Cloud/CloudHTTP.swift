@@ -59,8 +59,8 @@ nonisolated struct URLSessionCloudTransport: CloudTransport {
 nonisolated enum CloudAPIError: Error, Equatable, Sendable, LocalizedError {
     /// Sealed, or the engine isn't bootstrapped.
     case networkNotAllowed
-    /// No usable website address.
-    case invalidWebsite
+    /// This build has no website (or none the app accepts).
+    case noWebsite
     /// Not signed in (or the session ended).
     case notSignedIn
     /// The request didn't get an answer.
@@ -92,7 +92,7 @@ nonisolated enum CloudAPIError: Error, Equatable, Sendable, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .networkNotAllowed: return "The website can't be reached from this run."
-        case .invalidWebsite: return "Enter the website's https:// address."
+        case .noWebsite: return "This build has no website to sign in to."
         case .notSignedIn: return "Sign in to the website first."
         case .transport(let message): return "Couldn't reach the website: \(message)"
         case .server(let status, _, let message, _):

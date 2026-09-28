@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { AppApiError } from "~/server/app-api/errors";
 import {
+  handleConfig,
   handleMe,
   handleSync,
   type AppApiDeps,
@@ -363,11 +364,81 @@ describe("GET /api/app/v1/me", () => {
     });
   });
 
+  it("names the dashboard where the request came in when the site has no address", async () => {
+    const response = await handleMe(
+      new Request("http://localhost:3000/api/app/v1/me", {
+        headers: {
+          authorization: "Bearer good",
+          host: "localhost:3000",
+          "x-forwarded-host": "Notch.Example.com",
+          "x-forwarded-proto": "https",
+        },
+      }),
+      deps({ siteUrl: undefined }),
+    );
+    expect(await response.json()).toEqual({
+      user: VIEWER,
+      dashboardUrl: "https://notch.example.com/dashboard",
+    });
+  });
+
   it("needs a valid bearer token", async () => {
     await expectError(
       await handleMe(new Request("https://x.example/api/app/v1/me"), deps()),
       401,
       "UNAUTHORIZED",
     );
+  });
+});
+
+describe("GET /api/app/v1/config", () => {
+  const OPTIONS = {
+    supabaseUrl: "https://project.supabase.example/",
+    supabasePublishableKey: "sb_publishable_check",
+  };
+
+  it("names the site's dashboard, cacheable by anyone for 5 minutes", async () => {
+    const response = handleConfig(
+      new Request("https://x.example/api/app/v1/config"),
+      { ...OPTIONS, siteUrl: "https://agentnotch.example.com" },
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("public, max-age=300");
+    expect(await response.json()).toEqual({
+      supabaseUrl: "https://project.supabase.example",
+      supabasePublishableKey: "sb_publishable_check",
+      redirectUrl: "agentnotch://auth-callback",
+      dashboardUrl: "https://agentnotch.example.com/dashboard",
+    });
+  });
+
+  it("without a site address, answers with the request's own, for that client only", async () => {
+    const behindProxy = handleConfig(
+      new Request("http://localhost:3000/api/app/v1/config", {
+        headers: {
+          host: "localhost:3000",
+          "x-forwarded-host": "notch.example.com, proxy.internal",
+          "x-forwarded-proto": "https",
+        },
+      }),
+      { ...OPTIONS, siteUrl: undefined },
+    );
+    expect(behindProxy.headers.get("cache-control")).toBe(
+      "private, max-age=300",
+    );
+    expect(await behindProxy.json()).toMatchObject({
+      dashboardUrl: "https://notch.example.com/dashboard",
+    });
+
+    // No usable Host header: the address the server was reached at.
+    const direct = handleConfig(
+      new Request("http://127.0.0.1:3000/api/app/v1/config", {
+        headers: { host: "evil.example/login?x" },
+      }),
+      { ...OPTIONS, siteUrl: undefined },
+    );
+    expect(await direct.json()).toMatchObject({
+      dashboardUrl: "http://127.0.0.1:3000/dashboard",
+    });
   });
 });

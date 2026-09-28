@@ -26,8 +26,6 @@ struct SettingsPaneContent: View {
     var initialNewAccountStep: NewAccountForm.Step = .closed
     /// Snapshots: every account's folder list shown.
     var expandsFolders = false
-    /// Snapshots: the Cloud section's website field open while signed in.
-    var changesCloudWebsite = false
 
     /// "Not now" was answered and the user asked to turn it on after all:
     /// show the card again, files and all, rather than writing blind.
@@ -46,7 +44,7 @@ struct SettingsPaneContent: View {
             hooksSection
             usageSection
             CloudSection(cloud: model.cloud, readsDesktopUsage: model.readsDesktopUsageCache, now: model.now,
-                         actions: actions, changingWebsite: changesCloudWebsite)
+                         actions: actions)
             attentionSection
             notificationsSection
             advancedSection

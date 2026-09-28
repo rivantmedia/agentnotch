@@ -2,13 +2,15 @@
 //  ClaudeControlHub+Cloud.swift
 //  ClaudeControl
 //
-//  The hub's website side: where sync goes, signing in (Google, through the
-//  website's Supabase project; the host runs the browser step), the sync
-//  and session-summary switches, and syncing now. Nothing is uploaded unless
-//  the user is signed in and has turned sync on; summaries need their own
-//  switch. Both switches go off on sign-out and when the website changes,
-//  and a new sign-in starts with them off. Every action does nothing when
-//  sealed, where `cloud` is a fixed, signed-in example.
+//  The hub's website side: signing in (Google, through the website's
+//  Supabase project; the host runs the browser step), the sync and
+//  session-summary switches, and syncing now. The website itself is the
+//  build's (`ClaudeControlConfiguration.websiteURL`) or
+//  `AGENTNOTCH_WEB_URL`'s, never the user's to change. Nothing is uploaded
+//  unless the user is signed in and has turned sync on; summaries need their
+//  own switch. Both switches go off on sign-out and when the website
+//  changes, and a new sign-in starts with them off. Every action does
+//  nothing when sealed, where `cloud` is a fixed, signed-in example.
 //
 //  `cloud` is republished from `CloudSync.shared`. The running sessions the
 //  hub attributes for certain feed the session ledger (`feedCloud`), and
@@ -29,7 +31,10 @@ public nonisolated struct ClaudeCloudState: Hashable, Sendable {
         case error(String)
     }
 
-    /// The website's address; nil until the user enters one (there is no default).
+    /// The website this run syncs with: the build's
+    /// (`ClaudeControlConfiguration.websiteURL`, from `app-config.json`), or
+    /// `AGENTNOTCH_WEB_URL`'s. Nil when there is none the app accepts: then
+    /// it can't sign in or sync. Read-only to the user.
     public var websiteURL: String?
     /// `AGENTNOTCH_WEB_URL` set the address for this run.
     public var websiteIsOverridden: Bool
@@ -117,19 +122,11 @@ public nonisolated struct ClaudeCloudState: Hashable, Sendable {
 extension ClaudeControlHub {
     // MARK: - Actions
 
-    /// Set the website's address (nil or blank clears it). False when it
-    /// isn't one the app accepts: https, or http to this Mac. Another
-    /// website signs out of the old one.
-    @discardableResult
-    public func setCloudWebsite(_ address: String?) async -> Bool {
-        guard !isSealed else { return false }
-        return await CloudSync.shared.setWebsite(address)
-    }
-
     /// Sign in with Google. `browser` opens the URL it is given and returns
     /// the URL the sign-in came back to (`agentnotch://auth-callback…`): an
     /// `ASWebAuthenticationSession` with callback scheme `agentnotch`.
-    /// True when signed in; otherwise `cloud` says why.
+    /// True when signed in; otherwise `cloud` says why (this build has no
+    /// website, say).
     @discardableResult
     public func cloudSignIn(presentingBrowser browser: @escaping ClaudeCloudBrowser) async -> Bool {
         guard !isSealed else { return false }

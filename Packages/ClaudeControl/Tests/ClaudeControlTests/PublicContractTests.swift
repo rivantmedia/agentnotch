@@ -19,7 +19,11 @@ struct PublicContractTests {
         #expect(!configuration.installsAllowed && !configuration.notificationsAllowed && !configuration.probesAllowed)
         configuration.externalTabFocus = { (_: ClaudeExternalTabRequest) in false }
         configuration.externalUsageSource = nil
+        configuration.websiteURL = nil
         let _: [String] = configuration.extraConfigDirs
+        let _: String? = configuration.websiteURL
+        let _: String = ClaudeControlConfiguration.websiteURLInfoKey
+        let _: ([String: Any]?) -> String? = ClaudeControlConfiguration.websiteURL(infoDictionary:)
         let _: UserDefaults = configuration.defaults
         let _: (URL, String, String, String, String) = (configuration.supportDirectory, configuration.socketPath,
                                                         configuration.homeDirectory, configuration.hookScriptName,
@@ -144,7 +148,6 @@ struct PublicContractTests {
         let _: KeyPath<ClaudeControlHub, URL?> = \.cloudDashboardURL
         let _: KeyPath<ClaudeControlHub, URL?> = \.cloudPoolsURL
         let _: KeyPath<ClaudeControlHub, URL?> = \.cloudSettingsURL
-        let _: (ClaudeControlHub) -> (String?) async -> Bool = ClaudeControlHub.setCloudWebsite
         let _: (ClaudeControlHub) -> (@escaping ClaudeCloudBrowser) async -> Bool = ClaudeControlHub.cloudSignIn(presentingBrowser:)
         let _: (ClaudeControlHub) -> () async -> Void = ClaudeControlHub.cloudSignOut
         let _: (ClaudeControlHub) -> (Bool) -> Void = ClaudeControlHub.setCloudSync
@@ -172,10 +175,10 @@ struct PublicContractTests {
         }
         #expect(auth(.signedIn(email: nil)) == 2)
 
-        let _: (String, String, String, String) = (ClaudeControlSettings.Key.cloudWebsiteURL, ClaudeControlSettings.Key.cloudSyncEnabled,
-                                                   ClaudeControlSettings.Key.cloudSummariesEnabled, ClaudeControlSettings.Key.cloudDeviceId)
-        let _: (String?, Bool, Bool) = (ClaudeControlSettings.cloudWebsiteURL, ClaudeControlSettings.cloudSyncEnabled,
-                                        ClaudeControlSettings.cloudSummariesEnabled)
+        // The website is the build's (`ClaudeControlConfiguration.websiteURL`), not a setting.
+        let _: (String, String, String) = (ClaudeControlSettings.Key.cloudSyncEnabled,
+                                           ClaudeControlSettings.Key.cloudSummariesEnabled, ClaudeControlSettings.Key.cloudDeviceId)
+        let _: (Bool, Bool) = (ClaudeControlSettings.cloudSyncEnabled, ClaudeControlSettings.cloudSummariesEnabled)
         func sendable<T: Sendable>(_: T.Type) {}
         func hashable<T: Hashable>(_: T.Type) {}
         hashable(ClaudeCloudState.self); sendable(ClaudeCloudState.self)
@@ -191,6 +194,7 @@ struct PublicContractTests {
         c.homeDirectory = "/tmp/agentnotch-contract-home"; c.hookScriptName = "h.py"; c.statusLineScriptName = "s.py"
         c.defaults = .standard; c.installsAllowed = false; c.notificationsAllowed = false; c.probesAllowed = false
         c.extraConfigDirs = []; c.externalTabFocus = nil; c.externalUsageSource = ContractUsageSource()
+        c.websiteURL = "https://agentnotch.example.com"
         #expect(c.mode == .live)
 
         let tab = ClaudeExternalTabRequest(bundleID: nil, pid: 1, tty: nil, cwd: nil)

@@ -9,11 +9,9 @@ export const dynamic = "force-dynamic";
 /** The Release workflow clears the site's cached release list (src/server/releases-refresh.ts). */
 export async function POST(request: Request): Promise<Response> {
   return refreshReleases(request, {
-    // Optional chaining: a build made with SKIP_ENV_VALIDATION may run without the variable.
-    verify: releaseRunVerifier(
-      env.NEXT_PUBLIC_SITE_URL ?? undefined,
-      releasesRepo(),
-    ),
+    // The tokens' audience is the origin of the site's address (src/env.js): NEXT_PUBLIC_SITE_URL,
+    // else the Vercel project's production domain. Null when it has none.
+    verify: releaseRunVerifier(env.NEXT_PUBLIC_SITE_URL, releasesRepo()),
     revalidate: revalidateTag,
   });
 }

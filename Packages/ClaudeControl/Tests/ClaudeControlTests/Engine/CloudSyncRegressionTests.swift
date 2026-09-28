@@ -248,23 +248,24 @@ struct CloudSyncRegressionTests {
 
     // MARK: - Finding 20: a sign-in is bound to its website
 
-    @Test func aSignInFinishedAfterTheWebsiteChangedIsThrownAway() async throws {
+    /// The website is the build's now, fixed for the run; what a sign-in
+    /// is still bound to is the sign-in state it started in.
+    @Test func aSignInFinishedAfterSigningOutIsThrownAway() async throws {
         let harness = Harness(signedIn: false)
         await harness.start()
         let ok = await harness.sync.signIn { [harness] _ in
-            // While the browser is open, the user saves another website.
-            #expect(await harness.sync.setWebsite("https://other.example.com"))
+            // While the browser is open, the app signs out (or quits).
+            await harness.sync.signOut()
             return URL(string: "agentnotch://auth-callback?code=the-code")!
         }
         #expect(!ok)
-        #expect(harness.sync.state.auth == .signedOut && harness.sync.state.websiteURL == "https://other.example.com")
+        #expect(harness.sync.state.auth == .signedOut && harness.sync.state.websiteURL == "https://agentnotch.example.com")
         #expect(harness.sessionStore.load() == nil)
         // The session it made was ended on Supabase with its own token, and
-        // no website was ever sent it.
+        // the website was never sent it.
         let logout = try #require(harness.transport.requests(to: "/auth/v1/logout").last)
         #expect(logout.value(forHTTPHeaderField: "Authorization") == "Bearer access-2")
         #expect(harness.transport.requests(to: "/api/app/v1/me").isEmpty)
-        #expect(harness.transport.recorded.allSatisfy { $0.url?.host != "other.example.com" })
         #expect(!harness.sync.canUpload)
     }
 

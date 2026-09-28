@@ -33,10 +33,21 @@
 #   AGENTNOTCH_UPDATE_PUBLIC_KEY_FILE
 #                  the public key file --with-updates reads (default
 #                  Scripts/sparkle-public-ed-key.txt); tests use a throwaway key
+#   AGENTNOTCH_APP_CONFIG_FILE
+#                  the app config file (default app-config.json at the repo
+#                  root); tests use their own
 #
 # The version is the repo root's VERSION file, for CFBundleShortVersionString
 # and CFBundleVersion alike: Sparkle compares CFBundleVersion, and project.yml's
 # numbers are upstream's (they only move on a merge).
+#
+# The website cloud sync talks to is app-config.json's "websiteURL" (the
+# Release workflow's website job reads the same file), written into the
+# Info.plist as AgentNotchWebsiteURL. It must be an address the app accepts,
+# written as the app keeps it: https://host[:port][/path] with no trailing
+# slash, query, fragment or credentials, or http:// to localhost, 127.0.0.1
+# or [::1]. An empty string builds an app with no website (it can't sign in
+# or sync); a missing file, bad JSON or any other address stops the build.
 #
 # What the Command Line Tools cannot compile is converted here instead:
 #   Localizable.xcstrings -> <lang>.lproj/Localizable.strings (no xcstringstool)
@@ -96,6 +107,59 @@ if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     exit 1
 fi
 
+# The website, checked the way the app checks it (CloudWebsite.validated), and
+# before the build, so a bad address costs no build.
+APP_CONFIG_FILE="${AGENTNOTCH_APP_CONFIG_FILE:-$ROOT/app-config.json}"
+WEBSITE_URL="$(python3 - "$APP_CONFIG_FILE" <<'PY'
+import json, re, sys, urllib.parse
+path = sys.argv[1]
+try:
+    text = open(path, encoding="utf-8").read()
+except OSError as error:
+    sys.exit(f"cannot read {path} ({error.strerror}): it holds the website the app syncs with, such as "
+             "{\"websiteURL\": \"https://agentnotch.example.com\"}")
+try:
+    config = json.loads(text)
+except ValueError as error:
+    sys.exit(f"{path} is not valid JSON: {error}")
+if not isinstance(config, dict) or not isinstance(config.get("websiteURL"), str):
+    sys.exit(f"{path} must be a JSON object with a \"websiteURL\" string (\"\" for an app with no website)")
+url = config["websiteURL"]
+if url == "":
+    sys.exit(0)
+def refuse(why):
+    sys.exit(f"{path}: websiteURL \"{url}\" {why}. Use https://host[:port][/path], or http:// to "
+             "localhost, 127.0.0.1 or [::1]; no trailing slash, query, fragment or user:password")
+if url != url.strip() or any(c.isspace() for c in url):
+    refuse("has spaces in it")
+try:
+    parts = urllib.parse.urlsplit(url)
+    host, port = parts.hostname or "", parts.port
+except ValueError as error:
+    refuse(f"is not a URL ({error})")
+if parts.scheme not in ("https", "http"):
+    refuse("must start with https://")
+if parts.username is not None or parts.password is not None or "@" in parts.netloc:
+    refuse("must not carry a user name or password")
+if parts.netloc.endswith(":"):
+    refuse("has a colon with no port after it")
+if "?" in url or "#" in url:
+    refuse("must not have a query or fragment")
+local = host in ("localhost", "127.0.0.1", "::1")
+if parts.scheme == "http" and not local:
+    refuse("is http:// to another computer")
+label = r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?"
+if host != "::1" and not re.fullmatch(rf"{label}(?:\.{label})*", host):
+    refuse("has no usable host")
+if not re.fullmatch(r"(?:/[A-Za-z0-9._~!$&*+,;=:@%-]+)*", parts.path):
+    refuse("has a path the app would change (a trailing slash, an empty or odd segment)")
+kept = f"{parts.scheme}://{parts.netloc.lower()}{parts.path}"
+if url != kept:
+    refuse(f"is not written as the app keeps it (\"{kept}\")")
+print(url)
+PY
+)" || exit 1
+
 PUBLIC_KEY=""
 if [[ $WITH_UPDATES -eq 1 ]]; then
     # A development or sealed copy with the feed would replace itself with the
@@ -138,6 +202,7 @@ if [[ -z "${SDKROOT:-}" && "$(xcode-select -p 2>/dev/null)" == "$CLT"* ]]; then
     [[ -n "$SDK" ]] && export SDKROOT="$SDK"
 fi
 echo "SDKROOT=${SDKROOT:-<default>}  config=$CONFIG  bundle id=$BUNDLE_ID  version=$VERSION$([[ $UNIVERSAL -eq 1 ]] && echo "  universal")$([[ $WITH_UPDATES -eq 1 ]] && echo "  with updates")"
+echo "website=${WEBSITE_URL:-none, so this build cannot sign in or sync}  (from $APP_CONFIG_FILE)"
 
 # The toolchain's Swift compatibility libraries: static ones the linker adds
 # for code that targets an older macOS than the stdlib feature it uses, and
@@ -328,10 +393,12 @@ while IFS= read -r dep; do
 done < <(otool -arch all -L "$EXE" | awk '$1 ~ /^@rpath\// { print substr($1, 8) }' | sort -u)
 printf 'APPL????' > "$C/PkgInfo"
 
-# Info.plist: Sources/Info.plist with Xcode's build-setting placeholders filled in.
-python3 - "$SRC/Info.plist" "$C/Info.plist" "$NAME" "$BUNDLE_ID" "$VERSION" "$WITH_UPDATES" "$FEED_URL" "$PUBLIC_KEY" <<'PY'
+# Info.plist: Sources/Info.plist with Xcode's build-setting placeholders filled in,
+# and the website from app-config.json.
+python3 - "$SRC/Info.plist" "$C/Info.plist" "$NAME" "$BUNDLE_ID" "$VERSION" "$WITH_UPDATES" "$FEED_URL" "$PUBLIC_KEY" \
+    "$WEBSITE_URL" <<'PY'
 import plistlib, sys
-src, dst, name, bundle_id, version, with_updates, feed_url, public_key = sys.argv[1:9]
+src, dst, name, bundle_id, version, with_updates, feed_url, public_key, website = sys.argv[1:10]
 d = plistlib.load(open(src, "rb"))
 d.update(CFBundleExecutable=name, CFBundleIdentifier=bundle_id,
          CFBundleName=name, CFBundleDisplayName=name,
@@ -349,6 +416,12 @@ else:
     # A copy built from source never updates itself: no Sparkle feed or key
     # may reach the bundle.
     d["SUEnableAutomaticChecks"] = False
+# The website cloud sync talks to (app-config.json, checked above); without
+# one the app says it has none and never signs in.
+if website:
+    d["AgentNotchWebsiteURL"] = website
+else:
+    d.pop("AgentNotchWebsiteURL", None)
 unresolved = [k for k, v in d.items() if isinstance(v, str) and "$(" in v]
 if unresolved:
     sys.exit(f"Info.plist: unresolved build settings in {unresolved}")

@@ -1,6 +1,8 @@
 import { createEnv } from "@t3-oss/env-nextjs";
 import { z } from "zod";
 
+import { siteUrlFrom } from "./lib/site-url.js";
+
 export const env = createEnv({
   /**
    * Server-only variables. Never import these into client components.
@@ -37,8 +39,11 @@ export const env = createEnv({
     NEXT_PUBLIC_SUPABASE_URL: z.string().url(),
     // The publishable ("anon") key. Never the secret / service-role key.
     NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: z.string().min(1),
-    // The site's public origin, e.g. https://agentnotch.example.com (no trailing slash needed).
-    NEXT_PUBLIC_SITE_URL: z.string().url(),
+    // The site's public address, e.g. https://agentnotch.example.com: NEXT_PUBLIC_SITE_URL when
+    // set, else the Vercel project's production domain (src/lib/site-url.js). Unset elsewhere
+    // (local development without it, a self-hosted site that doesn't set it): the app API then
+    // uses the address each request came in on.
+    NEXT_PUBLIC_SITE_URL: z.string().url().optional(),
   },
 
   /**
@@ -56,7 +61,13 @@ export const env = createEnv({
     NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
     NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:
       process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
-    NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL,
+    // Vercel sets both production domain variables at build and at run time; browser code gets
+    // only the NEXT_PUBLIC_ one, which Next.js builds in.
+    NEXT_PUBLIC_SITE_URL: siteUrlFrom(
+      process.env.NEXT_PUBLIC_SITE_URL,
+      process.env.VERCEL_PROJECT_PRODUCTION_URL,
+      process.env.NEXT_PUBLIC_VERCEL_PROJECT_PRODUCTION_URL,
+    ),
   },
   /**
    * `SKIP_ENV_VALIDATION=1 npm run build` builds without real values (CI, Docker).

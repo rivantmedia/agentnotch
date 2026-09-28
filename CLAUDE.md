@@ -52,6 +52,7 @@ first use, updates, privacy, development switches, releases. Read it before chan
 | `Tests/ForkSPM/` | Swift Testing tests for app-side fork code (the bridge). |
 | `Tests/ClaudeBridgeTests.swift`, the rest of `Tests/` | XCTest (upstream + bridge). Needs Xcode; runs in CI only. |
 | `Scripts/spm-*.sh`, `check-seams.sh`, `fork-seams.txt`, `verify-token-free.sh`, `cloud-contract-e2e.sh` | Fork tooling (below). |
+| `app-config.json` | The one place the app's website address is set (`{"websiteURL": "https://…"}`). `spm-build-app.sh` checks it and writes it into the bundle's Info.plist as `AgentNotchWebsiteURL`; the Release workflow's website job reads the same file. See "Cloud sync (app side)". |
 | `VERSION` | Fork-owned, one line `major.minor.patch` (first release 1.0.0). The app's only version source: `spm-build-app.sh` writes it as `CFBundleShortVersionString` **and** `CFBundleVersion` (Sparkle compares the latter). `project.yml`'s `MARKETING_VERSION`/`CURRENT_PROJECT_VERSION` stay upstream's (the Xcode path and `WhatsNewTests` read them). A push to main that changes it releases. |
 | `Scripts/release-build.sh`, `release-make-keys.sh`, `release-ed25519.swift`, `sparkle-public-ed-key.txt`, `AgentNotch.entitlements` | Release pipeline. `release-build.sh`: everything the workflow does except publishing (build `--release --universal --with-updates`, optional p12 import into a temporary keychain + notarization, dmg, Sparkle zip, `sign_update`, CryptoKit check against the committed key, `appcast.xml`, `release-info.env`) into `--out` (default `build/release`). `release-make-keys.sh`: the maintainer's one-time key setup (`--update-key`, `--signing-cert`, `--rotate`, `--set-secrets`: makes the `release` environment, main only, and sets its secrets). `release-ed25519.swift`: CryptoKit generate/public/verify. `sparkle-public-ed-key.txt`: committed public key (header only until the maintainer runs the key script). The entitlements file (Apple Events only) is for `--hardened-runtime`. |
 | `.github/workflows/fork.yml`, `release.yml` | Fork CI (push to main, PRs, dispatch, and `workflow_call` from Release; concurrency group `${{ github.workflow }}-${{ github.ref }}`; also checks debug/sealed builds carry no feed) and the Release workflow (below). Upstream's workflows run only in `vinzdg/codenotch`, except `windows-package.yml` on a manual dispatch: never ship its output (the upstream Windows port reads Claude's login token). |
@@ -289,6 +290,18 @@ Packages/ClaudeControl/Scripts/embed-scripts.sh [--check]
 
 ## Cloud sync (app side)
 
+- **Website:** not a user setting. `app-config.json`'s `websiteURL` →
+  `Scripts/spm-build-app.sh` (refuses a missing file, bad JSON, or an address
+  `CloudWebsite.validated` wouldn't keep exactly as written; `""` omits the key) → Info.plist
+  `AgentNotchWebsiteURL` → the bridge (`ClaudeControlConfiguration.websiteURL(infoDictionary:)`)
+  → `ClaudeControlConfiguration.websiteURL` → `CloudSync.Dependencies.website`.
+  `CloudSync.effectiveWebsite` = `AGENTNOTCH_WEB_URL` (`DevFlags.webURLOverride`) else that,
+  validated; fixed for the run; nil (Xcode path, `""`, a refused address) means no sign-in and
+  no sync. The Cloud section shows it read-only (plus "Set by AGENTNOTCH_WEB_URL…" when
+  overridden). The retired defaults key `claudeControl.cloudWebsiteURL` (the website earlier
+  builds let the user type) is deleted by `CloudSync.start` (never sealed); if it named another
+  website than the run's, that is a website change: both switches go off, and
+  `restoreSession` sets the sign-in made there aside (kept on disk, not used, not revoked).
 - **Contract:** `web/contract/README.md` and its fixtures, fixed. Keys: `accountKey` =
   SHA-256 of the lowercased `<accountUuid>/<organizationUuid>` from the identity's own folders
   (the accountUuid alone only when no folder names an organization; never how this Mac groups
@@ -301,9 +314,9 @@ Packages/ClaudeControl/Scripts/embed-scripts.sh [--check]
   in the bridge's `ASWebAuthenticationSession`, back to `agentnotch://auth-callback?code=…`, then
   `POST <supabase>/auth/v1/token?grant_type=pkce`. Refresh tokens rotate, so a refreshed session
   is saved before use. Sign out is `POST …/logout?scope=local`. A user cancel is
-  `CancellationError` (quiet, back to signed out). A sign-in is bound to the website it began
-  with (a result that comes back after the website changed is revoked, never adopted), and a
-  token only ever goes to the website its session was made through. The session is forgotten
+  `CancellationError` (quiet, back to signed out). A sign-in is bound to the website and
+  sign-in state it began with (a result that comes back after a sign-out or a stop is revoked,
+  never adopted), and a token only ever goes to the website its session was made through. The session is forgotten
   only when Supabase refuses the refresh token (400/401 with `invalid_grant`,
   `refresh_token_*`, `session_*`…); a website 401 after a good refresh, a 5xx or a 429 backs off
   with the session kept.
@@ -437,9 +450,10 @@ Full list in the README's Development section and in `Engine/Core/DevFlags.swift
   `--dev-console`.
 - **Isolation:** `AGENTNOTCH_SUPPORT_DIR`, `AGENTNOTCH_SOCKET` (the hook scripts follow it only with
   `AGENTNOTCH_DEV=1`), `AGENTNOTCH_EXTRA_CONFIG_DIRS`.
-- **Cloud:** `AGENTNOTCH_WEB_URL=<url>` sets the sync website for one run (https, or http to
-  localhost/127.0.0.1/[::1]; ignored when sealed). A sign-in saved for another website is set
-  aside, not deleted. Session summaries never run in a `--no-install` run.
+- **Cloud:** `AGENTNOTCH_WEB_URL=<url>` overrides the build's sync website (`app-config.json`)
+  for one run (https, or http to localhost/127.0.0.1/[::1]; ignored when sealed). A sign-in
+  saved for another website is set aside, not deleted. Session summaries never run in a
+  `--no-install` run.
 - **Sealed-only:** `AGENTNOTCH_OPEN_PANEL_ON_LAUNCH`, `AGENTNOTCH_PANEL_SELF_TEST`, `AGENTNOTCH_SNAPSHOT_CLAUDE`,
   `AGENTNOTCH_SEALED_SWITCH_OFF`, `AGENTNOTCH_SEALED_CAPTURE`.
 - **Updates:** no runtime switch. A copy updates itself only when it was built with

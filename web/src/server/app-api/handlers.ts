@@ -2,6 +2,7 @@
  * The Mac app's API (contract/README.md), as plain functions of a Request and their
  * dependencies. The route files under src/app/api/app/v1 pass the real ones; tests pass fakes.
  */
+import { requestOrigin } from "~/lib/site-address";
 import { TokenCheckUnavailable } from "~/server/auth/token-errors";
 
 import { readJsonBody } from "./body";
@@ -41,7 +42,8 @@ export type AppApiDeps = {
   ipLimiter: RateLimiter;
   /** The key of the caller's IP address (a hash, never the address), or null when unknown. */
   clientIpKey: (headers: Headers) => string | null;
-  siteUrl: string;
+  /** The site's address (src/env.js); unset, the address the request came in on. */
+  siteUrl: string | undefined;
   now?: () => Date;
   /** Where unexpected errors go (they reach the client only as INTERNAL). */
   logError?: (context: string, error: unknown) => void;
@@ -49,6 +51,17 @@ export type AppApiDeps = {
 
 export function dashboardUrl(siteUrl: string): string {
   return `${siteUrl.replace(/\/+$/, "")}/dashboard`;
+}
+
+/**
+ * The site's address, or, when src/env.js has none (off Vercel without NEXT_PUBLIC_SITE_URL),
+ * the one this request came in on: the address the app reached the site at.
+ */
+export function siteUrlFor(
+  siteUrl: string | undefined,
+  request: Request,
+): string {
+  return siteUrl ?? requestOrigin(request.headers, new URL(request.url).origin);
 }
 
 export function buildConfig(options: {
@@ -64,6 +77,28 @@ export function buildConfig(options: {
   };
 }
 
+/** GET /api/app/v1/config: what the app needs to start a sign-in. No auth. */
+export function handleConfig(
+  request: Request,
+  options: {
+    supabaseUrl: string;
+    supabasePublishableKey: string;
+    /** The site's address (src/env.js); unset, the address the request came in on. */
+    siteUrl: string | undefined;
+  },
+): Response {
+  return Response.json(
+    buildConfig({ ...options, siteUrl: siteUrlFor(options.siteUrl, request) }),
+    {
+      headers: {
+        // An answer built from the request's own Host / X-Forwarded-* headers is only for the
+        // client that sent them, never for a shared cache.
+        "Cache-Control": `${options.siteUrl ? "public" : "private"}, max-age=300`,
+      },
+    },
+  );
+}
+
 export async function handleMe(
   request: Request,
   deps: AppApiDeps,
@@ -72,7 +107,7 @@ export async function handleMe(
     const viewer = await requireViewer(request, deps);
     const body: MeResponse = {
       user: { id: viewer.id, email: viewer.email, name: viewer.name },
-      dashboardUrl: dashboardUrl(deps.siteUrl),
+      dashboardUrl: dashboardUrl(siteUrlFor(deps.siteUrl, request)),
     };
     return Response.json(body, { headers: NO_STORE });
   });

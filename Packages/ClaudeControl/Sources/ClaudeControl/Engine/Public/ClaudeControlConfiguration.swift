@@ -40,6 +40,14 @@ public nonisolated struct ClaudeControlConfiguration {
     public var externalTabFocus: (@Sendable (ClaudeExternalTabRequest) -> Bool)?
     /// Usage read from somewhere other than Claude Code (Claude Desktop's cache).
     public var externalUsageSource: (any ClaudeExternalUsageSource)?
+    /// The website cloud sync talks to: the repository's `app-config.json`,
+    /// which the build writes into the app's Info.plist as
+    /// `websiteURLInfoKey` (the host reads it with
+    /// `websiteURL(infoDictionary:)`). The user can't change it. Nil (or an
+    /// address the app doesn't accept, see `CloudWebsite.validated`): this
+    /// build has none, so it never signs in or syncs. `AGENTNOTCH_WEB_URL`
+    /// overrides it for a run; a sealed run ignores both.
+    public var websiteURL: String?
 
     public init(
         mode: Mode,
@@ -56,7 +64,8 @@ public nonisolated struct ClaudeControlConfiguration {
         probesAllowed: Bool,
         extraConfigDirs: [String] = [],
         externalTabFocus: (@Sendable (ClaudeExternalTabRequest) -> Bool)? = nil,
-        externalUsageSource: (any ClaudeExternalUsageSource)? = nil
+        externalUsageSource: (any ClaudeExternalUsageSource)? = nil,
+        websiteURL: String? = nil
     ) {
         self.mode = mode
         self.appDisplayName = appDisplayName
@@ -73,6 +82,7 @@ public nonisolated struct ClaudeControlConfiguration {
         self.extraConfigDirs = extraConfigDirs
         self.externalTabFocus = externalTabFocus
         self.externalUsageSource = externalUsageSource
+        self.websiteURL = websiteURL
     }
 
     // MARK: - Names
@@ -83,6 +93,18 @@ public nonisolated struct ClaudeControlConfiguration {
     public static let engineFolderName = "Claude"
     /// Longest socket path `sockaddr_un` takes (104 bytes with the terminator).
     public static let maxSocketPathBytes = 103
+    /// The Info.plist key the host reads `websiteURL` from
+    /// (`Scripts/spm-build-app.sh` writes it from `app-config.json`).
+    public static let websiteURLInfoKey = "AgentNotchWebsiteURL"
+
+    /// The website an app's Info.plist names under `websiteURLInfoKey`, as
+    /// written there: nil when the key is missing, isn't a string, or is
+    /// blank. Whether the app accepts it is `CloudSync`'s to decide.
+    public static func websiteURL(infoDictionary: [String: Any]?) -> String? {
+        guard let value = infoDictionary?[websiteURLInfoKey] as? String else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
 
     // MARK: - Factories
 

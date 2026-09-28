@@ -33,12 +33,12 @@
 - **No login token, ever.** Claude usage comes from Claude Code itself (asked for its own
   usage), from the live status line, and from Claude Desktop's on-disk cache if you allow it.
   This app reads no keychain item or credential file of Claude's. The only sign-in it keeps
-  is its own, to your website, if you turn on cloud sync: a 0600 file in its support folder,
+  is its own, to its website, if you turn on cloud sync: a 0600 file in its support folder,
   nothing to do with your Claude login.
-- **Optional cloud sync.** Sign in with Google to your own Agent Notch website (`web/`) to
-  see every account's sessions, tokens, cost and limits from all your Macs in one place, and
-  to share an account's history with the other people who use it. Off until you sign in and
-  turn it on; see [Cloud sync](#cloud-sync-optional).
+- **Optional cloud sync.** Sign in with Google to the Agent Notch website (`web/`; its
+  address is built into the app) to see every account's sessions, tokens, cost and limits
+  from all your Macs in one place, and to share an account's history with the other people
+  who use it. Off until you sign in and turn it on; see [Cloud sync](#cloud-sync-optional).
 - **Installs beside the official app.** It has its own bundle id
   (`com.rivantmedia.agentnotch`), preferences, log subsystem, keychain items and
   `~/Library/Application Support/Agent Notch`. Codenotch's other providers (Codex, Cursor,
@@ -102,6 +102,14 @@ open "/Applications/Agent Notch.app"
 - `Scripts/spm-run-sealed.sh` opens a sealed copy for a few seconds, with sample data and
   nothing real touched: a safe first look (see [Development](#development)).
 - With Xcode installed, upstream's xcodegen project and `make build` / `make test` still work.
+- **The website's address** for [cloud sync](#cloud-sync-optional) is `websiteURL` in the
+  repository's `app-config.json` (the Release workflow's website job reads the same file).
+  `Scripts/spm-build-app.sh` writes it into the app's `Info.plist` as `AgentNotchWebsiteURL`;
+  the app shows it and can't change it. The build stops when the file is missing, isn't JSON,
+  or names an address the app wouldn't take exactly as written: `https://host[:port][/path]`
+  with no trailing slash, query or `user:password`, or `http://` to `localhost`, `127.0.0.1`
+  or `[::1]`. An empty string (`""`) builds a copy with no website, which can't sign in or
+  sync; so does upstream's Xcode path, which doesn't write the key.
 
 ## First use
 
@@ -252,21 +260,27 @@ history of what your Claude accounts were used for: each account's 5-hour and we
 over time, the projects it worked in, and the tokens and cost of every Claude Code session,
 from every Mac that syncs. Nothing leaves this Mac until you sign in and turn sync on.
 
-- **Signing in.** In Settings › Claude Code › *Cloud*, paste the website's address
-  (`https://…`, or `http://localhost:3000` while you develop it) and click **Save**, then
-  **Sign in with Google**. Google's sign-in opens in your browser and comes back to the app
-  (`agentnotch://auth-callback`, PKCE through the website's Supabase project). The app keeps
-  that sign-in (a Supabase access token and refresh token) in
-  `~/Library/Application Support/Agent Notch/Claude/cloud-session.json`, a file only your user
-  can read (0600). It isn't in the Keychain and has nothing to do with Claude's login.
-  **Sign out…** ends this Mac's sign-in; what the website has stays there. Saving another
-  website signs you out of the old one; a sign-in still open in the browser when you do is
-  thrown away (and ended on Supabase). The switches below belong to one sign-in: signing out
-  (or being signed out) and saving another website turn them off, and every new sign-in
-  starts with them off. A sync belongs to the sign-in and website it started with: if you
-  sign out, sign in again or save another website while it is under way, its answer is
-  dropped, and a request retried after a refused token only ever carries a token of its own
-  sign-in on its own website.
+- **Signing in.** In Settings › Claude Code › *Cloud*, click **Sign in with Google**. There
+  is no address to enter: the website is the one the app was built with (`app-config.json`,
+  see [Build and run](#build-and-run-command-line-tools-only)), shown read-only above the
+  button (*None*, with **Sign in** unavailable, in a build that has none). Google's sign-in
+  opens in your browser and comes back to the app (`agentnotch://auth-callback`, PKCE through
+  the website's Supabase project). The app keeps that sign-in (a Supabase access token and
+  refresh token) in `~/Library/Application Support/Agent Notch/Claude/cloud-session.json`, a
+  file only your user can read (0600). It isn't in the Keychain and has nothing to do with
+  Claude's login. **Sign out…** ends this Mac's sign-in; what the website has stays there; a
+  sign-in still open in the browser when you sign out is thrown away (and ended on Supabase).
+  The switches below belong to one sign-in on one website: signing out (or being signed out)
+  turns them off, and every new sign-in starts with them off. A sync belongs to the sign-in
+  and website it started with: if you sign out or sign in again while it is under way, its
+  answer is dropped, and a request retried after a refused token only ever carries a token
+  of its own sign-in on its own website.
+- **Coming from a build where you typed the address.** Earlier builds asked for the website
+  in Settings. The first launch of a newer one deletes that setting. If it named the
+  website this build uses, nothing else changes. If it named another one, the website has
+  changed: sync and summaries go off, and the sign-in you made there is set aside, kept in
+  its file but not used (a run pointed back at that website with `AGENTNOTCH_WEB_URL` finds
+  it again). Sign in to the new website to replace it.
 - **What sync sends** (with **Sync sessions and usage** on: every 5 minutes, soon after a
   session ends, or on **Sync now**; at most five requests at a time, the rest half a minute
   later; after a failure, not before the backoff or the website's Retry-After ends). Sessions
@@ -335,7 +349,7 @@ from every Mac that syncs. Nothing leaves this Mac until you sign in and turn sy
   a run, 20 an hour and 60 a day, and none for an account while its 5-hour limit is 80% used
   or more. Turning summaries or sync off, or signing out, stops a summary that is running.
   Only the one- or two-sentence summary goes to the website, scrubbed as described above.
-  Turning summaries off (signing out and saving another website do too) deletes the summaries
+  Turning summaries off (signing out and a change of website do too) deletes the summaries
   on this Mac that haven't been sent yet. **Summaries already sent stay on the website:**
   turning summaries off, signing out or removing the app doesn't take them off it, and the
   people you share the account with keep seeing them there. Remove them, or delete what was
@@ -360,8 +374,10 @@ from every Mac that syncs. Nothing leaves this Mac until you sign in and turn sy
   only on disk, not running, is never backfilled. It does not mean claude.ai chats, in Claude
   Desktop or a browser: the app doesn't read those.
 - **Pointing a run at a development site:** `AGENTNOTCH_WEB_URL=http://localhost:3000`
-  overrides the address for that run (a sign-in saved for another website is set aside, not
-  deleted). A sealed run shows a signed-in example and sends nothing.
+  overrides the built-in address for that run, and the *Cloud* section says so under
+  *Website* (a sign-in saved for another website is set aside, not deleted). Only an address
+  the app accepts counts: https, or http to this Mac. A sealed run ignores it, shows a
+  signed-in example and sends nothing.
 
 ## Privacy: what it reads, writes and runs
 
@@ -370,8 +386,9 @@ from every Mac that syncs. Nothing leaves this Mac until you sign in and turn sy
     `sessions/*.key`);
   - a network request of its own for Claude.
 - **Network:** only for these two things.
-  - With [cloud sync](#cloud-sync-optional), to the website you set there and its Supabase
-    project: to sign in, and to sync once you turn sync on.
+  - With [cloud sync](#cloud-sync-optional), to the website built into the app
+    (`app-config.json`) and its Supabase project: to sign in, and to sync once you turn sync
+    on.
   - In a downloaded copy, for [updates](#updates): about once a day, a request for
     `https://github.com/rivantmedia/agentnotch/releases/latest/download/appcast.xml` (GitHub
     redirects it to its file host) and, when there is a newer version, the download of its
@@ -506,8 +523,8 @@ keeps its hooks and usage check. This app follows that layout:
   `--dev-console` / `AGENTNOTCH_DEV_CONSOLE`. Path switches: `AGENTNOTCH_SUPPORT_DIR`, `AGENTNOTCH_SOCKET`
   and `AGENTNOTCH_EXTRA_CONFIG_DIRS` (`:`-separated). See `Engine/Core/DevFlags.swift`. The
   installed hook scripts follow `AGENTNOTCH_SOCKET` only when `AGENTNOTCH_DEV=1` is set too.
-  `AGENTNOTCH_WEB_URL=<url>` sets the cloud sync website for one run (https, or http to this
-  Mac; ignored when sealed). Session summaries never run in a `--no-install` run.
+  `AGENTNOTCH_WEB_URL=<url>` overrides the cloud sync website the build carries
+  (`app-config.json`) for one run (https, or http to this Mac; ignored when sealed). Session summaries never run in a `--no-install` run.
 - **No updates outside releases.** A debug or `--release` build, a sealed run and a `.dev`
   copy carry no update feed, so they never check for updates or replace themselves with a
   release. Only the release workflow's builds update themselves (see [Releases](#releases)).

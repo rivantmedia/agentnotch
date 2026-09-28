@@ -192,7 +192,7 @@ cp .env.example .env    # .env is git-ignored; never commit it
 | `DIRECT_URL`                           | Session-mode pooler or direct connection, port 5432 (used by migrations)                            |
 | `NEXT_PUBLIC_SUPABASE_URL`             | `https://<ref>.supabase.co`                                                                         |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | The **publishable** key (Project Settings > API Keys). Never the secret key                         |
-| `NEXT_PUBLIC_SITE_URL`                 | The site's public address; the app's "Open dashboard" goes to `<this>/dashboard`                    |
+| `NEXT_PUBLIC_SITE_URL`                 | Optional on Vercel (see below): the site's address; the app's dashboard is `<this>/dashboard`       |
 | `SUPABASE_JWT_SECRET`                  | Optional: only for projects still signing tokens with the legacy HS256 secret                       |
 | `RATE_LIMIT_PEPPER`                    | Optional, recommended: a long random string that keys the hash of IP addresses in the per-IP limits |
 | `RELEASES_REPO`                        | Optional: GitHub `owner/name` whose releases `/download` offers; `rivantmedia/agentnotch` if unset  |
@@ -200,6 +200,18 @@ cp .env.example .env    # .env is git-ignored; never commit it
 
 `NEXT_PUBLIC_*` values are compiled into the build. Set them before building, and rebuild
 after changing them.
+
+**The site's address.** On Vercel, leave `NEXT_PUBLIC_SITE_URL` unset: the site is `https://`
+plus the project's production domain, from Vercel's system variables
+(`VERCEL_PROJECT_PRODUCTION_URL`, and its Next.js copy
+`NEXT_PUBLIC_VERCEL_PROJECT_PRODUCTION_URL` for browser code). That is the shortest production
+custom domain, else the `vercel.app` one, and previews get it too, so a preview names the
+production dashboard. Vercel sets these only while **Enable access to System Environment
+Variables** is ticked (Project Settings > Environment Variables; on by default). Set
+`NEXT_PUBLIC_SITE_URL` for local development, a self-hosted site, or a Vercel project whose
+shortest production domain isn't the site's address; set, it always wins
+(`src/lib/site-url.js`). With neither, the app API answers with the address each request came
+in on, and `/api/releases/refresh` refuses every call (see [Downloads](#downloads)).
 
 ### 6. Migrate and run
 
@@ -219,7 +231,9 @@ tables. `db:push` is removed on purpose, so nothing bypasses the migrations.
    default build (`next build`) and install (`npm install`, which generates the Prisma client)
    are right.
 2. Add the variables from the table above under **Project Settings > Environment Variables**.
-   Set `NEXT_PUBLIC_SITE_URL` to the production address.
+   Leave `NEXT_PUBLIC_SITE_URL` out: the site takes its address from the production domain.
+   That domain must be the one in `websiteURL` of the repository's `app-config.json`, which the
+   Mac app is built with and the release workflow refreshes.
 3. Run `npm run db:migrate` against the production database before the first deploy, and again
    whenever a change adds a migration. Run it from your machine or from CI, with `DIRECT_URL`
    set. The build never touches the database.
@@ -331,14 +345,15 @@ The rules are `src/lib/releases.ts`; the fetch is `src/server/releases.ts`.
   the limit resets. Set `GITHUB_RELEASES_TOKEN` there.
 - **Refresh on release.** Right after publishing, the release workflow clears that cache, so a
   new release shows at once: its `website` job posts its GitHub OIDC token to
-  `/api/releases/refresh`, which accepts only a token meant for this site (the origin of
-  `NEXT_PUBLIC_SITE_URL`) that names this repository, `main`, `release.yml` and the `release`
-  environment (`src/server/releases-refresh.ts`). No secret is shared. The job posts to the
-  repository variable `WEBSITE_URL`, or `https://agentnotch.rivant.in` when it isn't set; its
-  origin must be `NEXT_PUBLIC_SITE_URL`'s. A failed refresh is only a warning, and the 5 minutes
-  still apply. Running the Release workflow on `main` by hand refreshes too. Self-hosted on more
-  than one instance, the refresh clears only the one that answered, unless they share a cache
-  handler.
+  `/api/releases/refresh`, which accepts only a token meant for this site (the origin of the
+  site's address: `NEXT_PUBLIC_SITE_URL`, else the production domain) that names this
+  repository, `main`, `release.yml` and the `release` environment
+  (`src/server/releases-refresh.ts`). No secret is shared. The job posts to `websiteURL` in the
+  repository's `app-config.json` at the released commit, the address the Mac app is built with;
+  its origin must be the site's. A failed refresh (that file missing or without a `websiteURL`
+  too) is only a warning, and the 5 minutes still apply. Running the Release workflow on `main`
+  by hand refreshes too. Self-hosted on more than one instance, the refresh clears only the one
+  that answered, unless they share a cache handler.
 - **The buttons** link to `/download/<platform>`, which redirects (302, never cached) to the
   file, and only to a file under `https://github.com/<repo>/releases/download/`. They are plain
   links, not `next/link`, which would prefetch the redirect. The landing page and the header
@@ -355,13 +370,14 @@ The rules are `src/lib/releases.ts`; the fetch is `src/server/releases.ts`.
 Install the app first, from `/download` (see [Downloads](#downloads)).
 
 1. Sign in on the website with the Google account you want your history under.
-2. In Agent Notch, open **Settings > Claude Code > Cloud**. Paste the website's address under
-   **Website**, as shown on `/settings`, and choose **Save**. It's the origin, such as
-   `https://notch.example.com`, with no path.
-3. Choose **Sign in with Google**. The app reads `GET /api/app/v1/config` for the Supabase
-   project and signs in with PKCE, returning to `agentnotch://auth-callback`. It keeps its own
-   Supabase session in `cloud-session.json` in its support folder.
-4. Turn on **Sync sessions and usage**. The app then calls `POST /api/app/v1/sync` with its
+2. In Agent Notch, open **Settings > Claude Code > Cloud** and choose **Sign in with Google**.
+   There is no address to type in: the app is built with the website it syncs with, `websiteURL`
+   in the repository's `app-config.json`. The app reads `GET /api/app/v1/config` for the
+   Supabase project and signs in with PKCE, returning to `agentnotch://auth-callback`. It keeps
+   its own Supabase session in `cloud-session.json` in its support folder. (Agent Notch 1.0.0
+   asks for the address under **Website** first: the origin shown on `/settings`, such as
+   `https://notch.example.com`.)
+3. Turn on **Sync sessions and usage**. The app then calls `POST /api/app/v1/sync` with its
    bearer token, and the accounts appear on the dashboard. **Summarise finished sessions with
    Claude** is a separate switch, off until the user turns it on.
 

@@ -311,9 +311,6 @@ struct SettingsPaneActions {
     var setReadsDesktopUsageCache: (Bool) -> Void = { _ in }
     var refreshUsage: () -> Void = {}
 
-    /// Save the website's address as typed (blank clears it; another
-    /// website signs out of the old one).
-    var saveCloudWebsite: (_ address: String) -> Void = { _ in }
     /// "Sign in with Google": the host runs the browser step.
     var cloudSignIn: () -> Void = {}
     var cloudSignOut: () -> Void = {}

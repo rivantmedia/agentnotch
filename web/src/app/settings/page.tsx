@@ -60,7 +60,7 @@ export default async function SettingsPage() {
         <SectionHeading
           id="connect-title"
           title="Connect the Mac app"
-          description="Agent Notch syncs to the website at this address. Paste it into the app on each Mac you use."
+          description="Agent Notch syncs with this website once you sign in from the app on each Mac you use."
         />
         <div className="card p-5">
           <ConnectMacSteps address={address} />

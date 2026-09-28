@@ -17,8 +17,9 @@
 //  | `AGENTNOTCH_SOCKET=<path>`                     | the hook socket (the scripts only with `AGENTNOTCH_DEV=1` too) |
 //  | `AGENTNOTCH_EXTRA_CONFIG_DIRS=<a>:<b>`         | more Claude config folders to track                      |
 //  | `AGENTNOTCH_USAGE_PROBE`                       | usage probes on schedule even with `--no-install`        |
-//  | `AGENTNOTCH_WEB_URL=<url>`                     | the website sync uses, over the one set in Settings      |
-//  |                                          | (https, or http to this Mac; ignored when sealed)        |
+//  | `AGENTNOTCH_WEB_URL=<url>`                     | the website sync uses, over the build's own              |
+//  |                                          | (app-config.json); https, or http to this Mac; ignored   |
+//  |                                          | when sealed                                              |
 //  | `--dump-state` / `AGENTNOTCH_DUMP_STATE`       | print a line per session on every change                 |
 //  | `--dev-console` / `AGENTNOTCH_DEV_CONSOLE`     | drive sessions from stdin                                |
 //
@@ -93,9 +94,11 @@ nonisolated enum DevFlags {
     /// `AGENTNOTCH_USAGE_PROBE`: keep scheduled usage probes on in a `--no-install` run.
     static let usageProbeOnDevRun: Bool = truthy(Foundation.ProcessInfo.processInfo.environment["AGENTNOTCH_USAGE_PROBE"])
 
-    /// `AGENTNOTCH_WEB_URL`: the website sync talks to, over the one set in
-    /// Settings (a local development server, say). Only an address the app
-    /// accepts counts (see `CloudWebsite.validated`); a sealed run ignores it.
+    /// `AGENTNOTCH_WEB_URL`: the website sync talks to, over the one the
+    /// build carries (`ClaudeControlConfiguration.websiteURL`, from
+    /// `app-config.json`): a local development server, say. Only an address
+    /// the app accepts counts (see `CloudWebsite.validated`); a sealed run
+    /// ignores it.
     static let webURLOverride: String? = Foundation.ProcessInfo.processInfo.environment["AGENTNOTCH_WEB_URL"]
         .flatMap { CloudWebsite.validated($0)?.absoluteString }
 

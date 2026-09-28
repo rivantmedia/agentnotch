@@ -3,8 +3,10 @@ import Link from "next/link";
 import { CopyButton } from "./copy-button";
 
 /**
- * How to connect the Mac app to this website: where to get it, the address to paste and the
- * three steps. Used by the dashboard's empty state and by Settings.
+ * How to connect the Mac app to this website: where to get it and the two steps. The app is
+ * built with the website it syncs with (the repository's app-config.json), so there is nothing
+ * to type in; the address is shown only for a copy that still asks for one (Agent Notch 1.0.0,
+ * until it updates). Used by the dashboard's empty state and by Settings.
  */
 export function ConnectMacSteps({ address }: { address: string | null }) {
   return (
@@ -16,7 +18,6 @@ export function ConnectMacSteps({ address }: { address: string | null }) {
         </Link>
         .
       </p>
-      <SiteAddressField address={address} />
       <ol className="flex flex-col gap-3 text-sm">
         {[
           <>
@@ -24,12 +25,7 @@ export function ConnectMacSteps({ address }: { address: string | null }) {
             <strong className="font-semibold text-ink">
               Settings &gt; Claude Code &gt; Cloud
             </strong>
-            , paste this website&apos;s address under{" "}
-            <strong className="font-semibold text-ink">Website</strong> and
-            choose <strong className="font-semibold text-ink">Save</strong>.
-          </>,
-          <>
-            Choose{" "}
+            , choose{" "}
             <strong className="font-semibold text-ink">
               Sign in with Google
             </strong>{" "}
@@ -59,17 +55,24 @@ export function ConnectMacSteps({ address }: { address: string | null }) {
           </li>
         ))}
       </ol>
+      <SiteAddressField address={address} />
     </div>
   );
 }
 
-/** The website's address in a read-only field, with a copy button. */
+/**
+ * The website's address in a read-only field, with a copy button, for a copy of the app that
+ * asks for a Website before it signs in.
+ */
 export function SiteAddressField({ address }: { address: string | null }) {
   if (!address) {
     return (
       <p className="text-sm text-ink-2">
-        Paste the address you opened this website at (the part before
-        &ldquo;/dashboard&rdquo; in the address bar).
+        If Agent Notch asks for a{" "}
+        <strong className="font-semibold text-ink">Website</strong> before you
+        can sign in, enter the address you opened this website at (the part
+        before &ldquo;/dashboard&rdquo; in the address bar) and choose{" "}
+        <strong className="font-semibold text-ink">Save</strong>.
       </p>
     );
   }
@@ -78,11 +81,18 @@ export function SiteAddressField({ address }: { address: string | null }) {
       <label htmlFor="site-address" className="text-sm font-medium">
         Website address
       </label>
+      <p id="site-address-hint" className="text-sm text-ink-2">
+        Only if Agent Notch asks for a{" "}
+        <strong className="font-semibold text-ink">Website</strong> before you
+        can sign in: paste this there and choose{" "}
+        <strong className="font-semibold text-ink">Save</strong>.
+      </p>
       <div className="flex flex-wrap items-center gap-2">
         <input
           id="site-address"
           readOnly
           value={address}
+          aria-describedby="site-address-hint"
           className="field max-w-md min-w-0 flex-1 basis-56 font-mono"
         />
         <CopyButton value={address} describedBy="site-address" />

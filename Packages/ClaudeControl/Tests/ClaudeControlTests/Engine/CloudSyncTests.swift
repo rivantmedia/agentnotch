@@ -71,17 +71,29 @@ struct CloudSyncTests {
         let switches = Switches()
         let runner = Runner()
         let sealed: Bool
+        /// The build's website (`ClaudeControlConfiguration.websiteURL`),
+        /// read when the service starts.
+        var configuredWebsite: String?
+        /// `AGENTNOTCH_WEB_URL`, read when the service starts.
+        var websiteOverride: String?
         private(set) var sync: CloudSync!
 
+        /// - Parameters:
+        ///   - signedIn: a sign-in saved for https://agentnotch.example.com.
+        ///   - typedWebsite: what an earlier build kept as the website the
+        ///     user typed in Settings (`RetiredKey.cloudWebsiteURL`).
         init(signedIn: Bool = true, syncOn: Bool = true, summariesOn: Bool = false, sealed: Bool = false,
-             website: String? = "https://agentnotch.example.com") {
+             website: String? = "https://agentnotch.example.com", websiteOverride: String? = nil,
+             typedWebsite: String? = nil) {
             root = URL(fileURLWithPath: TestPaths.temporaryRoot("cloud-sync"))
             suiteName = defaults.name
             self.sealed = sealed
+            configuredWebsite = website
+            self.websiteOverride = websiteOverride
             sessionStore = CloudSessionMemoryStore(signedIn ? CloudAuthTests.session(expiresIn: 7 * 24 * 3600) : nil)
             transport = FakeTransport(Self.website)
             let store = defaults.store
-            store.cloudWebsiteURL = website
+            if let typedWebsite { defaults.defaults.set(typedWebsite, forKey: ClaudeControlSettings.RetiredKey.cloudWebsiteURL) }
             store.cloudSyncEnabled = syncOn
             store.cloudSummariesEnabled = summariesOn
             sync = CloudSync(dependencies: { [self] in self.dependencies() })
@@ -99,13 +111,27 @@ struct CloudSyncTests {
                 transport: transport, sessionStore: sessionStore,
                 summaryRunner: { [runner] request in await runner.runAsync(request) },
                 clock: { [clock] in clock.now }, home: root.path, appVersion: "9.9", deviceName: "Test Mac",
-                websiteOverride: nil,
+                website: configuredWebsite, websiteOverride: websiteOverride,
                 summariesAllowed: { [switches] in switches.summariesAllowed })
         }
 
         func start() async {
             sync.start(environment: environment, usage: nil, runsLoop: false)
             await sync.restoreSession()
+        }
+
+        /// Quit and open the app again: the same files, defaults and saved
+        /// sign-in, with the website as `configuredWebsite` and
+        /// `websiteOverride` say now.
+        func relaunch() async {
+            sync.stop()
+            sync = CloudSync(dependencies: { [self] in self.dependencies() })
+            await start()
+        }
+
+        /// What an earlier build kept as the typed website, if it is still there.
+        var typedWebsiteLeft: Any? {
+            defaults.defaults.object(forKey: ClaudeControlSettings.RetiredKey.cloudWebsiteURL)
         }
 
         /// The website: config, Supabase's token and logout, me, sync.
@@ -634,20 +660,167 @@ struct CloudSyncTests {
         #expect(harness.sync.state.auth == .error("Not allowed"))
     }
 
-    @Test func anotherWebsiteSignsOutOfTheOldOne() async {
-        let harness = Harness()
+    // MARK: - The website
+
+    /// The build's website (app-config.json, through the Info.plist) is the
+    /// one shown, signed in to and synced with.
+    @Test func theBuildsWebsiteIsUsed() async throws {
+        let harness = Harness(signedIn: false)
         await harness.start()
-        #expect(harness.sync.state.isSignedIn)
-        #expect(await harness.sync.setWebsite("http://evil.example.com") == false)
-        #expect(harness.sync.state.isSignedIn)
-        #expect(await harness.sync.setWebsite("https://other.example.com/"))
+        #expect(harness.sync.state.websiteURL == "https://agentnotch.example.com")
+        #expect(!harness.sync.state.websiteIsOverridden)
+        #expect(await harness.sync.signIn { _ in URL(string: "agentnotch://auth-callback?code=the-code")! })
+        #expect(harness.transport.recorded.first?.url?.absoluteString == "https://agentnotch.example.com/api/app/v1/config")
+        #expect(harness.sessionStore.load()?.websiteURL == "https://agentnotch.example.com")
+        harness.sync.setSyncEnabled(true)
+        try harness.writeSession(CloudFixture.sessionA)
+        harness.sync.observeLive([harness.observation(CloudFixture.sessionA)], liveIDs: [CloudFixture.sessionA])
+        await harness.sync.syncNow()
+        #expect(harness.syncRequests.map { $0.url?.host } == ["agentnotch.example.com"])
+
+        // Kept as the app keeps any address: lowercase, no trailing slash.
+        let untidy = Harness(signedIn: false, website: " https://AgentNotch.example.com/ ")
+        await untidy.start()
+        #expect(untidy.sync.state.websiteURL == "https://agentnotch.example.com")
+    }
+
+    /// The Info.plist's value reaches the configuration as written; a
+    /// missing, blank or non-string value is no website.
+    @Test func theWebsiteComesFromTheInfoPlist() {
+        let key = ClaudeControlConfiguration.websiteURLInfoKey
+        #expect(key == "AgentNotchWebsiteURL")
+        #expect(ClaudeControlConfiguration.websiteURL(infoDictionary: [key: "https://agentnotch.example.com"])
+                == "https://agentnotch.example.com")
+        #expect(ClaudeControlConfiguration.websiteURL(infoDictionary: [key: "  https://a.example \n"]) == "https://a.example")
+        #expect(ClaudeControlConfiguration.websiteURL(infoDictionary: [key: "   "]) == nil)
+        #expect(ClaudeControlConfiguration.websiteURL(infoDictionary: [key: 42]) == nil)
+        #expect(ClaudeControlConfiguration.websiteURL(infoDictionary: ["CFBundleName": "Agent Notch"]) == nil)
+        #expect(ClaudeControlConfiguration.websiteURL(infoDictionary: nil) == nil)
+        // Only the host sets it: no factory makes one up.
+        #expect(ClaudeControlConfiguration.sealed(appDisplayName: "T", bundleIdentifier: "com.example.t").websiteURL == nil)
+        #expect(ClaudeControlConfiguration.live(appDisplayName: "T", bundleIdentifier: "com.example.t", supportFolderName: "T",
+                                                environment: ["HOME": NSTemporaryDirectory()], arguments: []).websiteURL == nil)
+    }
+
+    /// The repository's app-config.json, which every build carries, names a
+    /// website the app takes as it is written (the build script checks the
+    /// same; a changed address would otherwise differ from what the app keeps).
+    @Test func theRepositorysAppConfigNamesAWebsiteTheAppAccepts() throws {
+        let file = TestPaths.packageRoot.deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("app-config.json")
+        let config = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        let website = try #require(config["websiteURL"] as? String)
+        #expect(website.isEmpty || CloudWebsite.validated(website)?.absoluteString == website)
+    }
+
+    /// `AGENTNOTCH_WEB_URL` (a development server) wins over the build's,
+    /// and says so; one the app doesn't accept counts for nothing.
+    @Test func aDevelopmentRunsOverrideWins() async throws {
+        let harness = Harness(signedIn: false, websiteOverride: "http://localhost:3000")
+        await harness.start()
+        #expect(harness.sync.state.websiteURL == "http://localhost:3000" && harness.sync.state.websiteIsOverridden)
+        #expect(await harness.sync.signIn { _ in URL(string: "agentnotch://auth-callback?code=the-code")! })
+        #expect(harness.transport.recorded.first?.url?.absoluteString == "http://localhost:3000/api/app/v1/config")
+        #expect(harness.transport.recorded.allSatisfy { $0.url?.host != "agentnotch.example.com" })
+        #expect(harness.sessionStore.load()?.websiteURL == "http://localhost:3000")
+
+        let refused = Harness(signedIn: false, websiteOverride: "http://agentnotch.dev.example.com")
+        await refused.start()
+        #expect(refused.sync.state.websiteURL == "https://agentnotch.example.com" && !refused.sync.state.websiteIsOverridden)
+
+        // Sealed: neither counts, and nothing is asked of any website.
+        let sealed = Harness(sealed: true, websiteOverride: "http://localhost:3000")
+        await sealed.start()
+        #expect(sealed.sync.state == ClaudeCloudState.sealedFixture(now: sealed.clock.now))
+        #expect(await sealed.sync.signIn { $0 } == false)
+        #expect(sealed.transport.recorded.isEmpty)
+    }
+
+    /// A build with no website (or one the app doesn't accept): no sign-in,
+    /// no capture, no request; a sign-in saved earlier is set aside, not
+    /// deleted.
+    @Test(arguments: [nil, "", "http://agentnotch.example.com", "ftp://agentnotch.example.com"] as [String?])
+    func withNoWebsiteItNeverSignsInOrSyncs(website: String?) async throws {
+        let harness = Harness(website: website)
+        await harness.start()
+        #expect(harness.sync.state.websiteURL == nil && harness.sync.state.auth == .signedOut)
+        #expect(harness.sessionStore.load()?.websiteURL == "https://agentnotch.example.com")
+        let ok = await harness.sync.signIn { url in
+            Issue.record("A browser was opened with no website")
+            return url
+        }
+        #expect(!ok && harness.sync.state.lastError == "This build has no website to sign in to.")
+        try harness.writeSession(CloudFixture.sessionA)
+        harness.sync.observeLive([harness.observation(CloudFixture.sessionA)], liveIDs: [CloudFixture.sessionA])
+        harness.sync.record(harness.usage)
+        await harness.sync.tick()
+        await harness.sync.syncNow()
+        #expect(!harness.sync.canUpload)
+        #expect(harness.transport.recorded.isEmpty)
+        #expect(harness.sync.stores?.ledger.count == 0 && harness.sync.stores?.recorder.pendingCount == 0)
+    }
+
+    /// The website the user used to type in Settings is deleted at launch,
+    /// whatever it was. When it is the build's, nothing else changes.
+    @Test func aWebsiteTypedInSettingsIsDeletedAtLaunch() async {
+        let same = Harness(typedWebsite: "https://agentnotch.example.com/")
+        await same.start()
+        #expect(same.typedWebsiteLeft == nil)
+        #expect(same.sync.state.isSignedIn && same.sync.state.syncEnabled && same.defaults.store.cloudSyncEnabled)
+
+        // A development run: the website was AGENTNOTCH_WEB_URL's then, as now.
+        let overridden = Harness(website: "https://other.example.com", websiteOverride: "https://agentnotch.example.com",
+                                 typedWebsite: "https://other.example.com")
+        await overridden.start()
+        #expect(overridden.typedWebsiteLeft == nil)
+        #expect(overridden.sync.state.isSignedIn && overridden.defaults.store.cloudSyncEnabled)
+
+        // Sealed: nothing of the user's is touched.
+        let sealed = Harness(sealed: true, typedWebsite: "https://other.example.com")
+        await sealed.start()
+        #expect(sealed.typedWebsiteLeft as? String == "https://other.example.com")
+    }
+
+    /// On the first launch of a build whose website isn't the one the user
+    /// typed, the website changed: the sign-in made there is set aside (kept,
+    /// never ended on Supabase, never sent anywhere), sync and summaries go
+    /// off, and a new sign-in to the build's website replaces it.
+    @Test func aSignInForTheWebsiteTypedBeforeIsSetAsideWhenTheBuildsDiffers() async throws {
+        let harness = Harness(summariesOn: true, website: "https://other.example.com",
+                              typedWebsite: "https://agentnotch.example.com")
+        await harness.start()
+        #expect(harness.typedWebsiteLeft == nil)
         #expect(harness.sync.state.websiteURL == "https://other.example.com")
+        #expect(harness.sync.state.auth == .signedOut && !harness.sync.canUpload)
+        #expect(harness.sessionStore.load()?.websiteURL == "https://agentnotch.example.com")
+        // Agreed to for the old website (finding 17).
+        #expect(!harness.defaults.store.cloudSyncEnabled && !harness.defaults.store.cloudSummariesEnabled)
+        #expect(!harness.sync.state.syncEnabled && !harness.sync.state.summariesEnabled)
+        try harness.writeSession(CloudFixture.sessionA)
+        harness.sync.observeLive([harness.observation(CloudFixture.sessionA)], liveIDs: [CloudFixture.sessionA])
+        harness.sync.record(harness.usage)
+        await harness.sync.tick()
+        await harness.sync.syncNow()
+        #expect(harness.transport.recorded.isEmpty)
+        #expect(harness.sync.stores?.ledger.count == 0)
+
+        // Set aside, not deleted: a run on the old website finds it again,
+        // with the switches still off.
+        harness.websiteOverride = "https://agentnotch.example.com"
+        await harness.relaunch()
+        #expect(harness.sync.state.auth == .signedIn(email: "me@example.com") && harness.sync.state.websiteIsOverridden)
+        #expect(!harness.sync.state.syncEnabled)
+        harness.websiteOverride = nil
+        await harness.relaunch()
         #expect(harness.sync.state.auth == .signedOut)
-        #expect(harness.transport.requests(to: "/auth/v1/logout").count == 1)
-        // Sync was agreed to for the old website (finding 17).
-        #expect(!harness.sync.state.syncEnabled && !harness.defaults.store.cloudSyncEnabled)
-        #expect(await harness.sync.setWebsite(nil))
-        #expect(harness.sync.state.websiteURL == nil)
+        #expect(harness.transport.recorded.isEmpty)
+
+        // Signing in to the build's website replaces it; the old one hears nothing.
+        #expect(await harness.sync.signIn { _ in URL(string: "agentnotch://auth-callback?code=the-code")! })
+        #expect(harness.sessionStore.load()?.websiteURL == "https://other.example.com")
+        #expect(harness.sync.state.isSignedIn && !harness.sync.state.syncEnabled)
+        #expect(harness.transport.recorded.allSatisfy { $0.url?.host != "agentnotch.example.com" })
+        #expect(harness.transport.requests(to: "/auth/v1/logout").isEmpty)
     }
 
     // MARK: - Summaries
@@ -764,7 +937,6 @@ struct CloudSyncTests {
         try harness.writeSession(CloudFixture.sessionA)
         harness.sync.observeLive([harness.observation(CloudFixture.sessionA)], liveIDs: [CloudFixture.sessionA])
         harness.sync.setSyncEnabled(false)
-        #expect(await harness.sync.setWebsite("https://other.example.com") == false)
         #expect(await harness.sync.signIn { $0 } == false)
         await harness.sync.syncNow()
         await harness.sync.tick()

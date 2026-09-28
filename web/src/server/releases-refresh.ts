@@ -17,7 +17,10 @@ import {
 import { RELEASES_CACHE_TAG } from "~/server/releases";
 
 export type RefreshDeps = {
-  /** Null when the site can't tell its own origin (NEXT_PUBLIC_SITE_URL), the tokens' audience. */
+  /**
+   * Null when the site can't tell its own origin, the tokens' audience (src/env.js:
+   * NEXT_PUBLIC_SITE_URL, else the Vercel project's production domain).
+   */
   verify: ReleaseRunVerifier | null;
   revalidate: (tag: string) => void;
 };
@@ -29,7 +32,7 @@ export async function refreshReleases(
   if (!deps.verify) {
     return errorResponse(
       "INTERNAL",
-      "The website doesn't know its own address (NEXT_PUBLIC_SITE_URL), so it can't check who is asking.",
+      "The website doesn't know its own address (NEXT_PUBLIC_SITE_URL, or Vercel's production domain), so it can't check who is asking.",
       NO_STORE,
       503,
     );

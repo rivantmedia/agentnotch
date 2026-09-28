@@ -9,11 +9,12 @@
 //  synced data). Nothing is uploaded until the user signs in and
 //  turns sync on; the switches do nothing else.
 //
-//  Signed out: the website field, then "Sign in with Google" (disabled
-//  until a website is saved; the field is locked while a sign-in runs, which
-//  is bound to the website it started with). Signed in: the website (with
-//  "Change…"), who is signed in, the two switches (off after every sign-in,
-//  sign-out and website change), the last sync, sharing and signing out.
+//  The website is shown, never edited: it is the build's (app-config.json,
+//  through the Info.plist), or AGENTNOTCH_WEB_URL's for a development run,
+//  which the row says. Signed out: then "Sign in with Google" (disabled
+//  when the build has no website). Signed in: who is signed in, the two
+//  switches (off after every sign-in, sign-out and website change), the
+//  last sync, sharing and signing out.
 //
 
 import SwiftUI
@@ -26,23 +27,6 @@ struct CloudSection: View {
     let now: Date
     let actions: SettingsPaneActions
 
-    @State private var draft: String
-    @State private var isChangingWebsite: Bool
-    /// Why the typed address wasn't saved.
-    @State private var websiteProblem: String?
-
-    /// - Parameter changingWebsite: Snapshots: open the field of a
-    ///   signed-in pane.
-    init(cloud: ClaudeCloudState, readsDesktopUsage: Bool, now: Date, actions: SettingsPaneActions,
-         changingWebsite: Bool = false) {
-        self.cloud = cloud
-        self.readsDesktopUsage = readsDesktopUsage
-        self.now = now
-        self.actions = actions
-        _draft = State(initialValue: cloud.websiteURL ?? "")
-        _isChangingWebsite = State(initialValue: changingWebsite)
-    }
-
     var body: some View {
         Section("Cloud") {
             websiteRow
@@ -52,90 +36,33 @@ struct CloudSection: View {
                 signInRow
             }
         }
-        // Saved (and tidied: "example.com" becomes "https://example.com"),
-        // or changed by the engine: the field shows what is kept.
-        .onChange(of: cloud.websiteURL) { _, saved in
-            draft = saved ?? ""
-            websiteProblem = nil
-            isChangingWebsite = false
-        }
     }
 
     // MARK: Website
 
-    @ViewBuilder
+    /// Read-only: where sync goes, and, in a development run, that
+    /// AGENTNOTCH_WEB_URL chose it.
     private var websiteRow: some View {
-        if cloud.websiteIsOverridden {
-            LabeledContent {
-                websiteText
-            } label: {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Website")
+        LabeledContent {
+            if let website = cloud.websiteURL {
+                Text(CloudSettingsCopy.websiteDisplay(website))
+                    .foregroundStyle(.ink(.secondary))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+                    .help(website)
+            } else {
+                Text(CloudSettingsCopy.noWebsite)
+                    .foregroundStyle(.ink(.secondary))
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Website")
+                if cloud.websiteIsOverridden {
                     Caption(CloudSettingsCopy.websiteOverridden)
                 }
             }
-        } else if cloud.isSignedIn && !isChangingWebsite {
-            LabeledContent {
-                HStack(spacing: 8) {
-                    websiteText
-                    Button("Change…") { isChangingWebsite = true }
-                }
-            } label: {
-                Text("Website")
-            }
-        } else {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Website")
-                HStack(spacing: 8) {
-                    TextField("Website", text: $draft, prompt: Text(CloudSettingsCopy.websitePlaceholder))
-                        .labelsHidden()
-                        .textFieldStyle(.roundedBorder)
-                        .autocorrectionDisabled()
-                        .onSubmit(saveWebsite)
-                    if isChangingWebsite {
-                        Button("Cancel") {
-                            draft = cloud.websiteURL ?? ""
-                            websiteProblem = nil
-                            isChangingWebsite = false
-                        }
-                    }
-                    Button("Save", action: saveWebsite)
-                        .disabled(!canSave)
-                }
-                // A sign-in in progress belongs to the website it started with.
-                .disabled(isSigningIn)
-                if let websiteProblem {
-                    Caption(websiteProblem, ink: .critical)
-                } else {
-                    Caption(isChangingWebsite ? CloudSettingsCopy.changeSignsOut : CloudSettingsCopy.websiteHelp)
-                }
-            }
         }
-    }
-
-    private var websiteText: some View {
-        Text(cloud.websiteURL ?? "")
-            .foregroundStyle(.ink(.secondary))
-            .lineLimit(1)
-            .truncationMode(.middle)
-            .textSelection(.enabled)
-    }
-
-    private var trimmedDraft: String { draft.trimmingCharacters(in: .whitespacesAndNewlines) }
-
-    private var isSigningIn: Bool { cloud.auth == .signingIn }
-
-    private var canSave: Bool { !isSigningIn && trimmedDraft != (cloud.websiteURL ?? "") }
-
-    private func saveWebsite() {
-        let text = trimmedDraft
-        guard canSave else { return }
-        if !text.isEmpty, CloudSettingsCopy.normalizedWebsite(text) == nil {
-            websiteProblem = CloudSettingsCopy.websiteInvalid
-            return
-        }
-        websiteProblem = nil
-        actions.saveCloudWebsite(text)
     }
 
     // MARK: Signed out
@@ -154,6 +81,7 @@ struct CloudSection: View {
             if signingIn {
                 ProgressView().controlSize(.small)
             }
+            // Without a website there is nothing to sign in to.
             Button("Sign in with Google", action: actions.cloudSignIn)
                 .disabled(cloud.websiteURL == nil || signingIn)
         }
@@ -242,11 +170,9 @@ struct CloudSection: View {
 
 /// What the Cloud section says. Pure, so the wording is tested.
 nonisolated enum CloudSettingsCopy {
-    static let websitePlaceholder = "https://your-website.example"
-    static let websiteHelp = "Where sync goes: an https:// address, or http://localhost for development."
-    static let websiteInvalid = "Use an https:// address, or http://localhost for development."
+    /// The website row's value when the build has none.
+    static let noWebsite = "None"
     static let websiteOverridden = "Set by AGENTNOTCH_WEB_URL for this run."
-    static let changeSignsOut = "Saving another website signs you out of this one."
     /// Said once: the app's own sign-in to its website, not Claude's.
     static let fileNote = "The website sign-in is kept in a file only your user can read."
     static let dashboard = "Your sessions and usage from every Mac and account you sync. Share an account there with a code: everyone in its pool sees what it was used for."
@@ -263,15 +189,19 @@ nonisolated enum CloudSettingsCopy {
         return text
     }
 
-    /// The address as it would be saved, or nil when the app won't use it.
-    static func normalizedWebsite(_ text: String) -> String? {
-        CloudWebsite.validated(text)?.absoluteString
+    /// The website as the row shows it: its host (with a port or path when
+    /// it has one), without the `https://` every website has. `http://` is
+    /// kept, so a development server on this Mac reads as one.
+    static func websiteDisplay(_ website: String) -> String {
+        let prefix = "https://"
+        guard website.lowercased().hasPrefix(prefix) else { return website }
+        return String(website.dropFirst(prefix.count))
     }
 
     /// Under "Not signed in".
     static func signInDetail(_ cloud: ClaudeCloudState) -> String {
         if cloud.auth == .signingIn { return "Finish signing in in your browser." }
-        guard cloud.websiteURL != nil else { return "Save a website first. " + fileNote }
+        guard cloud.websiteURL != nil else { return "This build has no website, so it can't sign in or sync." }
         return "Opens Google's sign-in in your browser. " + fileNote
     }
 

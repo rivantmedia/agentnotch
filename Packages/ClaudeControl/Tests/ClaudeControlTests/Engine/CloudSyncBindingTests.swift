@@ -32,7 +32,8 @@ struct CloudSyncBindingTests {
     // MARK: - A request's 401 retry keeps to its sign-in and website
 
     /// The first send goes out with website A's token; before A answers 401
-    /// the user saves website B and signs in there. The retry must not carry
+    /// a sign-in made through website B replaces it (a run pointed at B with
+    /// AGENTNOTCH_WEB_URL shares the session file). The retry must not carry
     /// B's token to A.
     @Test(.timeLimit(.minutes(1)))
     func aRetryNeverCarriesAnotherWebsitesToken() async throws {

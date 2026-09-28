@@ -215,12 +215,16 @@ import SwiftUI
             // A yes given to an earlier build: what it covers now, once.
             Sheet(name: "settings-scope-notice", width: width, height: .fixed(700),
                   view: AnyView(settings(UIFixtures.settingsScopeNotice()))),
-            // The Cloud section alone: no website yet, a website saved, and
-            // signed in with sync on and summaries off.
-            Sheet(name: "settings-cloud-signed-out", width: width, height: .fixed(width < 480 ? 250 : 230),
+            // The Cloud section alone: the build's website, signed out; a
+            // build with no website; a development run's AGENTNOTCH_WEB_URL;
+            // and signed in with sync on and summaries off. The website is
+            // shown, never edited.
+            Sheet(name: "settings-cloud-signed-out", width: width, height: .fixed(width < 480 ? 220 : 200),
                   view: AnyView(cloudSettings(UIFixtures.cloudSignedOut()))),
-            Sheet(name: "settings-cloud-website-set", width: width, height: .fixed(width < 480 ? 250 : 230),
-                  view: AnyView(cloudSettings(UIFixtures.cloudWebsiteSet()))),
+            Sheet(name: "settings-cloud-no-website", width: width, height: .fixed(width < 480 ? 200 : 180),
+                  view: AnyView(cloudSettings(UIFixtures.cloudNoWebsite()))),
+            Sheet(name: "settings-cloud-overridden", width: width, height: .fixed(width < 480 ? 240 : 220),
+                  view: AnyView(cloudSettings(UIFixtures.cloudOverridden()))),
             Sheet(name: "settings-cloud-signed-in", width: width, height: .fixed(width < 480 ? 620 : 530),
                   view: AnyView(cloudSettings(UIFixtures.cloudSignedIn()))),
         ]

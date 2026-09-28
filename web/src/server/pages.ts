@@ -23,9 +23,13 @@ export async function requireViewer(returnTo: string) {
   return viewer;
 }
 
-/** The address to paste into the Mac app, or null when it can't be told. */
+/**
+ * The website's address, for a copy of the Mac app that still asks for one, or null when it
+ * can't be told.
+ */
 export async function siteAddress(): Promise<string | null> {
-  // Optional chaining: a build made with SKIP_ENV_VALIDATION may run without the variable.
+  // NEXT_PUBLIC_SITE_URL, else the Vercel project's production domain (src/env.js); unset, the
+  // address this request came in on.
   return siteAddressFrom(env.NEXT_PUBLIC_SITE_URL ?? null, await headers());
 }
 

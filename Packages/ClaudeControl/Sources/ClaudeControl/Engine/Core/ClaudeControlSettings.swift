@@ -42,12 +42,18 @@ public nonisolated enum ClaudeControlSettings {
         public static let hotKey = prefix + "hotKey"
         public static let didImportVibeNotch = prefix + "didImportVibeNotch"
         public static let claudeBinaryPath = prefix + "claudeBinaryPath"
-        /// The website sync goes to (typed by the user; there is no default).
-        public static let cloudWebsiteURL = prefix + "cloudWebsiteURL"
         public static let cloudSyncEnabled = prefix + "cloudSyncEnabled"
         public static let cloudSummariesEnabled = prefix + "cloudSummariesEnabled"
         /// This Mac's id on the website, made once.
         public static let cloudDeviceId = prefix + "cloudDeviceId"
+    }
+
+    /// Keys no build reads any more, deleted when found.
+    enum RetiredKey {
+        /// The website sync went to, when the user typed it in Settings. It
+        /// comes from the build now (`ClaudeControlConfiguration.websiteURL`);
+        /// `CloudSync.start` deletes a saved one.
+        static let cloudWebsiteURL = Key.prefix + "cloudWebsiteURL"
     }
 
     private static func bool(_ key: String, default value: Bool) -> Bool {
@@ -195,11 +201,6 @@ public nonisolated enum ClaudeControlSettings {
 
     // MARK: - Website
 
-    /// The website's address, as the user entered it (https, or http to this
-    /// Mac). Nil until they do: there is no built-in website. Change it
-    /// through the hub (`setCloudWebsite`), which signs out of the old one.
-    public static var cloudWebsiteURL: String? { store.cloudWebsiteURL }
-
     /// Upload sessions and usage readings to the website (while signed in).
     /// Defaults to off. Change it through the hub (`setCloudSync`).
     public static var cloudSyncEnabled: Bool { store.cloudSyncEnabled }
@@ -268,12 +269,15 @@ extension ClaudeControlSettings {
             nonmutating set { defaults.set(newValue, forKey: Key.didImportVibeNotch) }
         }
 
-        var cloudWebsiteURL: String? {
-            get { defaults.string(forKey: Key.cloudWebsiteURL).flatMap { $0.isEmpty ? nil : $0 } }
-            nonmutating set {
-                if let newValue, !newValue.isEmpty { defaults.set(newValue, forKey: Key.cloudWebsiteURL) }
-                else { defaults.removeObject(forKey: Key.cloudWebsiteURL) }
-            }
+        /// The website the user typed before it came from the build
+        /// (`RetiredKey.cloudWebsiteURL`), taken out of the defaults: what
+        /// was saved (blank as nil), and whether anything was. Once taken,
+        /// it is gone.
+        func takeRetiredCloudWebsiteURL() -> (found: Bool, address: String?) {
+            guard let saved = defaults.object(forKey: RetiredKey.cloudWebsiteURL) else { return (false, nil) }
+            defaults.removeObject(forKey: RetiredKey.cloudWebsiteURL)
+            let address = (saved as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (true, address?.isEmpty == false ? address : nil)
         }
 
         var cloudSyncEnabled: Bool {

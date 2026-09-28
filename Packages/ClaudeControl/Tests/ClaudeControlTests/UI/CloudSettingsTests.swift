@@ -12,21 +12,21 @@ struct CloudSettingsTests {
 
     // MARK: Website
 
-    @Test func theWebsiteFieldAcceptsWhatTheEngineAccepts() {
-        #expect(CloudSettingsCopy.normalizedWebsite("agentnotch.example.com") == "https://agentnotch.example.com")
-        #expect(CloudSettingsCopy.normalizedWebsite("https://agentnotch.example.com/") == "https://agentnotch.example.com")
-        #expect(CloudSettingsCopy.normalizedWebsite("http://localhost:3000") == "http://localhost:3000")
-        #expect(CloudSettingsCopy.normalizedWebsite("http://agentnotch.example.com") == nil)
-        #expect(CloudSettingsCopy.normalizedWebsite("ftp://agentnotch.example.com") == nil)
-        #expect(CloudSettingsCopy.normalizedWebsite("https://me:secret@agentnotch.example.com") == nil)
+    /// The website is shown, never edited: its host (a port or path kept),
+    /// with `http://` left on so a development server reads as one.
+    @Test func theWebsiteRowShowsTheHost() {
+        #expect(CloudSettingsCopy.websiteDisplay("https://agentnotch.rivant.in") == "agentnotch.rivant.in")
+        #expect(CloudSettingsCopy.websiteDisplay("https://agentnotch.example.com:8443/app") == "agentnotch.example.com:8443/app")
+        #expect(CloudSettingsCopy.websiteDisplay("http://localhost:3000") == "http://localhost:3000")
+        #expect(CloudSettingsCopy.noWebsite == "None")
+        #expect(CloudSettingsCopy.websiteOverridden == "Set by AGENTNOTCH_WEB_URL for this run.")
     }
 
     // MARK: Signing in
 
     @Test func signingInNeedsAWebsiteAndSaysWhereTheSignInIsKept() {
-        let none = CloudSettingsCopy.signInDetail(ClaudeCloudState())
-        #expect(none.hasPrefix("Save a website first."))
-        #expect(none.contains(CloudSettingsCopy.fileNote))
+        // A build with no website says so plainly; there is nothing to type.
+        #expect(CloudSettingsCopy.signInDetail(ClaudeCloudState()) == "This build has no website, so it can't sign in or sync.")
         let set = CloudSettingsCopy.signInDetail(ClaudeCloudState(websiteURL: "https://agentnotch.example.com"))
         #expect(set.hasPrefix("Opens Google's sign-in in your browser."))
         #expect(set.contains(CloudSettingsCopy.fileNote))
@@ -136,33 +136,34 @@ struct CloudSettingsTests {
     @Test func theSectionBuildsInEveryState() {
         _ = NSApplication.shared
         let states: [ClaudeCloudState] = [
-            UIFixtures.cloudSignedOut(), UIFixtures.cloudWebsiteSet(), UIFixtures.cloudSignedIn(),
+            UIFixtures.cloudSignedOut(), UIFixtures.cloudNoWebsite(), UIFixtures.cloudOverridden(), UIFixtures.cloudSignedIn(),
             ClaudeCloudState(websiteURL: UIFixtures.cloudWebsite, auth: .signingIn),
             ClaudeCloudState(websiteURL: UIFixtures.cloudWebsite, auth: .error("The website isn't answering.")),
+            ClaudeCloudState(auth: .error("This build has no website to sign in to.")),
             ClaudeCloudState(websiteURL: UIFixtures.cloudWebsite, websiteIsOverridden: true, auth: .signedIn(email: nil),
                              syncEnabled: true, summariesEnabled: true, isSyncing: true, lastError: "Busy"),
         ]
         for (index, cloud) in states.enumerated() {
-            for changing in [false, true] {
-                var model = UIFixtures.settings()
-                model.cloud = cloud
-                let view = SettingsPaneContent(model: model, actions: SettingsPaneActions(), changesCloudWebsite: changing)
-                    .claudeControlTheme(.codenotchDark)
-                let hosting = NSHostingView(rootView: view)
-                hosting.frame = NSRect(x: 0, y: 0, width: 520, height: 900)
-                hosting.layoutSubtreeIfNeeded()
-                #expect(hosting.fittingSize.width > 0, "state \(index)")
-            }
+            var model = UIFixtures.settings()
+            model.cloud = cloud
+            let view = SettingsPaneContent(model: model, actions: SettingsPaneActions())
+                .claudeControlTheme(.codenotchDark)
+            let hosting = NSHostingView(rootView: view)
+            hosting.frame = NSRect(x: 0, y: 0, width: 520, height: 900)
+            hosting.layoutSubtreeIfNeeded()
+            #expect(hosting.fittingSize.width > 0, "state \(index)")
         }
     }
 
-    /// The live pane's fixtures: signed in for the full pane, signed out on
-    /// a first run.
+    /// The live pane's fixtures: signed in for the full pane, signed out
+    /// (the build's website, nothing typed) on a first run.
     @Test func fixturesCoverTheStatesTheSnapshotsShow() {
         #expect(UIFixtures.settings().cloud.isSignedIn)
         #expect(UIFixtures.settings().cloud.syncEnabled && !UIFixtures.settings().cloud.summariesEnabled)
-        #expect(UIFixtures.settingsFirstRun().cloud == ClaudeCloudState())
-        #expect(UIFixtures.cloudWebsiteSet().websiteURL != nil && !UIFixtures.cloudWebsiteSet().isSignedIn)
+        #expect(UIFixtures.settingsFirstRun().cloud == UIFixtures.cloudSignedOut())
+        #expect(UIFixtures.cloudSignedOut().websiteURL != nil && !UIFixtures.cloudSignedOut().isSignedIn)
+        #expect(UIFixtures.cloudNoWebsite().websiteURL == nil && !UIFixtures.cloudNoWebsite().isSignedIn)
+        #expect(UIFixtures.cloudOverridden().websiteIsOverridden && !UIFixtures.cloudOverridden().isSignedIn)
         #expect(SettingsPaneModel().cloud == ClaudeCloudState())
     }
 }
