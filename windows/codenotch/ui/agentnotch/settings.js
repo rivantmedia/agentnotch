@@ -30,6 +30,7 @@
   group.appendChild(status);
   pane.appendChild(heading);
   pane.appendChild(group);
+  window.agentnotchSettings = { pane: pane };
 
   function show(settings) {
     status.textContent = settings && settings.sealed
@@ -48,6 +49,4 @@
     status.hidden = false;
   });
   if (tauri.event) tauri.event.listen('an:settings', function (e) { show(e.payload); });
-
-  window.agentnotchSettings = { pane: pane };
 })();
