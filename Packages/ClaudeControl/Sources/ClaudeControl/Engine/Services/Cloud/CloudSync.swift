@@ -131,12 +131,14 @@ nonisolated final class CloudSyncMemory: @unchecked Sendable {
 
     /// A session as last sent: the hash of its payload without the summary,
     /// and of the summary sent with it; whether it had ended; the transcript
-    /// it was built from.
+    /// it was built from; how it was built (`CloudSyncPass.payloadVersion`,
+    /// nil before there was one).
     nonisolated struct Record: Codable, Equatable, Sendable {
         var base: String
         var summary: String?
         var ended = false
         var transcript: TranscriptStamp?
+        var version: Int?
     }
 
     nonisolated struct Contents: Codable, Equatable, Sendable {
@@ -198,13 +200,15 @@ nonisolated final class CloudSyncMemory: @unchecked Sendable {
         }
     }
 
-    /// The session was built again from a transcript that moved, and came
-    /// out as it was sent: remember the transcript, so the next pass needs
-    /// only a stat.
-    func noteTranscript(_ key: String, _ transcript: TranscriptStamp?) {
+    /// The session was built again, from a transcript that moved or in a
+    /// newer way, and came out as it was sent: remember the transcript and
+    /// the way, so the next pass needs only a stat.
+    func noteUnchanged(_ key: String, as record: Record) {
         lock.withLock {
-            guard var sent = contents.sessions[key], sent.transcript != transcript else { return }
-            sent.transcript = transcript
+            guard var sent = contents.sessions[key],
+                  sent.transcript != record.transcript || sent.version != record.version else { return }
+            sent.transcript = record.transcript
+            sent.version = record.version
             contents.sessions[key] = sent
             file.save(contents)
         }
@@ -215,7 +219,7 @@ nonisolated final class CloudSyncMemory: @unchecked Sendable {
             for (key, record) in records {
                 let previous = contents.sessions[key]
                 contents.sessions[key] = Record(base: record.base, summary: record.summary ?? previous?.summary,
-                                                ended: record.ended, transcript: record.transcript)
+                                                ended: record.ended, transcript: record.transcript, version: record.version)
             }
             contents.lastSyncAt = date
             file.save(contents)
@@ -304,6 +308,12 @@ nonisolated enum CloudSyncPass {
     /// pass, 30 seconds on. Well under the website's burst (12 a user,
     /// shared by all of the user's Macs), so a catch-up isn't refused.
     static let maxRequestsPerPass = 5
+    /// How a session is built for the website. One sent as ended by an
+    /// earlier way is built again once, and sent again if it comes out
+    /// different. 2: sessions whose cost Claude Code didn't report, or
+    /// reported where it can't be used (split between accounts, or outgrown
+    /// by the session), are priced from their transcripts.
+    static let payloadVersion = 2
 
     nonisolated struct Input: Sendable {
         var accounts: [CloudAccountInfo]
@@ -361,10 +371,11 @@ nonisolated enum CloudSyncPass {
             .filter { allowed[$0.accountKey] != nil }
             .sorted { lhs, rhs in lhs.startedAt != rhs.startedAt ? lhs.startedAt < rhs.startedAt : lhs.key < rhs.key }
         for entry in entries {
-            // Sent as ended, from a transcript that hasn't moved since, and
-            // no new summary: nothing can have changed (a stat, no read).
-            if let sent = stores.memory.sent(entry.key), sent.ended, entry.endedAt != nil, let stamp = sent.transcript,
-               let path = entry.transcriptPath, TranscriptStamp.of(path) == stamp,
+            // Sent as ended, the way sessions are built now, from a
+            // transcript that hasn't moved since, and no new summary:
+            // nothing can have changed (a stat, no read).
+            if let sent = stores.memory.sent(entry.key), sent.ended, sent.version == payloadVersion, entry.endedAt != nil,
+               let stamp = sent.transcript, let path = entry.transcriptPath, TranscriptStamp.of(path) == stamp,
                !hasNewSummary(entry.key, sent: sent, stores: stores, includeSummaries: input.includeSummaries) {
                 continue
             }
@@ -381,7 +392,7 @@ nonisolated enum CloudSyncPass {
             if stores.memory.needsSending(entry.key, record) {
                 changed.append((built.session, record))
             } else {
-                stores.memory.noteTranscript(entry.key, record.transcript)
+                stores.memory.noteUnchanged(entry.key, as: record)
             }
         }
         stores.scanner.save()
@@ -457,12 +468,21 @@ nonisolated enum CloudSyncPass {
         if source == .other { source = CloudSessionSource.from(entrypoint: totals.entrypoint) }
         // A session more than one account ran: the status line's cost is the
         // whole process's (a resumed session starts from the total it had),
-        // which can't be divided between them, so no part carries one. Its
+        // which can't be divided between them, so no part carries it. Its
         // tokens are split exactly, by who ran it when. Split means another
         // owner (nobody included) has responses in it: a stretch of nobody
         // with none (a session placed a moment after it started) takes
         // nothing from it.
         let isSplit = Self.isSplit(totals, accountKey: entry.accountKey)
+        // Claude Code's own figure when it gave one, else the part's
+        // responses at list prices: sessions no status line ran for (the
+        // VS Code extension's chat panel, Claude Desktop, the SDK), found
+        // only on disk, or split. Claude Code's counts calls the transcript
+        // doesn't record, so it is the larger unless it no longer covers the
+        // session (continued where no status line runs, or by a process
+        // that didn't restore the earlier total): then the estimate is.
+        let reported = isSplit ? nil : entry.costUsd
+        let costUsd = [reported, part.estimatedCostUsd].compactMap { $0 }.max()
         let session = CloudSyncRequest.Session(
             accountKey: entry.accountKey,
             sessionId: entry.sessionId,
@@ -477,7 +497,7 @@ nonisolated enum CloudSyncPass {
             endedAt: endedAt,
             messageCount: part.messageCount,
             tokens: part.tokens.contract,
-            costUsd: isSplit ? nil : entry.costUsd,
+            costUsd: costUsd,
             summary: includeSummaries ? stores.summaries.summary(for: entry.key)?.contract : nil
         )
         return (session, TranscriptStamp(bytes: totals.transcriptBytes, modified: totals.transcriptModified))
@@ -490,8 +510,8 @@ nonisolated enum CloudSyncPass {
     }
 
     /// What is remembered of a sent session: hashes of its payload without
-    /// its summary and of the summary, whether it had ended, and the
-    /// transcript it was built from. Pure.
+    /// its summary and of the summary, whether it had ended, the transcript
+    /// it was built from, and how. Pure.
     static func record(for session: CloudSyncRequest.Session, transcript: TranscriptStamp? = nil) -> CloudSyncMemory.Record {
         let encoder = CloudJSON.makeEncoder()
         var base = session
@@ -499,7 +519,7 @@ nonisolated enum CloudSyncPass {
         let baseHash = (try? encoder.encode(base)).map(CloudKeys.sha256Hex) ?? UUID().uuidString
         let summaryHash = session.summary.flatMap { try? encoder.encode($0) }.map(CloudKeys.sha256Hex)
         return CloudSyncMemory.Record(base: baseHash, summary: summaryHash, ended: session.endedAt != nil,
-                                      transcript: transcript)
+                                      transcript: transcript, version: payloadVersion)
     }
 
     /// Add the sessions found on disk in folders only one account uses,

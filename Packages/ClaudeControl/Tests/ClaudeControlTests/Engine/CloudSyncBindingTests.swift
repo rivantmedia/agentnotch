@@ -4,10 +4,10 @@ import Testing
 
 /// Regressions for the fix check's open items, over the same stand-in
 /// website and engine as `CloudSyncTests`: a pass and each request stay
-/// with the sign-in and website they started with, a split session carries
-/// no cost, a pass sends at most five requests, the install secret is made
-/// only when a project key is needed, and turning summaries off deletes the
-/// ones never sent.
+/// with the sign-in and website they started with, a split session's parts
+/// are each priced by their own responses, a pass sends at most five
+/// requests, the install secret is made only when a project key is needed,
+/// and turning summaries off deletes the ones never sent.
 @MainActor
 struct CloudSyncBindingTests {
     typealias Harness = CloudSyncTests.Harness
@@ -185,9 +185,9 @@ struct CloudSyncBindingTests {
         #expect(harness.sync.state.lastError == nil)
     }
 
-    // MARK: - A split session carries no cost
+    // MARK: - A split session: each part priced on its own
 
-    @Test func aSessionSplitAcrossAccountsSendsNoCostForAnyPart() async throws {
+    @Test func aSessionSplitAcrossAccountsPricesEachPartOnItsOwn() async throws {
         let harness = Harness()
         let personal = CloudFixture.account, work = CloudFixture.workAccount
         harness.environment.accountList = [personal, work]
@@ -207,7 +207,8 @@ struct CloudSyncBindingTests {
         #expect(first["costUsd"] as? Double == 0.37)
 
         // Resumed as the work account: Claude Code restored the total so far
-        // and adds to it, so the figure can't be divided.
+        // and adds to it, so its figure can't be divided. Each part is its
+        // own responses at list prices instead.
         try L.write([
             L.user("go on", session: id, at: CloudFixture.stamp(1000)),
             L.assistant(id: "m2", request: "r2", session: id, input: 7, output: 3, at: CloudFixture.stamp(1010)),
@@ -224,7 +225,8 @@ struct CloudSyncBindingTests {
             ($0["accountKey"] as? String ?? "", $0)
         }, uniquingKeysWith: { a, _ in a })
         let mine = try #require(rows[personal.accountKey]), theirs = try #require(rows[work.accountKey])
-        #expect(mine["costUsd"] is NSNull && theirs["costUsd"] is NSNull)
+        // Opus 4.5: 100 in and 10 out; 10 in and 4 out.
+        #expect(mine["costUsd"] as? Double == 0.00075 && theirs["costUsd"] as? Double == 0.00015)
         // Tokens stay split exactly.
         #expect(mine["tokens"] as? [String: Int] == ["input": 100, "output": 10, "cacheCreation": 0, "cacheRead": 0])
         #expect(theirs["tokens"] as? [String: Int] == ["input": 10, "output": 4, "cacheCreation": 0, "cacheRead": 0])

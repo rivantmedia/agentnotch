@@ -3,10 +3,12 @@
 //  ClaudeControl
 //
 //  Per-session token totals from Claude Code's transcripts, for sync:
-//  input, output, cache writes and cache reads, subagents included; how many
-//  responses; the models used, most used first; the first and last
-//  timestamp; and, for sessions found only on disk, the working directory,
-//  entrypoint and title the transcript records.
+//  input, output, cache writes and cache reads, subagents included; what
+//  they cost at list prices (`ModelPricing`), for sessions whose cost from
+//  Claude Code is missing or can't be used; how many responses; the models
+//  used, most used first; the first and last timestamp; and, for sessions
+//  found only on disk, the working directory, entrypoint and title the
+//  transcript records.
 //
 //  What counts, and once:
 //  - A session is its transcript `<project>/<sessionId>.jsonl` plus its
@@ -86,6 +88,12 @@ nonisolated struct SessionTokenPart: Equatable, Sendable {
     var models: [String] = []
     var firstTimestamp: Date?
     var lastTimestamp: Date?
+    /// What its responses cost at list prices; nil when a model that made
+    /// one has no known price.
+    var cost: NanoUSD?
+
+    /// The cost in dollars, as the website gets it.
+    var estimatedCostUsd: Double? { cost.map(ModelPricing.dollars) }
 }
 
 /// One session's totals over its files.
@@ -98,6 +106,9 @@ nonisolated struct SessionTokenSummary: Equatable, Sendable {
     var models: [String] = []
     var firstTimestamp: Date?
     var lastTimestamp: Date?
+    /// What its responses cost at list prices; nil when a model that made
+    /// one has no known price.
+    var cost: NanoUSD?
     /// The working directory the transcript's first line records.
     var cwd: String?
     var entrypoint: String?
@@ -131,6 +142,8 @@ nonisolated final class SessionTokenScanner: @unchecked Sendable {
         var usage: CloudTokenTotals
         /// The account it was counted for.
         var owner: String
+        /// At list prices; nil when its model has no known price.
+        var cost: NanoUSD?
     }
 
     /// A file's share of one account's part.
@@ -140,10 +153,30 @@ nonisolated final class SessionTokenScanner: @unchecked Sendable {
         var modelCounts: [String: Int] = [:]
         var first: Date?
         var last: Date?
+        /// What the priced responses cost, and how many had no known price.
+        var cost: NanoUSD = 0
+        var unpriced = 0
 
         mutating func note(_ stamp: Date) {
             first = min(first ?? stamp, stamp)
             last = max(last ?? stamp, stamp)
+        }
+
+        // Wrapping, so a damaged transcript's sums can't trap and a
+        // removal always undoes its add; `knownCost` refuses what wrapped.
+        mutating func add(cost response: NanoUSD?) {
+            if let response { cost &+= response } else { unpriced += 1 }
+        }
+
+        mutating func remove(cost response: NanoUSD?) {
+            if let response { cost &-= response } else { unpriced -= 1 }
+        }
+
+        /// Nil while any response has no known price, or when the sum is
+        /// beyond what the website takes.
+        var knownCost: NanoUSD? {
+            guard unpriced <= 0, cost >= 0, Double(cost) < CloudContract.Limit.costUsd * 1_000_000_000 else { return nil }
+            return cost
         }
     }
 
@@ -173,8 +206,9 @@ nonisolated final class SessionTokenScanner: @unchecked Sendable {
     }
 
     nonisolated struct State: Codable, Equatable, Sendable {
-        /// 3: totals per owner account.
-        static let currentVersion = 3
+        /// 3: totals per owner account. 4: and what they cost (every
+        /// transcript is read again once).
+        static let currentVersion = 4
         var version = State.currentVersion
         /// By real path.
         var files: [String: FileState] = [:]
@@ -536,12 +570,14 @@ nonisolated final class SessionTokenScanner: @unchecked Sendable {
         )
         switch claims[key] {
         case nil:
+            let cost = ModelPricing.cost(model: model, usage: usage)
             claims[key] = path
             file.claimed.append(key)
             file.parts[owner, default: Part()].totals.add(entry)
             file.parts[owner, default: Part()].responses += 1
+            file.parts[owner, default: Part()].add(cost: cost)
             if !model.isEmpty { file.parts[owner, default: Part()].modelCounts[model, default: 0] += 1 }
-            file.recent.append(Response(key: key, model: model, usage: entry, owner: owner))
+            file.recent.append(Response(key: key, model: model, usage: entry, owner: owner, cost: cost))
             if file.recent.count > Self.rememberedResponses {
                 file.recent.removeFirst(file.recent.count - Self.rememberedResponses)
             }
@@ -550,8 +586,12 @@ nonisolated final class SessionTokenScanner: @unchecked Sendable {
             // wins, in the part it was first counted in.
             guard let index = file.recent.lastIndex(where: { $0.key == key }) else { return }
             let counted = file.recent[index].owner
+            let cost = ModelPricing.cost(model: model.isEmpty ? file.recent[index].model : model, usage: usage)
             file.parts[counted, default: Part()].totals.subtract(file.recent[index].usage)
             file.parts[counted, default: Part()].totals.add(entry)
+            file.parts[counted, default: Part()].remove(cost: file.recent[index].cost)
+            file.parts[counted, default: Part()].add(cost: cost)
+            file.recent[index].cost = cost
             let previousModel = file.recent[index].model
             if previousModel != model, !model.isEmpty {
                 if !previousModel.isEmpty {
@@ -601,6 +641,9 @@ nonisolated final class SessionTokenScanner: @unchecked Sendable {
         func add(_ part: Part, to total: inout Part) {
             total.totals.add(part.totals)
             total.responses += part.responses
+            let (cost, overflowed) = total.cost.addingReportingOverflow(part.cost)
+            total.cost = cost
+            total.unpriced += part.unpriced + (overflowed ? 1 : 0)
             for (model, count) in part.modelCounts { total.modelCounts[model, default: 0] += count }
             if let first = part.first { total.first = min(total.first ?? first, first) }
             if let last = part.last { total.last = max(total.last ?? last, last) }
@@ -625,9 +668,10 @@ nonisolated final class SessionTokenScanner: @unchecked Sendable {
         result.models = models(whole.modelCounts)
         result.firstTimestamp = whole.first
         result.lastTimestamp = whole.last
+        result.cost = whole.knownCost
         result.parts = parts.mapValues { part in
             SessionTokenPart(tokens: part.totals, messageCount: part.responses, models: models(part.modelCounts),
-                             firstTimestamp: part.first, lastTimestamp: part.last)
+                             firstTimestamp: part.first, lastTimestamp: part.last, cost: part.knownCost)
         }
         result.cwd = mainFile.cwd
         result.entrypoint = mainFile.entrypoint

@@ -151,7 +151,7 @@ export default async function AccountPage({
             detail={
               formatCost(account.last30Days.costUsd)
                 ? `${formatCost(account.last30Days.costUsd)} in 30 days`
-                : "Claude Code's estimate, when reported"
+                : "No cost estimate"
             }
           />
           <Stat

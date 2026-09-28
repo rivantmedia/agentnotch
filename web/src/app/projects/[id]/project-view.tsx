@@ -208,7 +208,7 @@ function ProjectUsage({
         <Stat
           label={`Cost, ${over}`}
           value={cost ?? "–"}
-          detail={cost ? undefined : "Claude Code's estimate, when reported"}
+          detail={cost ? "Estimated" : "No cost estimate"}
         />
         <Stat
           label="Accounts"

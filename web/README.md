@@ -15,7 +15,8 @@ Names and numbers only:
 
 - the project folder's name (never its path);
 - session titles, model ids, start and end times;
-- token counts and Claude Code's cost estimate;
+- token counts and an estimated cost (Claude Code's own when it reported one, else worked out
+  the same way from the tokens, at API list prices);
 - usage-limit readings from Claude Code and Claude Desktop;
 - each account's email, organization, plan and the user's own label for it;
 - the Mac's name and the app version.

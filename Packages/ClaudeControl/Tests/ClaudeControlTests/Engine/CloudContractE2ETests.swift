@@ -257,22 +257,28 @@ struct CloudContractE2ETests {
         let b = try row(Self.sessionB, Self.work)
         #expect(tokens(b) == ["input": 5164, "output": 10050, "cacheCreation": 64000, "cacheRead": 3_211_052_654])
         #expect(b["messageCount"] as? Int == 2 && b["source"] as? String == "vscode" && project(b) == "billing-service")
-        #expect(b["title"] is NSNull && b["endedAt"] is NSNull && b["costUsd"] as? Double == 1.25 && b["summary"] == nil)
+        #expect(b["title"] is NSNull && b["endedAt"] is NSNull && b["summary"] == nil)
+        // Its billions of cache reads at Sonnet 4.5's list prices come to more than the $1.25
+        // reported: the larger goes.
+        #expect(b["costUsd"] as? Double == 963.722038)
 
-        // Resumed under the other account: each part only its own responses, and no cost (it can't be split).
+        // Resumed under the other account: each part only its own responses, and not Claude Code's
+        // cost (it can't be split) but those responses at list prices.
         let mine = try row(Self.sessionC, Self.personal), theirs = try row(Self.sessionC, Self.work)
         #expect(tokens(mine) == ["input": 400, "output": 90, "cacheCreation": 1500, "cacheRead": 9000])
         #expect(tokens(theirs) == ["input": 75, "output": 430, "cacheCreation": 0, "cacheRead": 23000])
         #expect(mine["messageCount"] as? Int == 1 && theirs["messageCount"] as? Int == 2)
         #expect(mine["endedAt"] as? String == at(1500) && theirs["endedAt"] is NSNull)
-        #expect(mine["costUsd"] is NSNull && theirs["costUsd"] is NSNull)
+        #expect(mine["costUsd"] as? Double == 0.018125 && theirs["costUsd"] as? Double == 0.013575)
         #expect(project(mine) == "données-client" && project(theirs) == "données-client")
         #expect((mine["project"] as? [String: Any])?["key"] as? String != (theirs["project"] as? [String: Any])?["key"] as? String)
 
         let d = try row(Self.sessionD, Self.personal)
         #expect(tokens(d) == ["input": 1230, "output": 1240, "cacheCreation": 5000, "cacheRead": 5000])
         #expect(d["source"] as? String == "sdk" && d["title"] as? String == "Monthly usage report" && project(d) == "reports")
-        #expect(d["startedAt"] as? String == at(60) && d["endedAt"] as? String == at(120) && d["costUsd"] is NSNull)
+        #expect(d["startedAt"] as? String == at(60) && d["endedAt"] as? String == at(120))
+        // Found only on disk: no status line reported a cost, so its responses at list prices.
+        #expect(d["costUsd"] as? Double == 0.04254)
 
         let usage = try #require(object["usage"] as? [[String: Any]])
         #expect(usage.compactMap { $0["source"] as? String }.sorted() == ["claudeJson", "desktop", "probe", "statusLine"])

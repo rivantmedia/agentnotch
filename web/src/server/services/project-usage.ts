@@ -37,7 +37,7 @@ import {
 export type UsageTotals = {
   sessions: number;
   tokens: TokenTotals;
-  /** The sum of the costs Claude Code reported; null when none did. */
+  /** The sum of the sessions' costs (Claude Code's own, else estimated at list prices); null when none has one. */
   costUsd: number | null;
 };
 

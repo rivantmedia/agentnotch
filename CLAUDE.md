@@ -341,6 +341,17 @@ Packages/ClaudeControl/Scripts/embed-scripts.sh [--check]
   sent. The backfill reads only real (unshared) `projects/` folders, oldest transcript first,
   and only transcripts begun after `CloudFolderLogins` first saw the folder signed in as its
   account (unknown before: never guessed).
+- **Cost:** `ModelPricing` prices each response from the transcript the way Claude Code
+  prices its own `total_cost_usd` (per model and token kind, 1-hour cache writes,
+  `inference_geo` "us" ×1.1, web searches, advisor-tool iterations, fast mode). A session's
+  `costUsd` is the larger of Claude Code's status-line figure (only when one account ran it)
+  and its part's estimate; an unknown model leaves the estimate nil. The status line never
+  runs in the VS Code extension's chat panel, Claude Desktop or the SDK. Prices are Claude
+  Code 2.1.282's: the model catalog's `pricing_tiers` and each model's tier, plus the fast
+  prices, which are constants in its cost function's `speed === "fast"` branch, outside the
+  catalog. When updating them, bump `SessionTokenScanner.State.currentVersion` (rescans every
+  transcript) and `CloudSyncPass.payloadVersion` (rebuilds sessions already sent as ended,
+  once).
 - **Claude Desktop:** its usage readings come through `UsageStore` (only with the Desktop cache
   setting on). A Desktop-hosted session is recorded only when
   `~/Library/Application Support/Claude/claude-code-sessions` lists exactly one account and it is

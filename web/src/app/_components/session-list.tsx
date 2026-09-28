@@ -130,8 +130,8 @@ function SessionRow({
           </p>
           <p className="text-sm text-ink-2 tabular-nums">
             {cost ?? (
-              <span title="Claude Code didn't report a cost for this session">
-                No cost reported
+              <span title="No cost was reported or estimated for this session">
+                No cost estimate
               </span>
             )}
           </p>

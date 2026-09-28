@@ -37,7 +37,7 @@ export type UsageWindowReading = {
 export type PeriodTotals = {
   sessions: number;
   tokens: TokenTotals;
-  /** Sum of the costs Claude Code reported; null when none did. */
+  /** Sum of the sessions' costs (Claude Code's own, else estimated at list prices); null when none has one. */
   costUsd: number | null;
 };
 

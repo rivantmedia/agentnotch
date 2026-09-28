@@ -300,18 +300,26 @@ from every Mac that syncs. Nothing leaves this Mac until you sign in and turn sy
     so the path can't be guessed back from the key), Claude Code's title for it, where it ran
     (terminal, VS Code, Claude Desktop, SDK), its models, start, last activity and end times,
     how many responses, its token counts (input, output, cache writes and reads, subagents
-    included) and Claude Code's cost estimate when the status line gave one. A session resumed
-    under another account (Claude Parallel Profiles' "switch account, continue the same
-    conversation") is sent once per account, each with only the responses and tokens made
-    while that account ran it, and with no cost: the status line's cost is the whole Claude
+    included) and an estimated cost: Claude Code's own figure when the status line gave one
+    (at list prices, or the organization's rates when managed settings set `modelPricing`),
+    otherwise the app's own at API list prices, worked out from the transcript's responses the
+    way Claude Code does (per model: input, output, cache writes and reads, web searches, the
+    advisor tool, fast mode), from the prices in Claude Code's own model catalog. A model it has
+    no price for leaves the cost empty. The status line never runs for sessions in the VS Code
+    extension's chat panel, Claude Desktop or the SDK, so theirs is the app's estimate; so is
+    that of a session continued there after a terminal run, once the app's is the larger. On a
+    subscription it is what the usage would have cost through the API, not what was paid. A
+    session resumed under another account (Claude Parallel Profiles' "switch account, continue
+    the same conversation") is sent once per account, each with only the responses, tokens and
+    estimated cost of the time that account ran it: the status line's cost is the whole Claude
     Code process's total (a resumed session starts from what it had already spent), so it
     can't be divided between the accounts.
   - Only responses the app can put on an account for certain. While it can't tell which
     account a running session runs as (a `~/.claude` that Claude Parallel Profiles is
     switching between accounts, a Claude Desktop session whose record isn't found, below),
     that session's new responses count for no account: its account's part ends at its last
-    activity the app was sure of (sent, like a resumed session's, with no cost), and nothing
-    it does meanwhile is ever synced under a guess.
+    activity the app was sure of (sent, like a resumed session's, with only its part's
+    estimated cost), and nothing it does meanwhile is ever synced under a guess.
     Once the account is certain again, counting goes on from then (for a new process of the
     session, from when that process started). A session first seen that way counts only from
     its first process the app is sure of.

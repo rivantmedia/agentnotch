@@ -172,7 +172,7 @@ export function UsagePie({
             {shown.label}
           </p>
           <p className="text-ink-3 tabular-nums">
-            {formatCost(shown.costUsd) ?? "No cost reported"} ·{" "}
+            {formatCost(shown.costUsd) ?? "No cost estimate"} ·{" "}
             {plural(shown.sessions, "session", "sessions")}
           </p>
         </div>

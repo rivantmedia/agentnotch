@@ -55,6 +55,37 @@ struct SessionTokenScannerTests {
         #expect(scanner.cachedSummary(of: a) == summary)
     }
 
+    @Test func pricesEachResponseOnceAtItsModelsPrices() throws {
+        let dir = try Projects("scan-cost")
+        try L.write([
+            L.user("go", session: a, at: CloudFixture.stamp(0)),
+            // Written twice as it streamed: priced once, at its last usage.
+            L.assistant(id: "msg_1", request: "req_1", session: a, input: 10, output: 1, cacheCreation: 100, cacheRead: 1000,
+                        at: CloudFixture.stamp(1)),
+            L.assistant(id: "msg_1", request: "req_1", session: a, input: 10, output: 40, cacheCreation: 100, cacheRead: 1000,
+                        at: CloudFixture.stamp(2), toolUse: true),
+            L.assistant(id: "msg_2", request: "req_2", session: a, model: "claude-haiku-4-5", input: 5, output: 7,
+                        at: CloudFixture.stamp(3)),
+            L.assistant(id: "msg_3", request: "req_3", session: a, model: "<synthetic>", input: 999, output: 999,
+                        at: CloudFixture.stamp(4)),
+        ], to: dir.transcript(a))
+        let file = URL(fileURLWithPath: dir.root).appendingPathComponent("scan-state.json")
+        let scanner = SessionTokenScanner(fileURL: file, persists: true)
+        let summary = try #require(scanner.scan(sessionId: a, transcriptPath: dir.transcript(a)))
+        // Per million: Opus 4.5 10×5 + 40×25 + 100×6.25 + 1000×0.5 = 2175, Haiku 4.5 5×1 + 7×5 = 40.
+        #expect(summary.cost == 2_215_000)
+        #expect(summary.part(for: "").cost == 2_215_000 && summary.part(for: "").estimatedCostUsd == 0.002215)
+        // Kept with the watermarks.
+        scanner.saveNow()
+        #expect(SessionTokenScanner(fileURL: file, persists: true).cachedSummary(of: a)?.cost == 2_215_000)
+
+        // A model with no known price: the cost is unknown, not a guess.
+        try L.write([L.assistant(id: "msg_4", request: "req_4", session: a, model: "claude-opus-9", input: 1, output: 1,
+                                 at: CloudFixture.stamp(5))], to: dir.transcript(a), append: true)
+        let unknown = try #require(scanner.scan(sessionId: a, transcriptPath: dir.transcript(a)))
+        #expect(unknown.messageCount == 3 && unknown.cost == nil && unknown.part(for: "").estimatedCostUsd == nil)
+    }
+
     @Test func subagentsCountOnceWhereverTheirLinesAre() throws {
         let dir = try Projects("scan-agents")
         try L.write([
@@ -210,6 +241,8 @@ struct SessionTokenScannerTests {
         #expect(theirs.firstTimestamp == CloudFixture.base.addingTimeInterval(120))
         #expect(theirs.models.contains("claude-haiku-4-5") && !mine.models.contains("claude-haiku-4-5"))
         #expect(after.messageCount == 4 && after.tokens.input == 4330)
+        // Each part priced by its own responses (per million: Opus 4.5 75 + 150; Haiku 4.5 315, Opus 4.5 20100).
+        #expect(mine.cost == 225_000 && theirs.cost == 20_415_000 && after.cost == 20_640_000)
         #expect(scanner.cachedSummary(of: a) == after)
 
         // Owners that disagree with what was counted: counted again.
@@ -217,6 +250,7 @@ struct SessionTokenScannerTests {
         let recounted = try #require(scanner.scan(sessionId: a, transcriptPath: dir.transcript(a), owners: otherWay))
         #expect(recounted.part(for: second).messageCount == 4 && recounted.part(for: first).messageCount == 0)
         #expect(recounted.tokens == after.tokens)
+        #expect(recounted.part(for: second).cost == 20_640_000 && recounted.part(for: first).cost == nil)
     }
 
     @Test func readsOnlyWhatWasAddedAndRecountsARewrite() throws {
@@ -251,6 +285,8 @@ struct SessionTokenScannerTests {
         try more.close()
         let grown = try #require(reloaded.scan(sessionId: a, transcriptPath: path))
         #expect(grown.tokens.input == 35 && grown.messageCount == 3)
+        // Priced across the reload too (per million: 75 + 150 + 150).
+        #expect(grown.cost == 375_000)
 
         // Rewritten shorter: counted again from the start, nothing doubled.
         try L.write([

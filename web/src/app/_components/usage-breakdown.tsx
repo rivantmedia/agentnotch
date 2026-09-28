@@ -271,8 +271,8 @@ function BreakdownItem({
           ) : (
             <>
               {cost ?? (
-                <span title="Claude Code didn't report a cost for these sessions">
-                  No cost reported
+                <span title="No cost was reported or estimated for these sessions">
+                  No cost estimate
                 </span>
               )}{" "}
               · {plural(sessions, "session", "sessions")}

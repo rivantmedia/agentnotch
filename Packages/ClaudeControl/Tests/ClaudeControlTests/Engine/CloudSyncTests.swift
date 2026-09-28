@@ -373,9 +373,11 @@ struct CloudSyncTests {
         let last = try sent(harness.syncRequests.count - 1)
         #expect(last["messageCount"] as? Int == 3)
         #expect((last["tokens"] as? [String: Int])?["output"] == 56)
-        // Its stretch of nobody has responses: really split, so no cost.
+        // Its stretch of nobody has responses: really split, so not Claude
+        // Code's figure but its own responses at list prices (Opus 4.5's two,
+        // Haiku 4.5's one).
         #expect(try sent(0)["costUsd"] as? Double == 0.37)
-        #expect(last["costUsd"] as? Double == nil)
+        #expect(last["costUsd"] as? Double == 0.010565)
     }
 
     /// Regression (review): a session reported unsure only until the hub
@@ -397,6 +399,83 @@ struct CloudSyncTests {
         let session = try #require((harness.body(request)["sessions"] as? [[String: Any]])?.first)
         #expect(session["messageCount"] as? Int == 2)
         #expect(session["costUsd"] as? Double == 0.37)
+    }
+
+    /// A session no status line reported a cost for (the VS Code
+    /// extension's chat panel, Claude Desktop, the SDK) is sent with its
+    /// responses at list prices; Claude Code's own figure wins once it
+    /// gives one.
+    @Test func aSessionWithoutClaudeCodesCostIsPricedFromItsTranscript() async throws {
+        let harness = Harness()
+        await harness.start()
+        let id = CloudFixture.sessionA
+        try harness.writeSession(id)
+        var panel = harness.observation(id, entrypoint: "claude-vscode")
+        panel.costUsd = nil
+        harness.sync.observeLive([panel], liveIDs: [id])
+        await harness.sync.syncNow()
+        func lastSent() throws -> [String: Any] {
+            let request = try #require(harness.syncRequests.last)
+            return try #require((harness.body(request)["sessions"] as? [[String: Any]])?.first)
+        }
+        #expect(try lastSent()["source"] as? String == "vscode")
+        // Opus 4.5: 100 in, 50 out, 1000 written, 5000 read; Haiku 4.5: 10 in, 5 out.
+        #expect(try lastSent()["costUsd"] as? Double == 0.010535)
+
+        panel.costUsd = 0.37
+        harness.sync.observeLive([panel], liveIDs: [id])
+        await harness.sync.syncNow()
+        #expect(harness.syncRequests.count == 2)
+        #expect(try lastSent()["costUsd"] as? Double == 0.37)
+
+        // A figure the session outgrew (continued where no status line
+        // runs, or a process that didn't restore the earlier total): the
+        // estimate, which is larger.
+        panel.costUsd = 0.004
+        harness.sync.observeLive([panel], liveIDs: [id])
+        await harness.sync.syncNow()
+        #expect(harness.syncRequests.count == 3)
+        #expect(try lastSent()["costUsd"] as? Double == 0.010535)
+    }
+
+    /// Sessions sent as ended before costs were estimated are built again
+    /// once: sent again when that gives them a cost, only remembered as
+    /// built the new way when it doesn't change them.
+    @Test func sessionsSentBeforeCostsWereEstimatedAreBuiltAgainOnce() async throws {
+        let harness = Harness()
+        await harness.start()
+        let id = CloudFixture.sessionA
+        try harness.writeSession(id)
+        var panel = harness.observation(id, entrypoint: "claude-vscode")
+        panel.costUsd = nil
+        harness.sync.observeLive([panel], liveIDs: [id])
+        harness.sync.observeLive([], liveIDs: [])
+        harness.clock.advance(61)
+        await harness.sync.tick()
+        await harness.sync.syncNow()
+        let stores = try #require(harness.sync.stores)
+        let key = try #require(stores.ledger.entry(id)?.key)
+        let sent = try #require(stores.memory.sent(key))
+        #expect(sent.ended && sent.version == CloudSyncPass.payloadVersion)
+        let requests = harness.syncRequests.count
+
+        // As an earlier version remembers it: sent as ended, with no cost.
+        stores.memory.markSent([key: CloudSyncMemory.Record(base: "sent without a cost", summary: nil, ended: true,
+                                                            transcript: sent.transcript)], at: harness.clock.now)
+        await harness.sync.syncNow()
+        #expect(harness.syncRequests.count == requests + 1)
+        let again = try #require(harness.syncRequests.last)
+        let session = try #require((harness.body(again)["sessions"] as? [[String: Any]])?.first)
+        #expect(session["costUsd"] as? Double == 0.010535 && session["endedAt"] is String)
+        await harness.sync.syncNow()
+        #expect(harness.syncRequests.count == requests + 1)
+
+        // One the new way leaves as it was: not sent, remembered as built anew.
+        stores.memory.markSent([key: CloudSyncMemory.Record(base: sent.base, summary: nil, ended: true,
+                                                            transcript: sent.transcript)], at: harness.clock.now)
+        await harness.sync.syncNow()
+        #expect(harness.syncRequests.count == requests + 1)
+        #expect(stores.memory.sent(key)?.version == CloudSyncPass.payloadVersion)
     }
 
     /// Regression (M3): a session Claude Desktop hosts is recorded as the

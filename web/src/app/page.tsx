@@ -12,7 +12,7 @@ const FEATURES = [
   },
   {
     title: "Sessions by project",
-    body: "Each Claude Code session with its title, project folder name, models, tokens and Claude Code's cost estimate, grouped by the project it ran in.",
+    body: "Each Claude Code session with its title, project folder name, models, tokens and estimated cost, grouped by the project it ran in.",
   },
   {
     title: "Every Mac you use",
@@ -31,7 +31,7 @@ const FEATURES = [
 const SENT = [
   "Project folder names (the last part of the path, never the path)",
   "Session titles, models, start and end times",
-  "Token counts and Claude Code's cost estimate",
+  "Token counts and estimated cost",
   "Usage-limit percentages and reset times",
   "Each account's email, plan and your own name for it",
   "Your Mac's name and the app version",

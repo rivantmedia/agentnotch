@@ -92,7 +92,7 @@ Request:
 | `sessions[].endedAt` | date or null (null while the session runs) | |
 | `sessions[].messageCount` | integer ≥ 0 (assistant responses counted once) | |
 | `sessions[].tokens` | `{input, output, cacheCreation, cacheRead}`, integers ≥ 0, subagents included | |
-| `sessions[].costUsd` | number or null (Claude Code's own estimate, when the status line reported one) | |
+| `sessions[].costUsd` | number or null: an estimate. Claude Code's own when its status line reported one for a session one account ran, unless the app's own is larger (the session outgrew it); else the app's, from the transcript's responses at list prices. Null when it can't be priced (a model with no known price, or an app from before the estimates) | |
 | `sessions[].summary` | optional; see below | |
 | `usage[]` | usage-limit readings | ≤ 500 per request |
 | `usage[].accountKey` | accountKey; must appear in `accounts[]` | |
