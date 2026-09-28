@@ -65,12 +65,12 @@ pub struct RunFolder {
     /// `CLAUDE_CONFIG_DIR` as first seen; `None` for the default folder.
     pub config_dir_env: Option<String>,
     pub custom_label: Option<String>,
-    /// Collapsed by `core::paths::Paths::key` on Windows: the login is the
-    /// folder's own `.credentials.json` (a case-insensitive path), not a
-    /// Keychain item per spelling, so Windows never shows the "login
-    /// conflict" chip nor runs the spelling-switching identity refresh; only
-    /// set-versus-unset matters for the default folder (`~\.claude.json`
-    /// versus `~\.claude\.claude.json`).
+    /// Collapsed by `core::paths::Paths::key` on Windows: there the login
+    /// is a file inside the folder itself (reached by a case-insensitive
+    /// path), not a Keychain item per spelling, so Windows never shows the
+    /// "login conflict" chip nor runs the spelling-switching identity
+    /// refresh; only set-versus-unset matters for the default folder
+    /// (`~\.claude.json` versus `~\.claude\.claude.json`).
     pub seen_config_dir_envs: Vec<String>,
     pub identity: Option<Identity>,
     pub subscription_type: Option<String>,
