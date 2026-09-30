@@ -29,6 +29,7 @@ mod setup;
 mod tray;
 mod update;
 mod website;
+mod webview;
 
 pub use menu::{notch_menu_event, notch_menu_items};
 pub use setup::setup;
