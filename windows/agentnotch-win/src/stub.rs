@@ -231,17 +231,151 @@ pub mod paths {
     }
 }
 
-/// The sessions panel's window styles and foreground checks (`window` on Windows, WP9).
-pub mod window {}
+/// The sessions panel's window styles and foreground checks (`window` on Windows, WP9): the same
+/// names, answering "no window" and "nothing to do". Like the four modules after it, this is the
+/// real module's twin, item for item: what one gains or loses, the other does in the same commit,
+/// or the glue's host build breaks.
+pub mod window {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Rect {
+        pub left: i32,
+        pub top: i32,
+        pub right: i32,
+        pub bottom: i32,
+    }
 
-/// The panel shortcut (`hotkey` on Windows, WP9).
-pub mod hotkey {}
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct MonitorArea {
+        pub monitor: Rect,
+        pub work: Rect,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct Styles {
+        pub ex_style: u32,
+        pub topmost: bool,
+        pub no_activate: bool,
+        pub tool_window: bool,
+        pub visible: bool,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum MutexClaim {
+        Missing,
+        Ours,
+        Taken,
+        Elsewhere,
+    }
+
+    pub fn exists(_window: isize) -> bool {
+        false
+    }
+    pub fn styles(_window: isize) -> Option<Styles> {
+        None
+    }
+    pub fn raise_topmost(_window: isize) -> bool {
+        false
+    }
+    pub fn foreground() -> Option<isize> {
+        None
+    }
+    pub fn request_foreground(_window: isize) -> bool {
+        false
+    }
+    pub fn flash(_window: isize) {}
+    pub fn window_rect(_window: isize) -> Option<Rect> {
+        None
+    }
+    pub fn process_of(_window: isize) -> Option<u32> {
+        None
+    }
+    pub fn monitor_of(_window: isize) -> Option<MonitorArea> {
+        None
+    }
+    pub fn monitor_at(_x: i32, _y: i32) -> Option<MonitorArea> {
+        None
+    }
+    pub fn cursor() -> Option<(i32, i32)> {
+        None
+    }
+    pub fn mouse_button_down() -> bool {
+        false
+    }
+    pub fn is_above(_upper: isize, _lower: isize) -> Option<bool> {
+        None
+    }
+    pub fn find_window(_class: &str, _title: &str) -> Option<(isize, u32)> {
+        None
+    }
+    pub fn current_process_id() -> u32 {
+        std::process::id()
+    }
+    pub fn send_copy_data(_window: isize, _kind: usize, _bytes: &[u8]) -> bool {
+        false
+    }
+    pub fn claim_mutex(_name: &str) -> MutexClaim {
+        MutexClaim::Missing
+    }
+}
+
+/// The panel shortcut (`hotkey` on Windows, WP9): nothing can be registered here.
+pub mod hotkey {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Chord {
+        CtrlAltSpace,
+        CtrlAltJ,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum HotkeyError {
+        Taken,
+        Failed(String),
+    }
+
+    /// Never made: `register` always fails here.
+    pub struct Registration {
+        _private: (),
+    }
+
+    pub fn register(
+        _chord: Chord,
+        _on_press: Box<dyn Fn() + Send>,
+    ) -> Result<Registration, HotkeyError> {
+        Err(HotkeyError::Failed(super::UNAVAILABLE.into()))
+    }
+}
 
 /// Copying text for the panel (`clipboard` on Windows, WP9).
-pub mod clipboard {}
+pub mod clipboard {
+    pub fn set_text(_text: &str) -> Result<(), String> {
+        Err(super::UNAVAILABLE.into())
+    }
+    pub fn text() -> Result<Option<String>, String> {
+        Err(super::UNAVAILABLE.into())
+    }
+}
 
-/// Sealed snapshots of a page (`capture` on Windows, WP9).
+/// Sealed snapshots of a page (`capture` on Windows, WP9): WebView2 exists only there, and the
+/// glue's capture is compiled for Windows alone.
 pub mod capture {}
 
-/// Showing a file in Explorer (`shell` on Windows, WP9).
-pub mod shell {}
+/// Explorer and the shell (`shell` on Windows, WP9).
+pub mod shell {
+    use std::path::{Path, PathBuf};
+
+    pub fn reveal(_path: &Path) -> Result<(), String> {
+        Err(super::UNAVAILABLE.into())
+    }
+    pub fn open_uri(_uri: &str) -> Result<(), String> {
+        Err(super::UNAVAILABLE.into())
+    }
+    pub fn pick_folder(_owner: Option<isize>, _title: &str) -> Result<Option<PathBuf>, String> {
+        Err(super::UNAVAILABLE.into())
+    }
+    pub fn scheme_command(_scheme: &str) -> Option<String> {
+        None
+    }
+    pub fn start_menu_shortcut(_product: &str) -> Option<PathBuf> {
+        None
+    }
+}
