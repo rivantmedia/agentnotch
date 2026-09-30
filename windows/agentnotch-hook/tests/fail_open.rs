@@ -595,25 +595,28 @@ fn a_wrapper_reached_through_a_wrapper_chains_nothing() {
     // would start a process that starts another, for ever. Twenty renders start twenty.
     let copy = Wrapper::named("sl");
     copy.previous(&format!("{} statusline", copy.shell_path()));
-    let trace = trace_file();
-    let mut outer = Vec::new();
+    // One trace per render: pids are reused across twenty of them (Windows hands an ended
+    // process's pid out again at once), but within one render both processes run together.
     for attempt in 0..20 {
+        let trace = trace_file();
         let done = run(copy.command(&trace), Stdin::Bytes(STATUS));
         assert_silent_success(&done, &format!("attempt {attempt}"));
-        outer.push(done.pid.to_string());
-    }
-    let lines = trace_lines(&trace);
-    let count = |what: &str| lines.iter().filter(|(_, line)| line == what).count();
-    assert_eq!(count("invoked statusline"), 40, "{lines:?}");
-    assert_eq!(count("chain: started"), 20, "{lines:?}");
-    assert_eq!(count("chain: nested"), 20, "{lines:?}");
-    assert_eq!(count("chain: exit 0"), 20, "{lines:?}");
-    // The ones the test started chained; the ones they started did not.
-    for (pid, line) in &lines {
-        match line.as_str() {
-            "chain: started" | "chain: exit 0" => assert!(outer.contains(pid), "{lines:?}"),
-            "chain: nested" => assert!(!outer.contains(pid), "{lines:?}"),
-            _ => {}
+        let lines = trace_lines(&trace);
+        let count = |what: &str| lines.iter().filter(|(_, line)| line == what).count();
+        assert_eq!(count("invoked statusline"), 2, "{attempt}: {lines:?}");
+        assert_eq!(count("chain: started"), 1, "{attempt}: {lines:?}");
+        assert_eq!(count("chain: nested"), 1, "{attempt}: {lines:?}");
+        assert_eq!(count("chain: exit 0"), 1, "{attempt}: {lines:?}");
+        // The one the test started chained; the one it started did not.
+        let outer = done.pid.to_string();
+        for (pid, line) in &lines {
+            match line.as_str() {
+                "chain: started" | "chain: exit 0" => {
+                    assert_eq!(pid, &outer, "{attempt}: {lines:?}")
+                }
+                "chain: nested" => assert_ne!(pid, &outer, "{attempt}: {lines:?}"),
+                _ => {}
+            }
         }
     }
 }
@@ -637,8 +640,10 @@ fn without_git_bash_the_status_line_prints_nothing() {
         )
         .env("ProgramFiles", &no_git)
         .env("ProgramFiles(x86)", &no_git);
+    let seen = lookup_environment_seen(&command);
     let done = run(command, Stdin::Bytes(STATUS));
-    // The trace first: when the output is wrong, it says which way the wrapper went.
+    // The trace first: when the output is wrong, it says which way the wrapper went, and what a
+    // program started with the same environment sees says why.
     assert_eq!(
         traced(&trace, done.pid),
         [
@@ -646,9 +651,40 @@ fn without_git_bash_the_status_line_prints_nothing() {
             "chain: no git bash",
             "env claude_pid=unset config_dir=unset",
             "no app"
-        ]
+        ],
+        "a child started this way sees: {seen}"
     );
     assert_silent_success(&done, "no Git Bash");
+}
+
+/// The Git Bash lookup's variables as a program started with `command`'s environment sees them.
+fn lookup_environment_seen(command: &Command) -> String {
+    let mut probe = if cfg!(windows) {
+        let mut probe = Command::new("cmd.exe");
+        probe.args([
+            "/d",
+            "/c",
+            "set ProgramFiles & set CLAUDE_CODE_GIT_BASH_PATH",
+        ]);
+        probe
+    } else {
+        let mut probe = Command::new("/bin/sh");
+        probe.args([
+            "-c",
+            "env | grep -E '^(ProgramFiles|CLAUDE_CODE_GIT_BASH_PATH)'",
+        ]);
+        probe
+    };
+    for (name, value) in command.get_envs() {
+        match value {
+            Some(value) => probe.env(name, value),
+            None => probe.env_remove(name),
+        };
+    }
+    match probe.output() {
+        Ok(output) => String::from_utf8_lossy(&output.stdout).into_owned(),
+        Err(error) => format!("(no probe: {error})"),
+    }
 }
 
 /// The app never wraps a command written for another shell (the engine's rule). One forced into
