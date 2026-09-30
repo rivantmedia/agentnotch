@@ -95,10 +95,7 @@ fn glue_method(
     let text = |key: &str| args.get(key).and_then(Value::as_str).map(str::to_string);
     let reply = match method {
         "log" => {
-            // Pages log their own events only (never prompts, replies or paths); a runaway line
-            // is cut so it can't fill run.log.
-            let msg: String = text("msg").unwrap_or_default().chars().take(500).collect();
-            super::log(&format!("page {label}: {msg}"));
+            super::log(&page_log_line(label, &text("msg").unwrap_or_default()));
             Ok(json!({}))
         }
         "panel_open" => {
@@ -147,6 +144,19 @@ fn glue_method(
         _ => return None,
     };
     Some(reply)
+}
+
+/// A page's `log {msg}` as one run.log line. Pages log their own events only (never prompts,
+/// replies or paths); a runaway message is cut so it can't fill run.log, and its line breaks and
+/// other control characters become spaces, so a message can't pass for lines of the app's own
+/// (the smoke test reads run.log for them).
+fn page_log_line(label: &str, msg: &str) -> String {
+    let msg: String = msg
+        .chars()
+        .take(500)
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    format!("page {label}: {msg}")
 }
 
 /// `panel_toggle`'s `rect`: `[x, y, w, h]`, the clicked ring in physical pixels from the top-left
@@ -324,7 +334,26 @@ mod tests {
     use agentnotch_engine::hub::CallError;
     use serde_json::{json, Value};
 
-    use super::{allowed, ring_rect, shell_call, Os, MAX_COPY_BYTES, SHELL_METHODS};
+    use super::{allowed, page_log_line, ring_rect, shell_call, Os, MAX_COPY_BYTES, SHELL_METHODS};
+
+    #[test]
+    fn a_page_logs_one_short_line_of_its_own() {
+        assert_eq!(
+            page_log_line("agentnotch-panel", "opened"),
+            "page agentnotch-panel: opened"
+        );
+        // A line break can't start a line that reads as the app's own.
+        assert_eq!(
+            page_log_line("notch", "x\nan: hub started (sealed)\r\u{7}"),
+            "page notch: x an: hub started (sealed)  "
+        );
+        // Cut at 500 characters, not bytes.
+        let long = "é".repeat(600);
+        assert_eq!(
+            page_log_line("settings", &long),
+            format!("page settings: {}", "é".repeat(500))
+        );
+    }
 
     /// Records what would have reached Windows.
     #[derive(Default)]
