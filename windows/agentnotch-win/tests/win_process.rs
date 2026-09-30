@@ -1,6 +1,6 @@
 //! The real process services on Windows (DESIGN-WIN §7.3): liveness, start times, the Toolhelp
-//! parent link, the image path, the token's user and elevation, against a child this test
-//! spawns. The child is `cmd.exe` waiting on a pipe: a system executable that stays alive until
+//! parent link, the image path, the token's user and elevation, and the read of
+//! `CLAUDE_CONFIG_DIR` from a process's environment block, against a child this test spawns. The child is `cmd.exe` waiting on a pipe: a system executable that stays alive until
 //! told, never a real tool.
 //!
 //! The runner is elevated and has one user, so these assert relative facts (the child is like
@@ -8,10 +8,11 @@
 
 #![cfg(windows)]
 
+use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, SystemTime};
 
-use agentnotch_engine::platform::{Liveness, Processes};
+use agentnotch_engine::platform::{EnvRead, Liveness, Processes};
 use agentnotch_win::process::WinProcesses;
 
 /// The system clock that stamps a process's creation advances with the timer interrupt (about
@@ -167,4 +168,187 @@ fn a_pid_nobody_has_answers_nothing() {
     assert_eq!(processes.same_user(nobody), None);
     assert_eq!(processes.elevated(nobody), None);
     assert!(processes.table().get(nobody).is_none());
+}
+
+// The environment read (DESIGN-WIN §4.2, AU§14.1). These prove the x64 offsets of the
+// environment block on the Windows the runner has.
+
+const VARIABLE: &str = "CLAUDE_CONFIG_DIR";
+
+/// A waiting child whose environment `configure` has set up, read only once it has printed a
+/// line: by then the process has initialised and `cmd.exe` has made the block its own (it adds
+/// its per-drive entries), which is the state a real session's process is in.
+fn child_with_env(configure: impl FnOnce(&mut Command)) -> Child {
+    let mut command = Command::new("cmd.exe");
+    command
+        .args(["/D", "/C", "echo ready& set /p x="])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    configure(&mut command);
+    let mut child = command.spawn().expect("cmd.exe starts");
+    let mut line = String::new();
+    BufReader::new(child.stdout.take().expect("the child's stdout"))
+        .read_line(&mut line)
+        .expect("the child prints a line");
+    assert_eq!(line.trim(), "ready");
+    child
+}
+
+fn set(value: &str) -> EnvRead {
+    EnvRead::Set(value.to_owned())
+}
+
+#[test]
+fn a_childs_config_dir_is_read_from_its_environment() {
+    let processes = WinProcesses::new();
+    let value = r"C:\Users\me\.claude-work";
+    let mut child = child_with_env(|command| {
+        command.env(VARIABLE, value);
+    });
+    let pid = child.id();
+
+    assert_eq!(processes.config_dir_env(pid), set(value));
+    // Reading changes nothing: the same answer again.
+    assert_eq!(processes.config_dir_env(pid), set(value));
+
+    finish(&mut child);
+}
+
+#[test]
+fn a_child_without_the_variable_is_unset() {
+    let processes = WinProcesses::new();
+    let mut child = child_with_env(|command| {
+        command.env_remove(VARIABLE);
+    });
+
+    assert_eq!(processes.config_dir_env(child.id()), EnvRead::Unset);
+
+    finish(&mut child);
+}
+
+#[test]
+fn the_variables_name_is_matched_without_regard_to_case() {
+    let processes = WinProcesses::new();
+    let value = r"D:\profiles\Mixed Case";
+    // The name goes into the child's block as written here.
+    let mut child = child_with_env(|command| {
+        command.env_remove(VARIABLE).env("Claude_Config_Dir", value);
+    });
+
+    assert_eq!(processes.config_dir_env(child.id()), set(value));
+
+    finish(&mut child);
+}
+
+#[test]
+fn the_variable_is_found_after_100_kib_of_other_variables() {
+    let processes = WinProcesses::new();
+    let value = r"C:\Users\me\.claude-far";
+    // 110 variables of 1,000 characters: more than 100 KiB of characters, twice that in bytes.
+    // The block a child gets is sorted by name, so these all lie before the variable.
+    let padding = "p".repeat(1000);
+    let mut child = child_with_env(|command| {
+        for index in 0..110 {
+            command.env(format!("AAA_PAD_{index:03}"), &padding);
+        }
+        command.env(VARIABLE, value);
+    });
+    let pid = child.id();
+
+    assert_eq!(processes.config_dir_env(pid), set(value));
+    // The first 100 KiB alone do not reach the end of the block: that is not "unset".
+    assert_eq!(
+        WinProcesses::reading_at_most(100 * 1024).config_dir_env(pid),
+        EnvRead::Unreadable
+    );
+
+    finish(&mut child);
+}
+
+#[test]
+fn a_read_cut_short_is_unreadable_never_unset() {
+    let mut without = child_with_env(|command| {
+        command.env_remove(VARIABLE);
+    });
+    let mut with = child_with_env(|command| {
+        command.env(VARIABLE, r"C:\Users\me\.claude-cut");
+    });
+
+    // The whole block says "unset" and "set"; any shorter read of either says neither.
+    assert_eq!(
+        WinProcesses::new().config_dir_env(without.id()),
+        EnvRead::Unset
+    );
+    assert_eq!(
+        WinProcesses::new().config_dir_env(with.id()),
+        set(r"C:\Users\me\.claude-cut")
+    );
+    for bytes in [0, 1, 2, 64, 65, 200, 1024] {
+        let cut = WinProcesses::reading_at_most(bytes);
+        assert_eq!(
+            cut.config_dir_env(without.id()),
+            EnvRead::Unreadable,
+            "{bytes} bytes of a block without the variable"
+        );
+        assert_eq!(
+            cut.config_dir_env(with.id()),
+            EnvRead::Unreadable,
+            "{bytes} bytes of a block with the variable"
+        );
+    }
+    // A limit beyond the block cuts nothing.
+    assert_eq!(
+        WinProcesses::reading_at_most(usize::MAX).config_dir_env(without.id()),
+        EnvRead::Unset
+    );
+
+    finish(&mut without);
+    finish(&mut with);
+}
+
+#[test]
+fn an_exited_childs_environment_is_unreadable() {
+    let processes = WinProcesses::new();
+    let mut child = child_with_env(|command| {
+        command.env(VARIABLE, r"C:\Users\me\.claude-gone");
+    });
+    let pid = child.id();
+    assert_eq!(
+        processes.config_dir_env(pid),
+        set(r"C:\Users\me\.claude-gone")
+    );
+
+    finish(&mut child);
+
+    assert_eq!(processes.config_dir_env(pid), EnvRead::Unreadable);
+    // And so are pid 0 and a pid nobody has.
+    assert_eq!(processes.config_dir_env(0), EnvRead::Unreadable);
+    assert_eq!(processes.config_dir_env(u32::MAX - 2), EnvRead::Unreadable);
+}
+
+#[test]
+fn a_value_outside_ascii_round_trips() {
+    let processes = WinProcesses::new();
+    // Two-unit characters too (U+1F4C1 is a surrogate pair).
+    let value = "C:\\Users\\Zo\u{eb}\\.claude-\u{65e5}\u{672c}-\u{1f4c1}";
+    let mut child = child_with_env(|command| {
+        command.env(VARIABLE, value);
+    });
+
+    assert_eq!(processes.config_dir_env(child.id()), set(value));
+
+    finish(&mut child);
+}
+
+#[test]
+fn this_processs_own_environment_reads_like_std_does() {
+    let expected = match std::env::var(VARIABLE) {
+        Ok(value) if !value.is_empty() => EnvRead::Set(value),
+        _ => EnvRead::Unset,
+    };
+    assert_eq!(
+        WinProcesses::new().config_dir_env(std::process::id()),
+        expected
+    );
 }
