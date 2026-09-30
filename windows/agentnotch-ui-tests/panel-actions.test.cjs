@@ -626,7 +626,8 @@ test('a bare Enter opens the chat and never approves anything', async () => {
     const event = page.key(ENTER);
     assert.equal(event.defaultPrevented, true);
     assert.equal(state(page).route, 'session:' + id);
-    assert.deepEqual(plain(page.hub.calls), [{ method: 'panel_route', args: { route: 'session:' + id } }]);
+    // (the chat's own first calls, and the size it now asks for, are chat.test.cjs's)
+    assert.deepEqual(plain(page.hub.calls.filter((c) => c.method === 'panel_route')), [{ method: 'panel_route', args: { route: 'session:' + id } }]);
   }
   const none = await ready();
   none.key(ENTER);
@@ -648,7 +649,7 @@ test('Ctrl+Enter is the row\'s primary action', async () => {
     const page = await ready(edit);
     select(page, id);
     page.key(CTRL_ENTER);
-    assert.deepEqual(plain(page.hub.calls), expected, id);
+    assert.deepEqual(plain(page.hub.calls.filter((c) => c.method !== 'panel_report_size')), expected, id);
     clean(page);
   }
 });

@@ -246,7 +246,7 @@ test('a later an:panel replaces the request; a list route names its filter every
   assert.equal(state(page).route, 'session:needs-plan');
   assert.equal(state(page).filter, PERSONAL, 'a chat keeps the list\'s filter for the way back');
   assert.equal(page.$('#an-card').getAttribute('data-mode'), 'chat');
-  assert.deepEqual(page.hub.calls, [], 'the glue knows what it sent: the page does not echo a route back');
+  assert.deepEqual(page.hub.of('panel_route'), [], 'the glue knows what it sent: the page does not echo a route back');
   clean(page);
 });
 
@@ -614,7 +614,7 @@ test('Esc steps out one level at a time: menu, chat, list, panel (B_PanelStateTe
   page.key({ key: 'Escape' });
   assert.equal(state(page).route, 'sessions', 'the chat goes back to the list');
   assert.equal(state(page).filter, WORK, 'keeping the ring filter');
-  assert.deepEqual(page.hub.calls.map((c) => [c.method, plain(c.args)]), [['panel_route', { route: 'sessions' }]]);
+  assert.deepEqual(page.hub.calls.map((c) => [c.method, plain(c.args)]), [['chat_close', { session_id: 'needs-permission' }], ['panel_route', { route: 'sessions' }]], 'the chat is told it is left, then the glue');
   assert.equal(page.$('#an-card').getAttribute('data-mode'), 'list');
   page.click(gear(page));
   page.hub.clear();
@@ -639,7 +639,7 @@ test('navigate() moves between the list and a chat, tells the glue once per chan
   page.hub.clear();
   page.run("agentnotchPanel.navigate('session:s1')");
   page.run("agentnotchPanel.navigate('session:s1')");
-  assert.deepEqual(page.hub.calls.map((c) => [c.method, plain(c.args)]), [['panel_route', { route: 'session:s1' }]]);
+  assert.deepEqual(page.hub.calls.filter((c) => c.method === 'panel_route').map((c) => [c.method, plain(c.args)]), [['panel_route', { route: 'session:s1' }]]);
   assert.equal(state(page).selected, 's1');
   assert.equal(page.$('#an-chat').hasAttribute('hidden'), false);
   page.run("agentnotchPanel.navigate('session:')");
@@ -750,9 +750,12 @@ test('the natural height counts the list by its content, the toast, an open menu
   page.click(gear(page));
   assert.equal(page.$('#an-card').style.minHeight, '', 'and lets go of it');
   page.emit('an:panel', { route: 'session:x' });
+  // a chat counts by what it holds (header, the transcript's content, hairline), not by the box it is given
   rect(page.$('#an-chat'), 440, 640);
-  page.$('#an-chat').__scrollHeight = 700;
-  assert.equal(page.run('agentnotchPanel._.naturalHeight()') >= 700, true);
+  rect(page.$('#an-chat-head'), 440, 60);
+  rect(page.$('#an-chat-list'), 440, 700);
+  assert.equal(page.run('agentnotchChat.naturalHeight()'), 60 + 1 + 700);
+  assert.equal(page.run('agentnotchPanel._.naturalHeight()') >= 761, true);
 });
 
 test('without a measured width the report uses the placement\'s widths: 400/440 beside, 440/520 flat and floating', async () => {
@@ -963,7 +966,7 @@ test('the region ids and action attributes the later sub-tasks build on exist an
   assert.equal(page.$('#an-chat').hasAttribute('hidden'), true);
   assert.ok(page.$('#an-card').contains(page.$('#an-rows')));
   assert.deepEqual(plain(page.run('Object.keys(agentnotchPanel.actions)')).sort(),
-    ['answer', 'close', 'consent-later', 'consent-on', 'dismiss-failure', 'filter', 'fold', 'gear', 'jump', 'mark-all-reviewed', 'mark-reviewed', 'menu-auto', 'menu-notify', 'open-chat', 'open-settings', 'pin', 'scope-off', 'scope-ok', 'undo-review']);
+    ['answer', 'back', 'close', 'consent-later', 'consent-on', 'dismiss-failure', 'filter', 'fold', 'gear', 'jump', 'mark-all-reviewed', 'mark-reviewed', 'menu-auto', 'menu-notify', 'open-chat', 'open-settings', 'pin', 'scope-off', 'scope-ok', 'undo-review']);
   assert.deepEqual(plain(page.run('Object.keys(agentnotchPanel.scenes)')).sort(),
-    ['panel-banners', 'panel-busy-full', 'panel-busy-window', 'panel-consent', 'panel-empty', 'panel-every-state', 'panel-filtered', 'panel-header', 'panel-keyboard-folded', 'panel-menu', 'panel-needs-you', 'panel-pinned', 'panel-regular-rows', 'panel-scope-notice', 'panel-single-account', 'panel-undo']);
+    ['chat-approval', 'chat-tasks', 'panel-banners', 'panel-busy-full', 'panel-busy-window', 'panel-consent', 'panel-empty', 'panel-every-state', 'panel-filtered', 'panel-header', 'panel-keyboard-folded', 'panel-menu', 'panel-needs-you', 'panel-pinned', 'panel-regular-rows', 'panel-scope-notice', 'panel-single-account', 'panel-undo']);
 });

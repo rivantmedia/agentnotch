@@ -43,6 +43,8 @@
   var els = {};
   var started = false;
 
+  /** The chat asks for at most this much height (the list's cap is the glue's: the window is clamped there). */
+  var CHAT_HEIGHT_CAP = 780;
   var TAIL_LENGTH = 32;
   var TAIL_WIDTH = 36;
   var CORNER = 16;
@@ -960,6 +962,8 @@
     scrollToRow();
     C.morph(els.overlay, overlayHtml(v));
     applyMode();
+    var chat = window.agentnotchChat;
+    if (mode() === 'chat' && chat && typeof chat.refresh === 'function') chat.refresh();
     makeRoomForMenu();
     reportSize();
     scheduleArming();
@@ -1018,11 +1022,18 @@
    * the one part that scrolls, so it counts by its content (scrollHeight), the rest by their box;
    * an open menu counts too (it must not be cut off by a short card).
    */
+  /** The chat's own ask (header, the transcript's content, the bottom bar): its box is whatever the window gives it. */
+  function chatHeight() {
+    var chat = window.agentnotchChat;
+    var h = chat && typeof chat.naturalHeight === 'function' ? chat.naturalHeight() : 0;
+    return h > 0 ? h : els.chat.offsetHeight;
+  }
+
   function naturalHeight() {
     var total = 0;
     Array.prototype.forEach.call(els.card.children, function (child) {
       if (child === els.overlay || child.hasAttribute('hidden')) return;
-      total += child === els.list ? child.scrollHeight : child.offsetHeight;
+      total += child === els.list ? child.scrollHeight : child === els.chat ? chatHeight() : child.offsetHeight;
     });
     var menu = els.overlay.querySelector('.an-menu');
     if (menu && menu.offsetHeight) total = Math.max(total, (menu.offsetTop || 0) + menu.offsetHeight + 8);
@@ -1033,6 +1044,7 @@
   function reportSize() {
     var h = Math.ceil(naturalHeight());
     if (!(h > 0)) return;
+    if (mode() === 'chat') h = Math.min(h, CHAT_HEIGHT_CAP);
     var w = Math.ceil(els.card.offsetWidth) || defaultWidth();
     if (w === state.reported.w && h === state.reported.h) return;
     state.reported = { w: w, h: h };
@@ -1138,6 +1150,9 @@
   };
   // -- the list's actions (delegated from the rows: data-an-action + data-an-arg) --
 
+  ACTIONS.back = function () {
+    navigate('sessions');
+  };
   ACTIONS['open-chat'] = function (id) {
     if (id) navigate('session:' + id);
   };
@@ -1578,12 +1593,21 @@
       s.ui.panel_pinned = true;
       return s;
     },
+    // The chat scenes show the same snapshot; the route (SCENE_ROUTES) and the chat's own state do the rest.
+    'chat-approval': same,
+    'chat-tasks': same,
     'panel-single-account': function (s) {
       var first = ringsOf(s)[0];
       s.accounts_multi = false;
       s.rings = first ? [first] : [];
       return s;
     },
+  };
+
+  /** The scenes that are a chat: the session each one shows. */
+  var SCENE_ROUTES = {
+    'chat-approval': 'session:needs-permission',
+    'chat-tasks': 'session:work-migration',
   };
 
   /** View state a scene needs besides the snapshot: the selection, folds, a pending review. */
@@ -1605,7 +1629,7 @@
     if (!C || !Object.prototype.hasOwnProperty.call(SCENES, name) || !state.snapshot) return false;
     C.setStatic(true);
     state.scene = name;
-    state.route = 'sessions';
+    state.route = SCENE_ROUTES[name] || 'sessions';
     state.filter = null;
     state.selected = null;
     state.folds = {};
@@ -1623,6 +1647,9 @@
     }
     if (SCENE_STATE[name]) SCENE_STATE[name]();
     render();
+    // The chat exists only once the route has drawn it: its own scene state comes after.
+    var chat = window.agentnotchChat;
+    if (name === 'chat-tasks' && chat && typeof chat.openBoard === 'function') chat.openBoard(true);
     return true;
   }
 
@@ -1645,6 +1672,12 @@
    * window. Measured in the browser: the node DOM has no layout, so the rectangles there are zero
    * and only what a test sets is checked.
    */
+  /** The chat's transcript when `el` is inside it: it scrolls, like the list. */
+  function chatScroller(el) {
+    var scroll = els.chat.querySelector('.an-chat-scroll');
+    return scroll && scroll.contains(el) ? scroll : null;
+  }
+
   function layoutReport() {
     var failures = [];
     var cr = els.card.getBoundingClientRect();
@@ -1657,12 +1690,15 @@
     Array.prototype.forEach.call(controls, function (el) {
       var r = el.getBoundingClientRect();
       // A scrolling list has rows below the fold: they may lie below the card, never beside it.
-      var scrolled = els.list.contains(el) && els.list.scrollHeight > els.list.clientHeight + 1;
+      var scroller = els.list.contains(el) ? els.list : chatScroller(el);
+      var scrolled = !!scroller && scroller.scrollHeight > scroller.clientHeight + 1;
       var box = scrolled ? { left: cr.left, right: cr.right, top: -1e9, bottom: 1e9 } : cr;
       if (r.width && cr.width && !rectInside(r, box, 0.5)) {
         failures.push('control outside the card: ' + (el.getAttribute('aria-label') || C.oneLine(el.textContent)).slice(0, 40));
       }
     });
+    var chat = window.agentnotchChat;
+    if (mode() === 'chat' && chat && typeof chat.layoutProblems === 'function') chat.layoutProblems().forEach(function (p) { failures.push(p); });
     var win = { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight };
     if (cr.width && !rectInside(cr, win, 0.5)) failures.push('the card leaves the window');
     var tail = els.tail.getBoundingClientRect();
@@ -1792,6 +1828,13 @@
     keyboardOpen: function () {
       return state.focused;
     },
+    /** For chat.js: a session's row as the page shows it, whether several accounts are in use, and the size report. */
+    row: rowOf,
+    multiAccounts: function () {
+      var v = view();
+      return !!(v && v.accounts_multi);
+    },
+    reportSize: reportSize,
     _: {
       state: state,
       render: render,

@@ -512,5 +512,9 @@
     bucketOf: bucketOf,
     detailHtml: detailHtml,
     taskBar: taskBar,
+    // The chat's header draws the same task bar, context meter and account tag as a row.
+    tasksItem: tasksItem,
+    contextItem: contextItem,
+    accountItem: accountItem,
   };
 })();

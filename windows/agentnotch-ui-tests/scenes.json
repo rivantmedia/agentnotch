@@ -408,6 +408,86 @@
         }
       },
       "height": "fit"
+    },
+    {
+      "name": "chat-approval",
+      "page": "agentnotch/panel.html",
+      "global": "agentnotchPanel",
+      "scene": "chat-approval",
+      "widths": true,
+      "height": 672,
+      "panel": {
+        "route": "session:needs-permission",
+        "ring_id": null,
+        "highlight": null,
+        "reason": "hover_row"
+      }
+    },
+    {
+      "name": "chat-tasks",
+      "page": "agentnotch/panel.html",
+      "global": "agentnotchPanel",
+      "scene": "chat-tasks",
+      "widths": true,
+      "height": 672,
+      "panel": {
+        "route": "session:work-migration",
+        "ring_id": null,
+        "highlight": null,
+        "reason": "hover_row"
+      },
+      "events": [
+        {
+          "event": "an:chat",
+          "payload": {
+            "session_id": "work-migration",
+            "revision": 1,
+            "reset": true,
+            "items": [
+              {
+                "id": "u-1",
+                "kind": "user",
+                "text": "Write migration tests for the v2 schema: every table, forward and back."
+              },
+              {
+                "id": "a-1",
+                "kind": "assistant",
+                "text": "I'll cover the six tables in order. Accounts and invoices are done; writing the subscription tests now."
+              },
+              {
+                "id": "toolu_m1",
+                "kind": "tool",
+                "name": "Bash",
+                "summary": "npm test -- migrations/v2",
+                "status": "success",
+                "input": {
+                  "command": "npm test -- migrations/v2",
+                  "description": "npm test -- migrations/v2"
+                },
+                "result": {
+                  "tool": "bash",
+                  "stdout": "PASS migrations/v2/accounts.spec.ts\nPASS migrations/v2/invoices.spec.ts",
+                  "stderr": "",
+                  "interrupted": false,
+                  "return_code_interpretation": null,
+                  "background_task_id": null
+                },
+                "subagent": null
+              }
+            ],
+            "removed": [],
+            "order": [
+              "u-1",
+              "a-1",
+              "toolu_m1"
+            ],
+            "has_earlier": 0,
+            "working": "Working…",
+            "ended": false,
+            "loading": false
+          }
+        }
+      ]
     }
   ]
 }
