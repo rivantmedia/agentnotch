@@ -59,6 +59,12 @@ pub const VANISHED: &str =
 pub const KEPT_CHANGING: &str = "settings.json kept changing while we tried to update it";
 pub const READ_ONLY: &str = "settings.json is read-only";
 pub const CONFIG_DIR_MISSING: &str = "The config folder doesn't exist.";
+pub const NOT_AN_INSTALL_TARGET: &str = "This folder is an account store of Claude Parallel Profiles (or the shared history); nothing is installed there.";
+
+/// The file Claude Parallel Profiles leaves in each account store it made;
+/// Claude Code never runs in a store. The extension is inert on native
+/// Windows (AU§0.2), so only a folder copied from elsewhere carries one.
+pub const STORE_MARKER_NAME: &str = ".parallel-accounts-store";
 
 /// What this PC offers an install, found once per pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -489,6 +495,12 @@ pub fn apply_install_with(
         |settings_path: &Path, message: String| outcome(&plan.folder, settings_path, Err(message));
     if !is_a_folder(&config_dir) {
         return refused(&plan.settings_path, CONFIG_DIR_MISSING.to_owned());
+    }
+    // The last line of defence, whatever the plan thinks the folder is (as
+    // HookInstaller.install on the Mac): a store is never written to, not
+    // even the hook copy. Taking ours out of one stays allowed (above).
+    if fs::symlink_metadata(config_dir.join(STORE_MARKER_NAME)).is_ok() {
+        return refused(&plan.settings_path, NOT_AN_INSTALL_TARGET.to_owned());
     }
 
     // A path no string command can carry as it is may still have an 8.3

@@ -13,7 +13,7 @@ use agentnotch_engine::core::settings_doc::Json;
 use agentnotch_engine::hooks::apply::{
     apply_install_with, apply_installs_with, previous_status_line_path, read_saved_status_line,
     read_status, remove_codenotch_hooks, uninstall_everything, Setup, CONFIG_DIR_MISSING,
-    KEPT_CHANGING, MAX_REPLANS, READ_ONLY, VANISHED,
+    KEPT_CHANGING, MAX_REPLANS, NOT_AN_INSTALL_TARGET, READ_ONLY, STORE_MARKER_NAME, VANISHED,
 };
 use agentnotch_engine::hooks::backups::{our_backups, ORIGINAL_BACKUP_NAME};
 use agentnotch_engine::hooks::commands::{
@@ -632,6 +632,43 @@ fn missing_config_dir_is_reported() {
     assert!(!dir.exists());
     let status = read_status(&dir, &StdSecureFiles, &SETUP);
     assert!(!status.config_dir_exists && !status.hooks_registered);
+}
+
+/// `PP_HooksTests.theInstallerRefusesStoresAndTheSharedHistory`: whatever a
+/// plan thinks, nothing is installed into a Claude Parallel Profiles store;
+/// the marker alone refuses. Taking ours out of one still works.
+#[test]
+fn the_installer_refuses_a_store_whatever_the_plan_says() {
+    let fx = fixture();
+    let store = fx.config_dir(".claude-paras", None);
+    write_file(&store.join(STORE_MARKER_NAME), "");
+    let refused = Err(NOT_AN_INSTALL_TARGET.to_owned());
+    assert_eq!(fx.install(&store).result, refused);
+    assert!(!settings(&store).exists());
+    assert!(!store.join("hooks").exists());
+
+    // One with a settings.json of its own: its bytes stay as they are.
+    let with_settings = fx.config_dir(".claude-work", Some(REALISTIC));
+    write_file(&with_settings.join(STORE_MARKER_NAME), "");
+    let before = snapshot_dir(&with_settings).unwrap();
+    let outcome = fx.install(&with_settings);
+    assert_eq!(outcome.result, refused);
+    assert_eq!(outcome.entry, None);
+    assert_eq!(snapshot_dir(&with_settings).unwrap(), before);
+
+    // Ours put there before the folder became a store come out.
+    fs::remove_file(with_settings.join(STORE_MARKER_NAME)).unwrap();
+    assert_eq!(
+        fx.install(&with_settings).result,
+        Ok(InstallChange::Written)
+    );
+    write_file(&with_settings.join(STORE_MARKER_NAME), "");
+    assert_eq!(
+        fx.uninstall(&with_settings).result,
+        Ok(InstallChange::Removed)
+    );
+    assert!(!read_status(&with_settings, &StdSecureFiles, &SETUP).hooks_registered);
+    assert!(!with_settings.join("hooks").exists());
 }
 
 #[cfg(unix)]
