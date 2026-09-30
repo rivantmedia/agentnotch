@@ -19,6 +19,7 @@ mod deeplink;
 mod emit;
 mod engine;
 mod hotkey;
+mod links;
 mod menu;
 mod panel;
 mod panel_window;

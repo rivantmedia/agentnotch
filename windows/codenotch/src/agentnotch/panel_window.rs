@@ -1098,7 +1098,7 @@ fn word(text: Option<&str>) -> String {
 // ---- what only exists on Windows ----
 
 #[cfg(windows)]
-fn hwnd_of(window: &WebviewWindow) -> Option<isize> {
+pub(super) fn hwnd_of(window: &WebviewWindow) -> Option<isize> {
     match window.hwnd() {
         // As a number: this crate's `windows`, Tauri's and agentnotch-win's each have their own
         // HWND type.
@@ -1113,7 +1113,7 @@ fn hwnd_of(window: &WebviewWindow) -> Option<isize> {
 /// Off Windows (the host build that runs the glue's tests) there is no handle to keep, so the
 /// panel is never seen in the foreground and the keyboard gate stays shut.
 #[cfg(not(windows))]
-fn hwnd_of(_window: &WebviewWindow) -> Option<isize> {
+pub(super) fn hwnd_of(_window: &WebviewWindow) -> Option<isize> {
     None
 }
 
