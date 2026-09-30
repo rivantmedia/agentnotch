@@ -105,8 +105,8 @@ fn glue_method(
             Ok(json!({}))
         }
         "panel_report_size" => {
-            let height = args.get("h").and_then(Value::as_f64).unwrap_or(0.0);
-            panel::report_height(app, height);
+            let number = |key: &str| args.get(key).and_then(Value::as_f64).unwrap_or(0.0);
+            panel::report_size(app, number("w"), number("h"));
             Ok(json!({}))
         }
         "panel_take_focus" => {

@@ -21,6 +21,7 @@ mod engine;
 mod hotkey;
 mod menu;
 mod panel;
+mod panel_window;
 mod selftest;
 mod setup;
 mod tray;

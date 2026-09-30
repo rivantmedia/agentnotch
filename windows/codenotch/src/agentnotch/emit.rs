@@ -21,6 +21,8 @@ pub(super) fn forward(app: &AppHandle, event: &HubEvent) {
         HubEvent::Snapshot(snapshot) => {
             emit_to(app, NOTCH, "an:snapshot", snapshot);
             emit_to(app, panel::LABEL, "an:snapshot", snapshot);
+            // "Keep open" is a setting; the panel's window rules need its value.
+            panel::set_pinned(app, snapshot.ui.panel_pinned);
         }
         HubEvent::Settings(settings) => emit_to(app, SETTINGS, "an:settings", settings),
         HubEvent::Cloud(cloud) => emit_to(app, SETTINGS, "an:cloud", cloud),
@@ -28,7 +30,7 @@ pub(super) fn forward(app: &AppHandle, event: &HubEvent) {
         HubEvent::Panel(request) => panel::open_request(app, request.clone()),
         HubEvent::PanelClose { reason } => {
             super::log(&format!("panel closed by the hub ({reason:?})"));
-            panel::close(app);
+            panel::close_by_hub(app, reason);
         }
         HubEvent::Peek { ring_id, seconds } => emit_to(
             app,
