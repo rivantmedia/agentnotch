@@ -28,6 +28,7 @@ pub mod permission;
 pub mod pid;
 pub mod pipe;
 mod pyjson;
+pub mod statusline;
 pub mod typing;
 
 pub use console::ConsoleInfo;
@@ -43,7 +44,9 @@ pub use permission::{
     PermissionResponse, DEFAULT_DENY_MESSAGE, KEEP_PLANNING_REASON,
 };
 pub use pid::{pid_guess, ProcLink};
-pub use pipe::{dev_pipe_override, pipe_name, PIPE_NAME_PREFIX};
+pub use pipe::{
+    dev_pipe_override, pipe_name, pipe_sddl, PipeAce, PipeSecurity, PIPE_NAME_PREFIX, SYSTEM_SID,
+};
 pub use typing::{TypePhase, TypeRequest, TYPE_ABORT, TYPE_SUBMIT};
 
 /// The protocol version every message carries (`"protocol": 1`). A server

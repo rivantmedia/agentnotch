@@ -214,3 +214,70 @@ fn the_response_frame_shape() {
         serde_json::from_str(r#"{"decision":"allow","future":1}"#).unwrap();
     assert_eq!(parsed, PermissionResponse::allow());
 }
+
+/// Each answer the app can give has a constructor; what the hook prints for
+/// it is the fixture's JSON (the constructors go through `Value`, so only
+/// the order of keys may differ from the Mac's bytes).
+#[test]
+fn the_constructors_give_the_documented_answers() {
+    let stdin = |name: &str| std::fs::read(fixtures().join(format!("stdin/{name}.json"))).unwrap();
+    let expected = |name: &str| -> Option<Value> {
+        let text = std::fs::read(fixtures().join(format!("v1-responses/{name}.stdout"))).unwrap();
+        (!text.is_empty()).then(|| serde_json::from_slice(&text).unwrap())
+    };
+    let printed = |stdin: &[u8], response: &PermissionResponse| -> Option<Value> {
+        permission_output_for_stdin(stdin, response)
+            .map(|text| serde_json::from_str(&text).unwrap())
+    };
+
+    let bash = stdin("permission_request_bash");
+    let bash_json: Value = serde_json::from_slice(&bash).unwrap();
+    assert_eq!(
+        printed(&bash, &PermissionResponse::allow()),
+        expected("allow")
+    );
+    assert_eq!(
+        printed(
+            &bash,
+            &PermissionResponse::always_allow(bash_json["permission_suggestions"][0].clone())
+        ),
+        expected("always")
+    );
+    assert_eq!(
+        printed(&bash, &PermissionResponse::deny(None)),
+        expected("deny")
+    );
+    assert_eq!(printed(&bash, &PermissionResponse::ask()), expected("ask"));
+    assert_eq!(expected("ask"), None);
+
+    let plan = stdin("permission_request_plan");
+    assert_eq!(
+        printed(&plan, &PermissionResponse::approve_plan()),
+        expected("plan")
+    );
+    assert_eq!(
+        printed(&plan, &PermissionResponse::keep_planning()),
+        expected("keep_planning")
+    );
+
+    let question = stdin("permission_request_question");
+    assert_eq!(
+        printed(
+            &question,
+            &PermissionResponse::answers([(
+                "Which charting library should the dashboard use?",
+                "Recharts"
+            )])
+        ),
+        expected("question")
+    );
+    // The frame the app writes for it.
+    assert_eq!(
+        String::from_utf8(PermissionResponse::answers([("Q", "A")]).to_json()).unwrap(),
+        r#"{"decision":"allow","updated_input":{"answers":{"Q":"A"}}}"#
+    );
+    assert_eq!(
+        String::from_utf8(PermissionResponse::approve_plan().to_json()).unwrap(),
+        r#"{"decision":"allow","updated_input":{}}"#
+    );
+}

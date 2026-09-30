@@ -39,6 +39,9 @@ pub const HOOK_WATCHDOG_MS: u64 = 1200;
 pub const STATUS_LINE_SEND_BUDGET_MS: u64 = 300;
 /// Matches the installer's `"timeout": 86400` for PermissionRequest.
 pub const DECISION_TIMEOUT_S: u64 = 86_400;
+/// The status line wrapper ends a previous command that runs longer than
+/// this: a cap for commands that hang, not for slow ones.
+pub const PREVIOUS_STATUS_LINE_TIMEOUT_MS: u64 = 30_000;
 /// The server closes a connection that has not sent a whole frame by then.
 pub const SERVER_READ_DEADLINE_MS: u64 = 5000;
 /// The server writes a response within this, then closes.
@@ -48,3 +51,16 @@ pub const RESPONSE_WRITE_TIMEOUT_MS: u64 = 2000;
 pub const MAX_CONNECTIONS: usize = 512;
 /// In and out buffer of each pipe instance.
 pub const PIPE_BUFFER_BYTES: u32 = 64 * 1024;
+/// When the hook pipe's name is taken, or an instance can't be created, the
+/// server tries again this often.
+pub const SERVER_RETRY_MS: u64 = 5000;
+
+/// The typing helper waits this long between the text and asking whether to
+/// press Return: a burst of key records followed at once by Return reads as
+/// a paste (the Mac waits the same between its two writes).
+pub const TYPE_SETTLE_MS: u64 = 150;
+/// After `{"phase":"typed"}` the helper waits this long for `submit`; then
+/// the text stays typed and Return is never pressed.
+pub const TYPE_SUBMIT_WAIT_MS: u64 = 2000;
+/// The console helper never lives longer than this.
+pub const CONSOLE_HELPER_LIFETIME_MS: u64 = 12_000;
