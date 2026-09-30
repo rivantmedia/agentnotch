@@ -1,8 +1,9 @@
 // The sessions panel's page (DESIGN-WIN §5.3, UI§4-5): the shell every screen of the panel sits in.
 // It owns the card and its tail, the header (title, Sealed badge, pin, gear menu, close, the
 // attention strip and the account chips), the route (list or one session's chat), the keyboard
-// gate's state, Esc, the size report and the sealed scenes. The list's rows, the setup banners
-// and the toast are drawn by later sub-tasks into the regions this file leaves for them; the
+// gate's state, Esc, the size report and the sealed scenes. The list (sections, rows, folding,
+// the undo toast) is panel-list.js's markup driven from here; the setup banners and the row
+// action bars are drawn by a later sub-task into the regions this file leaves for them; the
 // chat is chat.js's.
 //
 // How it is built, so the next sub-task can add to it without rewriting it:
@@ -11,8 +12,8 @@
 //     agentnotchCommon.morph, so a snapshot never drops focus, an open menu or a half-typed answer.
 //       #an-header  -> headerHtml(v)      title row, attention strip, account chips
 //       #an-banners -> bannersHtml(v)     setup banners (sub-task 6)
-//       #an-rows    -> listHtml(v)        the sections and rows (sub-task 5); the empty states
-//       #an-toast   -> toastHtml(v)       the undo toast (sub-task 5)
+//       #an-rows    -> listHtml(v)        the sections and rows (agentnotchPanelList); the empty states
+//       #an-toast   -> toastHtml(v)       the undo toast
 //       #an-overlay -> overlayHtml(v)     the gear menu (a layer inside the card: the window is
 //                                          exactly the card, so nothing can pop out of it)
 //       #an-chat    -> agentnotchChat     mounted on a session route, never morphed here
@@ -28,6 +29,7 @@
   'use strict';
 
   var C = null;
+  var L = null;
   var els = {};
   var started = false;
 
@@ -48,6 +50,10 @@
   ];
   /** Chip labels shorter than this fit the chip's 150 px; longer ones are cut in the middle. */
   var CHIP_CHARS = 24;
+  /** How long "Marked N reviewed" can be undone before it is sent (ClaudePanelState.undoWindow). */
+  var UNDO_MS = 5000;
+  /** How often the elapsed labels are redrawn (they read minutes: a wait never shows a stale one). */
+  var TICK_MS = 15000;
   /** A set_setting's local value stands this long after its reply, for a snapshot still in flight. */
   var OVERRIDE_MS = 2000;
 
@@ -78,6 +84,16 @@
     /** The sealed scene being shown, or null. */
     scene: null,
     pointer: false,
+    /** The pointer is over the list: rows keep their order until it leaves. */
+    hoverList: false,
+    /** The row ids in the order last drawn: what the frozen order keeps. */
+    displayed: [],
+    /** What the user folded or unfolded: {bucket: true|false}; a bucket without an entry follows the engine. */
+    folds: {},
+    /** A mark-all-reviewed that can still be undone: {ids, at, timer}; its rows are shown as gone. */
+    pending: null,
+    /** A row to bring into view on the next render (a highlight). */
+    scrollTo: null,
     field: false,
     engagedSent: false,
     reported: { w: 0, h: 0 },
@@ -423,9 +439,9 @@
     return '';
   }
 
-  /** The undo toast. */
+  /** The undo toast, while a mark-all-reviewed can still be taken back. */
   function toastHtml() {
-    return '';
+    return L.toastHtml(state.pending);
   }
 
   function emptyHtml(v) {
@@ -442,15 +458,41 @@
         : 'Start Claude Code in VS Code or a terminal. Sessions from every account show up here.') + '</div></div>';
   }
 
-  /**
-   * The list region: the empty states here; the sections and rows come with sub-task 5, which
-   * replaces the placeholder below. Nothing is drawn for a first snapshot that has not arrived.
-   */
+  // ---- the list ---------------------------------------------------------------------------
+
+  /** A row of a pending mark-all-reviewed shows as gone, unless it finished again since the click. */
+  function hiddenRow(row) {
+    var p = state.pending;
+    if (!p || p.ids.indexOf(row.session_id) < 0) return false;
+    return !(row.since_ms > p.at) || row.bucket !== 'ready_for_review';
+  }
+
+  /** The sections and rows for the current snapshot and view state (see agentnotchPanelList.layout). */
+  function listLayout(v) {
+    return L.layout(v, {
+      filter: effectiveFilter(v),
+      folds: state.folds,
+      frozen: state.hoverList ? state.displayed : null,
+      hidden: hiddenRow,
+    });
+  }
+
+  /** Where a row's action bar goes: sub-task 6 sets `agentnotchPanel.slots.actions(row, ctx) -> html`. */
+  var SLOTS = { actions: null };
+
+  /** The list region: the sections and rows, or an empty state. Nothing before the first snapshot. */
   function listHtml(v) {
     if (!v) return state.error ? emptyHtml(v) : '';
-    var visible = visibleSessions(v);
-    if (!visible.length) return emptyHtml(v);
-    return '<div class="an-rows-pending" data-key="rows" data-an-count="' + visible.length + '"></div>';
+    var lay = listLayout(v);
+    if (lay.isEmpty) return emptyHtml(v);
+    state.displayed = lay.order;
+    return L.html(lay, {
+      selected: state.selected,
+      multi: !!v.accounts_multi,
+      filtered: !!effectiveFilter(v),
+      now: C.now(),
+      actions: SLOTS.actions,
+    });
   }
 
   // ---- render ----------------------------------------------------------------------------
@@ -460,12 +502,27 @@
     var v = view();
     C.morph(els.header, headerHtml(v));
     C.morph(els.banners, bannersHtml(v));
+    var before = C.flipFirst(els.rows);
     C.morph(els.rows, listHtml(v));
+    C.flipPlay(els.rows, before);
     C.morph(els.toast, toastHtml(v));
+    scrollToRow();
     C.morph(els.overlay, overlayHtml(v));
     applyMode();
     makeRoomForMenu();
     reportSize();
+  }
+
+  /** A highlighted row (a banner click, an auto-open) is brought into view once it is drawn. */
+  function scrollToRow() {
+    if (!state.scrollTo) return;
+    var id = state.scrollTo;
+    var row = Array.prototype.slice.call(els.rows.querySelectorAll('[data-id]')).filter(function (el) {
+      return el.getAttribute('data-id') === id;
+    })[0];
+    if (!row) return;
+    state.scrollTo = null;
+    if (typeof row.scrollIntoView === 'function') row.scrollIntoView({ block: 'nearest' });
   }
 
   /** A menu opened over a short card (the empty list) makes the card tall enough to hold it. */
@@ -516,6 +573,52 @@
     C.call('panel_report_size', { w: w, h: h }).catch(fail('panel_report_size'));
   }
 
+  // ---- mark all reviewed, with undo ------------------------------------------------------
+
+  /**
+   * Every row of Ready for review (the ones the filter shows) leaves at once and is marked for
+   * real after UNDO_MS, or when the panel closes; Undo puts them back and sends nothing. The call
+   * carries the click's time, so a turn that finishes in those seconds stays unreviewed (BHV-9).
+   * Another mark-all sends the one before it first. A sealed scene never sends.
+   */
+  function markAllReviewed() {
+    var v = view();
+    if (!v || state.route !== 'sessions') return;
+    var section = listLayout(v).sections.filter(function (s) { return s.bucket === 'ready_for_review'; })[0];
+    if (!section) return;
+    var ids = section.rows.filter(function (r) { return !r.failed; }).map(function (r) { return String(r.session_id); });
+    if (!ids.length) return;
+    commitPending();
+    var at = C.now();
+    state.pending = { ids: ids, at: at, timer: null };
+    if (!state.scene) {
+      var pending = state.pending;
+      pending.timer = window.setTimeout(function () {
+        if (state.pending === pending) commitPending();
+      }, UNDO_MS);
+    }
+    render();
+  }
+
+  /** Sends the pending review now (the window ended, another began, or the panel closes). */
+  function commitPending() {
+    var p = state.pending;
+    if (!p) return;
+    if (p.timer !== null) window.clearTimeout(p.timer);
+    state.pending = null;
+    if (!state.scene) C.call('mark_all_reviewed', { session_ids: p.ids, at_ms: p.at }).catch(fail('mark_all_reviewed'));
+    render();
+  }
+
+  /** Puts the rows back in Ready for review; nothing was sent. */
+  function undoReview() {
+    var p = state.pending;
+    if (!p) return;
+    if (p.timer !== null) window.clearTimeout(p.timer);
+    state.pending = null;
+    render();
+  }
+
   // ---- navigation and actions ------------------------------------------------------------
 
   /** Moves to `sessions` or `session:<id>`; the glue is told (`panel_route`) only of a real change. */
@@ -531,6 +634,7 @@
   }
 
   function closePanel() {
+    commitPending();
     C.call('panel_close').catch(fail('panel_close'));
   }
 
@@ -566,6 +670,30 @@
       render();
     });
   };
+  // -- the list's actions (delegated from the rows: data-an-action + data-an-arg) --
+
+  ACTIONS['open-chat'] = function (id) {
+    if (id) navigate('session:' + id);
+  };
+  ACTIONS.fold = function (bucket) {
+    if (!bucket || bucket === 'needs_you') return;
+    var v = view();
+    var section = v ? listLayout(v).sections.filter(function (s) { return s.bucket === bucket; })[0] : null;
+    if (!section) return;
+    state.folds[bucket] = !section.collapsed;
+    render();
+  };
+  ACTIONS.jump = function (id) {
+    if (id) C.call('focus', { session_id: id }).catch(fail('focus'));
+  };
+  ACTIONS['mark-reviewed'] = function (id) {
+    if (id) C.call('mark_reviewed', { session_id: id, at_ms: C.now() }).catch(fail('mark_reviewed'));
+  };
+  ACTIONS['dismiss-failure'] = function (id) {
+    if (id) C.call('dismiss_failure', { session_id: id }).catch(fail('dismiss_failure'));
+  };
+  ACTIONS['mark-all-reviewed'] = markAllReviewed;
+  ACTIONS['undo-review'] = undoReview;
   ACTIONS['open-settings'] = function () {
     C.call('open_settings', { tab: 'claude' }).catch(fail('open_settings'));
   };
@@ -638,6 +766,8 @@
     state.snapshot = s;
     state.at = at;
     state.error = null;
+    // A row pointed at by the first request (it came before the first snapshot) opens its section.
+    if (state.scrollTo) unfoldFor(state.scrollTo);
     dropOverrides(s);
     render();
   }
@@ -652,13 +782,24 @@
     // narrowed list shows the row it points at (ClaudePanelState.routeChanged).
     if (mode() === 'list') state.filter = typeof req.ring_id === 'string' && req.ring_id ? req.ring_id : null;
     state.highlight = typeof req.highlight === 'string' && req.highlight ? req.highlight : null;
-    if (state.highlight) state.selected = state.highlight;
+    if (state.highlight) {
+      state.selected = state.highlight;
+      state.scrollTo = state.highlight;
+      unfoldFor(state.highlight);
+    }
     if (mode() === 'chat') state.selected = p.id;
     state.reason = typeof req.reason === 'string' ? req.reason : null;
     state.placement = normalizePlacement(req.placement);
     state.menuOpen = false;
     applyPlacement();
     render();
+  }
+
+  /** A row pointed at inside a folded section opens that section (SessionListLayout.foldedBucket). */
+  function unfoldFor(id) {
+    var v = state.snapshot;
+    var row = v ? sessionsOf(v).filter(function (s) { return s.session_id === id; })[0] : null;
+    if (row) state.folds[L.bucketOf(row)] = false;
   }
 
   function applyFocus(payload) {
@@ -688,6 +829,66 @@
     return s;
   }
 
+  /** The counts the header and the sections carry, recomputed from the rows a scene changed. */
+  function retally(s) {
+    var totals = clone(ZERO);
+    var byRing = Object.create(null);
+    var sections = [];
+    var per = Object.create(null);
+    s.sessions.forEach(function (r) {
+      var key = r.failed ? 'failed' : r.bucket === 'needs_you' ? 'needs_you' : r.bucket === 'ready_for_review' ? 'review' : r.bucket;
+      totals[key] = (totals[key] || 0) + 1;
+      var ring = byRing[r.ring_id] || (byRing[r.ring_id] = clone(ZERO));
+      ring[key] = (ring[key] || 0) + 1;
+      per[r.bucket] = (per[r.bucket] || 0) + 1;
+    });
+    L.BUCKETS.forEach(function (b) {
+      if (!per[b]) return;
+      sections.push({ bucket: b, title: b === 'needs_you' ? 'Needs you' : b === 'ready_for_review' ? 'Ready for review' : b === 'working' ? 'Working' : 'Idle',
+        count: per[b], fold_by_default: b === 'idle' && per[b] > L.IDLE_FOLD_ABOVE });
+    });
+    s.totals = totals;
+    s.sections = sections;
+    ringsOf(s).forEach(function (r) {
+      var own = byRing[r.ring_id] || clone(ZERO);
+      r.counts = own;
+      r.badges = { needs_you: own.needs_you + own.failed, review: own.review };
+    });
+    return s;
+  }
+
+  /**
+   * `n` sessions for a busy list: the fixture's rows cycled per section with new ids and titles
+   * (`Sweep the repo (2)`), in the Mac's proportions (a few needing you, a few done, mostly working).
+   */
+  function busy(s) {
+    var plan = [['needs_you', 3], ['ready_for_review', 6], ['working', 10], ['idle', 6]];
+    var made = [];
+    plan.forEach(function (entry) {
+      var pool = s.sessions.filter(function (r) { return r.bucket === entry[0]; });
+      if (!pool.length) return;
+      for (var i = 0; i < entry[1]; i++) {
+        var row = clone(pool[i % pool.length]);
+        if (i >= pool.length) {
+          row.session_id = row.session_id + '-' + (Math.floor(i / pool.length) + 1);
+          row.title = row.title + ' (' + (Math.floor(i / pool.length) + 1) + ')';
+          row.since_ms = row.since_ms - Math.floor(i / pool.length) * 97000;
+        }
+        made.push(row);
+      }
+    });
+    s.sessions = made;
+    return retally(s);
+  }
+
+  /** Only what one screenshot shows: the sessions whose ids are listed, in the given buckets' order. */
+  function only(ids) {
+    return function (s) {
+      s.sessions = s.sessions.filter(function (r) { return ids.indexOf(r.session_id) >= 0; });
+      return retally(s);
+    };
+  }
+
   /** Scene name -> how it reads the current snapshot. Later sub-tasks add their scenes here. */
   var SCENES = {
     'panel-empty': emptied,
@@ -695,6 +896,11 @@
     'panel-header': same,
     'panel-menu': same,
     'panel-filtered': same,
+    'panel-undo': same,
+    'panel-keyboard-folded': same,
+    'panel-regular-rows': only(['needs-question', 'needs-permission', 'needs-ratelimit', 'review-darkmode', 'work-migration', 'work-ci', 'work-summary', 'idle-notch']),
+    'panel-busy-window': busy,
+    'panel-busy-full': busy,
     'panel-pinned': function (s) {
       s.ui = s.ui || {};
       s.ui.panel_pinned = true;
@@ -708,6 +914,20 @@
     },
   };
 
+  /** View state a scene needs besides the snapshot: the selection, folds, a pending review. */
+  var SCENE_STATE = {
+    'panel-undo': function () {
+      var v = view();
+      var ids = v ? sessionsOf(v).filter(function (r) { return r.bucket === 'ready_for_review'; }).slice(0, 2).map(function (r) { return String(r.session_id); }) : [];
+      if (ids.length) state.pending = { ids: ids, at: C.now(), timer: null };
+    },
+    'panel-keyboard-folded': function () {
+      state.selected = 'needs-question';
+      state.folds.working = true;
+      state.folds.idle = true;
+    },
+  };
+
   /** Shows the named state from the snapshot the page already holds; false for a name it lacks. */
   function showScene(name) {
     if (!C || !Object.prototype.hasOwnProperty.call(SCENES, name) || !state.snapshot) return false;
@@ -715,14 +935,26 @@
     state.scene = name;
     state.route = 'sessions';
     state.filter = null;
+    state.selected = null;
+    state.folds = {};
+    if (state.pending && state.pending.timer !== null) window.clearTimeout(state.pending.timer);
+    state.pending = null;
     state.menuOpen = name === 'panel-menu';
     if (state.menuOpen) loadNotify();
     if (name === 'panel-filtered') {
       var ring = ringsOf(state.snapshot)[1] || ringsOf(state.snapshot)[0];
       state.filter = ring ? ring.ring_id : null;
     }
+    if (SCENE_STATE[name]) SCENE_STATE[name]();
     render();
     return true;
+  }
+
+  /** A title or detail that is cut ON PURPOSE (`data-an-clip`) and shows an ellipsis is not a clipped text. */
+  function cutWithEllipsis(el) {
+    if (!el.hasAttribute('data-an-clip')) return false;
+    var style = window.getComputedStyle ? window.getComputedStyle(el) : null;
+    return !!style && style.textOverflow === 'ellipsis';
   }
 
   function rectInside(inner, outer, slack) {
@@ -743,12 +975,15 @@
     var texts = 0;
     Array.prototype.forEach.call(document.querySelectorAll('[data-an-text]'), function (el) {
       texts += 1;
-      if (el.scrollWidth > el.clientWidth + 1) failures.push('text is clipped: ' + C.oneLine(el.textContent).slice(0, 40));
+      if (el.scrollWidth > el.clientWidth + 1 && !cutWithEllipsis(el)) failures.push('text is clipped: ' + C.oneLine(el.textContent).slice(0, 40));
     });
     var controls = els.card.querySelectorAll('button, [data-an-action], input, textarea, select');
     Array.prototype.forEach.call(controls, function (el) {
       var r = el.getBoundingClientRect();
-      if (r.width && cr.width && !rectInside(r, cr, 0.5)) {
+      // A scrolling list has rows below the fold: they may lie below the card, never beside it.
+      var scrolled = els.list.contains(el) && els.list.scrollHeight > els.list.clientHeight + 1;
+      var box = scrolled ? { left: cr.left, right: cr.right, top: -1e9, bottom: 1e9 } : cr;
+      if (r.width && cr.width && !rectInside(r, box, 0.5)) {
         failures.push('control outside the card: ' + (el.getAttribute('aria-label') || C.oneLine(el.textContent)).slice(0, 40));
       }
     });
@@ -777,7 +1012,8 @@
   function start() {
     if (started) return;
     C = window.agentnotchCommon;
-    if (!C) return;
+    L = window.agentnotchPanelList;
+    if (!C || !L) return;
     els = {
       panel: document.getElementById('an-panel'),
       top: document.getElementById('an-top'),
@@ -800,6 +1036,18 @@
     els.card.addEventListener('pointerleave', function () { state.pointer = false; setEngaged(); });
     els.card.addEventListener('focusin', function (e) { state.field = isTextField(e.target); setEngaged(); });
     els.card.addEventListener('focusout', function () { state.field = false; setEngaged(); });
+    // Rows keep their order while the pointer is over the list, and move (glide) when it leaves.
+    els.list.addEventListener('pointerenter', function () { state.hoverList = true; });
+    els.list.addEventListener('pointerleave', function () {
+      state.hoverList = false;
+      render();
+    });
+    // A hidden window can no longer be undone from: send what is pending.
+    document.addEventListener('visibilitychange', function () { if (document.hidden) commitPending(); });
+    window.addEventListener('pagehide', commitPending);
+    window.setInterval(function () {
+      if (!C.isStatic() && state.snapshot && mode() === 'list') render();
+    }, TICK_MS);
     document.addEventListener('keydown', onKeyDown);
     document.addEventListener('pointerdown', onPointerDown);
 
@@ -837,6 +1085,10 @@
     /** For the later sub-tasks and the tests: the state and the tables they extend. */
     actions: ACTIONS,
     scenes: SCENES,
+    /** Named places sub-task 6 fills: `slots.actions = function (row, ctx) { return html; }` (the row's action bar). */
+    slots: SLOTS,
+    undoReview: undoReview,
+    markAllReviewed: markAllReviewed,
     _: {
       state: state,
       render: render,
@@ -848,6 +1100,8 @@
       chipsOf: chipsOf,
       visibleSessions: visibleSessions,
       escape: escape,
+      listLayout: listLayout,
+      commitPending: commitPending,
     },
   };
 

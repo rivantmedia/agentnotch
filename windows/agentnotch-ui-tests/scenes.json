@@ -135,7 +135,8 @@
         "ring_id": null,
         "highlight": null,
         "reason": "ring_click"
-      }
+      },
+      "maxHeight": 1400
     },
     {
       "name": "panel-menu",
@@ -163,7 +164,82 @@
         "ring_id": null,
         "highlight": null,
         "reason": "ring_click"
+      },
+      "maxHeight": 1400
+    },
+    {
+      "name": "panel-regular-rows",
+      "page": "agentnotch/panel.html",
+      "global": "agentnotchPanel",
+      "scene": "panel-regular-rows",
+      "widths": true,
+      "height": "fit",
+      "panel": {
+        "route": "sessions",
+        "ring_id": null,
+        "highlight": null,
+        "reason": "ring_click"
+      },
+      "maxHeight": 1400
+    },
+    {
+      "name": "panel-busy-window",
+      "page": "agentnotch/panel.html",
+      "global": "agentnotchPanel",
+      "scene": "panel-busy-window",
+      "widths": true,
+      "height": 680,
+      "panel": {
+        "route": "sessions",
+        "ring_id": null,
+        "highlight": null,
+        "reason": "ring_click"
       }
+    },
+    {
+      "name": "panel-busy-full",
+      "page": "agentnotch/panel.html",
+      "global": "agentnotchPanel",
+      "scene": "panel-busy-full",
+      "widths": true,
+      "height": "fit",
+      "panel": {
+        "route": "sessions",
+        "ring_id": null,
+        "highlight": null,
+        "reason": "ring_click"
+      },
+      "maxHeight": 4000
+    },
+    {
+      "name": "panel-undo",
+      "page": "agentnotch/panel.html",
+      "global": "agentnotchPanel",
+      "scene": "panel-undo",
+      "widths": true,
+      "height": "fit",
+      "panel": {
+        "route": "sessions",
+        "ring_id": null,
+        "highlight": null,
+        "reason": "ring_click"
+      },
+      "maxHeight": 1400
+    },
+    {
+      "name": "panel-keyboard-folded",
+      "page": "agentnotch/panel.html",
+      "global": "agentnotchPanel",
+      "scene": "panel-keyboard-folded",
+      "widths": true,
+      "height": "fit",
+      "panel": {
+        "route": "sessions",
+        "ring_id": null,
+        "highlight": null,
+        "reason": "ring_click"
+      },
+      "maxHeight": 1400
     },
     {
       "name": "panel-single-account",

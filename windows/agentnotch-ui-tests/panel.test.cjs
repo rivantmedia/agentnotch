@@ -93,7 +93,7 @@ test('panel.html keeps the CSP meta and loads nothing but its own files, with no
   const dom = require('./lib/dom.cjs');
   const document = dom.parseDocument(HTML);
   const scripts = document.querySelectorAll('script');
-  assert.deepEqual(scripts.map((s) => s.getAttribute('src')), ['common.js', 'markdown.js', 'toolresults.js', 'chat.js', 'panel.js']);
+  assert.deepEqual(scripts.map((s) => s.getAttribute('src')), ['common.js', 'markdown.js', 'toolresults.js', 'chat.js', 'panel-list.js', 'panel.js']);
   for (const script of scripts) assert.equal(script.textContent.trim(), '', 'no inline script');
   assert.deepEqual(document.querySelectorAll('link[rel="stylesheet"]').map((l) => l.getAttribute('href')), ['theme.css', 'panel.css']);
   for (const el of dom.elementsOf(document)) {
@@ -196,7 +196,7 @@ test('panel.css: transparent page, a solid card, a tail per side, and colour onl
 test('the page loads its five scripts in order with no error, and a load only asks for the snapshot', async () => {
   const page = await load();
   clean(page);
-  assert.deepEqual(page.loaded, ['common.js', 'markdown.js', 'toolresults.js', 'chat.js', 'panel.js']);
+  assert.deepEqual(page.loaded, ['common.js', 'markdown.js', 'toolresults.js', 'chat.js', 'panel-list.js', 'panel.js']);
   for (const name of ['agentnotchCommon', 'agentnotchMarkdown', 'agentnotchToolResults', 'agentnotchChat', 'agentnotchPanel']) {
     assert.equal(typeof page.window[name], 'object', name);
   }
@@ -343,14 +343,14 @@ test('choosing a chip narrows the list to that account; the strip follows; the s
   assert.equal(page.$('.an-chip.an-sel').getAttribute('data-an-arg'), WORK);
   // Work's own counts: 1 answerable, 1 failed, 1 review, 2 working, 2 idle
   assert.deepEqual(strip(page), ['1 needs you', '1 failed', '1 to review', '2 working', '2 idle']);
-  assert.equal(page.$('#an-rows .an-rows-pending').getAttribute('data-an-count'), '7');
+  assert.equal(page.$$('#an-rows .an-row').length, 7, 'Work has 7 sessions, none folded (2 idle)');
   page.click('.an-chip[data-an-arg="' + WORK + '"]');
   assert.equal(state(page).filter, null, 'a selected account chip goes back to All');
   assert.deepEqual(strip(page), ['4 need you', '1 failed', '3 to review', '3 working', '4 idle']);
   page.click('.an-chip[data-an-arg="' + PERSONAL + '"]');
   page.click('.an-chip[data-an-arg=""]');
   assert.equal(state(page).filter, null, 'All');
-  assert.equal(page.$('#an-rows .an-rows-pending').getAttribute('data-an-count'), '15');
+  assert.equal(page.$$('#an-rows .an-row').length, 11, '15 sessions, the 4 idle ones folded to a summary');
   clean(page);
 });
 
@@ -361,7 +361,7 @@ test('a filtered account with no sessions says so; a filter for a ring that is g
   assert.deepEqual(chips(page), ['All 8 3', 'Personal 8 3', 'Work 0']);
   const gone = await open({ route: 'sessions', ring_id: 'claude-acct-gone' });
   assert.equal(gone.$('.an-chip.an-sel').getAttribute('data-an-arg'), '', 'no chip could clear that filter, so it does not apply');
-  assert.equal(gone.$('#an-rows .an-rows-pending').getAttribute('data-an-count'), '15');
+  assert.equal(gone.$$('#an-rows .an-row').length, 11);
 });
 
 test('a long account label is cut in the middle and keeps its full text as the tooltip', async () => {
@@ -962,7 +962,7 @@ test('the region ids and action attributes the later sub-tasks build on exist an
   assert.equal(page.$('#an-chat').hasAttribute('hidden'), true);
   assert.ok(page.$('#an-card').contains(page.$('#an-rows')));
   assert.deepEqual(plain(page.run('Object.keys(agentnotchPanel.actions)')).sort(),
-    ['close', 'filter', 'gear', 'menu-auto', 'menu-notify', 'open-settings', 'pin']);
+    ['close', 'dismiss-failure', 'filter', 'fold', 'gear', 'jump', 'mark-all-reviewed', 'mark-reviewed', 'menu-auto', 'menu-notify', 'open-chat', 'open-settings', 'pin', 'undo-review']);
   assert.deepEqual(plain(page.run('Object.keys(agentnotchPanel.scenes)')).sort(),
-    ['panel-empty', 'panel-every-state', 'panel-filtered', 'panel-header', 'panel-menu', 'panel-pinned', 'panel-single-account']);
+    ['panel-busy-full', 'panel-busy-window', 'panel-empty', 'panel-every-state', 'panel-filtered', 'panel-header', 'panel-keyboard-folded', 'panel-menu', 'panel-pinned', 'panel-regular-rows', 'panel-single-account', 'panel-undo']);
 });

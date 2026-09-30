@@ -347,7 +347,8 @@ async function renderVariant(env, scene, variant) {
   const problems = [];
   const theme = variant.theme;
   const width = variant.width || scene.width || 400;
-  const height = scene.height === 'fit' ? 700 : scene.height || 700;
+  // A fitted page starts as tall as it may become, so a card capped at the viewport's height is not cut short before it is measured.
+  const height = scene.height === 'fit' ? Number(scene.maxHeight) || 800 : scene.height || 700;
   const label = LABELS[scene.page] || 'unknown';
   const edge = scene.edge || 'right';
   const snapshot = harness.fixture('snapshot.json');

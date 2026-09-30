@@ -166,4 +166,165 @@ button:focus-visible { outline: 1px solid var(--an-row-sel-stroke); outline-offs
 .an-empty .an-ring { --an-ring: 16px; margin-bottom: 6px; }
 .an-empty-title { font-size: var(--an-fs-body); font-weight: 500; color: var(--an-text); unicode-bidi: isolate; }
 .an-empty-text { font-size: var(--an-fs-caption); color: var(--an-text-2); }
-.an-rows-pending { min-height: 1px; }
+
+/* ---- the list: section headers, folded summaries, rows (panel-list.js; UI§5.3-5.6) --------- */
+
+.an-lst { display: block; }
+.an-sh {
+  display: flex; align-items: center; gap: 6px; min-height: 18px; box-sizing: border-box;
+  padding: calc(var(--an-block) + 4px) 8px 2px;
+}
+.an-sh.an-first { padding-top: 2px; }
+.an-sh-h { margin: 0; min-width: 0; flex: 0 1 auto; font: inherit; }
+.an-sh-btn {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 0; border: 0; background: transparent;
+  color: inherit; text-align: left; cursor: pointer;
+}
+.an-sh-btn.an-sh-fixed { cursor: default; }
+.an-sh-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--an-fs-body); font-weight: 600; unicode-bidi: isolate; }
+.an-sh-needs_you { color: var(--an-needs-you); }
+.an-sh-ready_for_review { color: var(--an-review); }
+.an-sh-working { color: var(--an-working); }
+.an-sh-idle { color: var(--an-text-2); }
+.an-sh-n { flex: none; color: var(--an-text-2); font-size: var(--an-fs-caption); font-weight: 500; font-variant-numeric: tabular-nums; }
+.an-sh-chev { display: inline-flex; flex: none; color: var(--an-text-3); transition: transform var(--an-quick); }
+.an-sh-chev .an-icon { width: 8px; height: 8px; }
+.an-sh-btn:hover .an-sh-chev { color: var(--an-text); }
+.an-sh-chev.an-folded { transform: rotate(-90deg); }
+.an-quiet {
+  margin-left: auto; flex: none; height: var(--an-control-h); padding: 0 8px; border: 0; border-radius: 999px; background: transparent;
+  color: var(--an-text-2); font-size: var(--an-fs-caption); font-weight: 500; white-space: nowrap; cursor: pointer;
+  transition: background var(--an-quick), color var(--an-quick);
+}
+.an-quiet:hover { background: var(--an-fill); color: var(--an-text); }
+
+.an-foldsum {
+  display: block; width: 100%; box-sizing: border-box; padding: 5px 8px; border: 0; border-radius: var(--an-row-corner);
+  background: transparent; color: var(--an-text-2); font-size: var(--an-fs-caption); text-align: left; cursor: pointer;
+  transition: background var(--an-quick), color var(--an-quick);
+}
+.an-foldsum > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; unicode-bidi: isolate; }
+.an-foldsum:hover { background: var(--an-row-hover); color: var(--an-text); }
+
+/* a row: padding 8x7 (4 when it is one line), corner 10, hover fill, selection outline */
+.an-row {
+  position: relative; box-sizing: border-box; container-type: inline-size; padding: 7px 8px; border-radius: var(--an-row-corner);
+  background: transparent; cursor: pointer; transition: background var(--an-quick);
+}
+.an-row:not(.an-first) { margin-top: 2px; }
+.an-lst[data-compact] .an-row { margin-top: 0; }
+.an-row.an-cmp { padding-top: 4px; padding-bottom: 4px; }
+.an-row:hover { background: var(--an-row-hover); }
+.an-row.an-sel { background: var(--an-row-sel); box-shadow: inset 0 0 0 var(--an-hair) var(--an-row-sel-stroke); }
+.an-reg { display: flex; flex-direction: column; gap: var(--an-line-gap); }
+
+.an-r1 { display: flex; align-items: baseline; gap: 8px; }
+.an-rtitle {
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--an-fs-row-title); font-weight: var(--an-fw-row-title); color: var(--an-text); unicode-bidi: isolate;
+}
+
+/* the trailing slot: ring and elapsed time, swapped for the row's buttons under the pointer or the
+   selection (both stay in the box, so the title never reflows) */
+.an-slot { flex: none; display: grid; justify-items: end; align-items: center; }
+.an-slot > * { grid-area: 1 / 1; }
+.an-trail { display: inline-flex; align-items: center; gap: 5px; font-size: var(--an-fs-caption); font-weight: 500; font-variant-numeric: tabular-nums; }
+.an-elapsed { white-space: nowrap; }
+.an-hover { display: inline-flex; align-items: center; gap: 1px; opacity: 0; pointer-events: none; }
+.an-row:hover .an-trail, .an-row.an-sel .an-trail, .an-row:focus-within .an-trail { opacity: 0; }
+.an-row:hover .an-hover, .an-row.an-sel .an-hover, .an-row:focus-within .an-hover { opacity: 1; pointer-events: auto; }
+.an-rbtn {
+  display: inline-flex; align-items: center; justify-content: center; width: 22px; height: var(--an-control-h); padding: 0;
+  border: 0; border-radius: 6px; background: transparent; color: var(--an-text-2); cursor: pointer;
+  transition: background var(--an-quick), color var(--an-quick);
+}
+.an-rbtn:hover { background: var(--an-fill); color: var(--an-text); }
+.an-rbtn .an-icon { width: 13px; height: 13px; }
+.an-rb-review { color: var(--an-review); }
+.an-rb-review:hover { color: var(--an-review); }
+
+/* the detail line */
+.an-detail { min-width: 0; font-size: var(--an-fs-body); line-height: 1.3; overflow-wrap: anywhere; unicode-bidi: isolate; }
+.an-detail[data-lines] { display: -webkit-box; -webkit-box-orient: vertical; overflow: hidden; text-overflow: ellipsis; }
+.an-detail[data-lines="1"] { -webkit-line-clamp: 1; }
+.an-detail[data-lines="2"] { -webkit-line-clamp: 2; }
+.an-d-primary { color: var(--an-text); }
+.an-d-secondary { color: var(--an-text-2); }
+.an-d-error { color: var(--an-critical); }
+.an-d-att { display: flex; flex-direction: column; gap: 3px; }
+.an-tool { font-weight: 600; color: var(--an-needs-you); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.an-code {
+  box-sizing: border-box; padding: 4px 6px; border-radius: 6px; background: var(--an-fill); color: var(--an-primary);
+  font: 400 var(--an-fs-mono)/1.35 var(--an-mono); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden;
+}
+.an-code.an-code-whole { display: block; -webkit-line-clamp: unset; }
+.an-d-prompt { color: var(--an-text); }
+.an-lbl { font-weight: 600; color: var(--an-needs-you); }
+
+/* the meta line: account . tasks . context . project . background */
+.an-meta {
+  display: flex; align-items: center; gap: 6px; min-width: 0; margin-top: 1px; white-space: nowrap;
+  font-size: var(--an-fs-caption); color: var(--an-text-2);
+}
+.an-meta > * { flex: none; }
+.an-dotsep { color: var(--an-text-3); font-weight: 700; }
+.an-acct { display: inline-flex; align-items: center; gap: 5px; flex: 0 1 auto; min-width: 0; }
+.an-meta > .an-acct { flex: 0 1 auto; min-width: 24px; }
+.an-acct-l { min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
+.an-meta > .an-proj { flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
+.an-tasks { display: inline-flex; align-items: center; gap: 5px; }
+.an-tcount, .an-ctx-t { font-variant-numeric: tabular-nums; }
+.an-tbar { position: relative; display: inline-flex; flex: none; height: var(--an-bar-h); border-radius: 999px; overflow: hidden; }
+.an-tbar-seg { gap: 1.5px; overflow: visible; }
+.an-tk { flex: 1 1 0; min-width: 0; border-radius: 999px; }
+.an-tk-done { background: var(--an-text); }
+.an-tk-active { background: var(--an-text-2); }
+.an-tk-todo { background: var(--an-bar-track); }
+.an-tbar-fill { background: var(--an-bar-track); }
+.an-tbar-fill > span { position: absolute; top: 0; bottom: 0; left: 0; min-width: var(--an-bar-h); border-radius: 999px; }
+.an-tbar-fill > .an-tk-active { min-width: var(--an-bar-h); }
+.an-ctx { display: inline-flex; align-items: center; gap: 4px; }
+.an-cbar { position: relative; display: block; width: 20px; height: var(--an-bar-h); border-radius: 999px; background: var(--an-bar-track); overflow: hidden; }
+.an-cbar > span { position: absolute; top: 0; bottom: 0; left: 0; min-width: var(--an-bar-h); border-radius: 999px; background: var(--an-text); }
+.an-ctx-high .an-cbar > span { background: var(--an-needs-you); }
+.an-ctx-high .an-ctx-t { color: var(--an-needs-you); }
+.an-ctx-critical .an-cbar > span { background: var(--an-critical); }
+.an-ctx-critical .an-ctx-t { color: var(--an-critical); }
+/* short of room: the word "context" goes first */
+@container (max-width: 330px) { .an-ctx-word { display: none; } }
+
+/* the action bar's place (a later sub-task fills it); empty, it takes no room */
+.an-row-actions { min-width: 0; }
+.an-row-actions:empty { display: none; }
+.an-row-actions:not(:empty) { margin-top: 3px; }
+
+/* the one-line form */
+.an-cmp { display: flex; align-items: baseline; gap: 8px; }
+.an-cmain {
+  flex: 1 1 auto; min-width: 0; display: flex; flex-wrap: wrap; column-gap: 8px; height: 1.35em; overflow: hidden;
+  font-size: var(--an-fs-body); line-height: 1.35;
+}
+.an-ctitle {
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; color: var(--an-text); unicode-bidi: isolate;
+}
+.an-cdet { white-space: nowrap; font-size: var(--an-fs-caption); color: var(--an-text-2); unicode-bidi: isolate; }
+.an-cprog { flex: none; display: inline-flex; align-items: center; gap: 6px; font-size: var(--an-fs-caption); color: var(--an-text-2); align-self: center; }
+.an-cprog .an-acct-dot { display: inline-flex; }
+.an-row:hover .an-cprog, .an-row.an-sel .an-cprog { display: none; }
+.an-cmp .an-slot { align-self: center; }
+
+/* ---- the undo toast ----------------------------------------------------------------------- */
+
+.an-toast {
+  display: flex; align-items: center; gap: 8px; margin: 0 var(--an-pad) var(--an-pad); padding: 7px 10px;
+  border-radius: var(--an-row-corner); background: var(--an-fill);
+}
+.an-toast-ring { display: inline-flex; color: var(--an-review); }
+.an-toast-ring .an-ring { --an-ring: 10px; color: var(--an-review); }
+.an-toast-t { flex: 1 1 auto; min-width: 0; font-size: var(--an-fs-body); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.an-toast-undo {
+  flex: none; height: var(--an-control-h); padding: 0 8px; border: 0; border-radius: 999px; background: var(--an-fill-hover);
+  color: var(--an-text); font-size: var(--an-fs-caption); font-weight: 600; cursor: pointer;
+}
+.an-toast-undo:hover { background: var(--an-fill-hover); filter: brightness(1.15); }
