@@ -19,6 +19,7 @@ mod deeplink;
 mod emit;
 mod engine;
 mod hotkey;
+mod instance;
 mod links;
 mod menu;
 mod panel;
@@ -140,17 +141,33 @@ pub fn refresh_claude(_app: &AppHandle, provider: &str) -> bool {
     let Some(hub) = hub() else {
         return false;
     };
-    // Upstream's own id ("claude") comes from "Refresh all": every ring, on request. A ring id
-    // ("claude-acct-…") comes from a click on that ring.
-    let args = if provider == "claude" {
+    calls::engine_call_within(
+        hub,
+        "refresh_usage",
+        refresh_args(provider),
+        MAIN_THREAD_WAIT,
+    )
+    .and_then(Result::ok)
+    .and_then(|reply| reply.get("coming").and_then(Value::as_bool))
+    .unwrap_or(false)
+}
+
+/// Whether upstream's refresh path hands `provider` to the fork: upstream's own Claude id and
+/// every ring id of the fork (`claude-acct-…`, and the older `claude-<slug>` / `claude-dir-…`).
+/// The WU1 seam line in `main.rs` spells the same rule inline; the tests hold the two together.
+pub fn is_claude_provider(provider: &str) -> bool {
+    provider == "claude" || provider.starts_with("claude-")
+}
+
+/// `refresh_usage`'s arguments for upstream's refresh of `provider`. Upstream's own id
+/// ("claude") comes from "Refresh all": every ring, on request. A ring id ("claude-acct-…")
+/// comes from a click on that ring.
+fn refresh_args(provider: &str) -> Value {
+    if provider == "claude" {
         serde_json::json!({ "reason": "manual" })
     } else {
         serde_json::json!({ "ring_id": provider, "reason": "ring_click" })
-    };
-    calls::engine_call_within(hub, "refresh_usage", args, MAIN_THREAD_WAIT)
-        .and_then(Result::ok)
-        .and_then(|reply| reply.get("coming").and_then(Value::as_bool))
-        .unwrap_or(false)
+    }
 }
 
 /// Upstream's "Let Claude Code notify …" switch (WH6): on only while Claude Code control is on.
@@ -167,9 +184,7 @@ pub fn hooks_switch_get() -> bool {
 pub fn hooks_switch_set(on: bool) -> Result<String, String> {
     let hub =
         hub().ok_or_else(|| format!("{DISPLAY_NAME}'s Claude Code control isn't running."))?;
-    if on && hub.snapshot().setup.hook_consent != Some(true) {
-        return Err(TURN_ON_FIRST.into());
-    }
+    hooks_change_allowed(on, hub.snapshot().setup.hook_consent)?;
     let state = if on { "on" } else { "off" };
     match calls::engine_call_within(
         hub,
@@ -183,9 +198,108 @@ pub fn hooks_switch_set(on: bool) -> Result<String, String> {
     }
 }
 
+/// Consent before writes: hooks are installed (upstream's switch turned on, `install-hooks` on
+/// the command line) only once the user has clicked Turn on in the Claude Code pane, which is
+/// what `hook_consent == Some(true)` records. Never asked and declined both refuse. Removing
+/// them is always allowed.
+fn hooks_change_allowed(on: bool, hook_consent: Option<bool>) -> Result<(), String> {
+    if on && hook_consent != Some(true) {
+        return Err(TURN_ON_FIRST.into());
+    }
+    Ok(())
+}
+
 /// How long a call made on the main thread waits for the hub before the UI moves on.
 const MAIN_THREAD_WAIT: std::time::Duration = std::time::Duration::from_millis(750);
 
 fn log(line: &str) {
     crate::applog(&format!("an: {line}"));
+}
+
+#[cfg(test)]
+mod tests {
+    use agentnotch_engine::hub::Call;
+
+    use super::{hooks_change_allowed, is_claude_provider, refresh_args, TURN_ON_FIRST};
+
+    #[test]
+    fn turning_hooks_on_needs_the_consent() {
+        // `hooks_switch_set(true)` and `install-hooks` both decide here.
+        assert_eq!(
+            hooks_change_allowed(true, None),
+            Err(TURN_ON_FIRST.to_string())
+        );
+        assert_eq!(
+            hooks_change_allowed(true, Some(false)),
+            Err(TURN_ON_FIRST.to_string())
+        );
+        assert_eq!(hooks_change_allowed(true, Some(true)), Ok(()));
+    }
+
+    #[test]
+    fn turning_hooks_off_is_always_allowed() {
+        for consent in [None, Some(false), Some(true)] {
+            assert_eq!(hooks_change_allowed(false, consent), Ok(()), "{consent:?}");
+        }
+    }
+
+    #[test]
+    fn claude_rings_are_refreshed_by_the_glue_and_nothing_else_is() {
+        for id in ["claude", "claude-acct-5f3e1d2c0b9a", "claude-dir-x"] {
+            assert!(is_claude_provider(id), "{id}");
+        }
+        for id in ["codex", "cursor", "", "claudex", "Claude", "xclaude-acct-1"] {
+            assert!(!is_claude_provider(id), "{id:?}");
+        }
+        // The notch menu offers the panel for the same cells.
+        for id in [
+            "claude",
+            "claude-acct-5f3e1d2c0b9a",
+            "claude-dir-x",
+            "codex",
+            "",
+        ] {
+            assert_eq!(
+                super::menu::is_claude_ring(id),
+                is_claude_provider(id),
+                "{id:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn upstreams_refresh_path_uses_the_same_rule() {
+        // The WU1 seam in upstream's `refresh_provider` decides inline (the seam stays one
+        // line); this reads that line so the rule above can't drift from what routes for real.
+        let main = include_str!("../main.rs");
+        let arms: Vec<&str> = main
+            .lines()
+            .filter(|line| line.contains("agentnotch::refresh_claude("))
+            .collect();
+        assert_eq!(arms.len(), 1, "{arms:?}");
+        let arm = arms[0].trim_start();
+        assert!(
+            arm.starts_with(
+                r#"p if p == "claude" || p.starts_with("claude-") => return agentnotch::refresh_claude(app, p),"#
+            ),
+            "{arm}"
+        );
+    }
+
+    #[test]
+    fn a_refresh_says_which_ring_and_why() {
+        assert_eq!(
+            refresh_args("claude"),
+            serde_json::json!({ "reason": "manual" })
+        );
+        assert_eq!(
+            refresh_args("claude-acct-5f3e1d2c0b9a"),
+            serde_json::json!({ "ring_id": "claude-acct-5f3e1d2c0b9a", "reason": "ring_click" })
+        );
+        // The hub takes both as `refresh_usage`.
+        for id in ["claude", "claude-acct-5f3e1d2c0b9a", "claude-dir-x"] {
+            let call = Call::from_parts("refresh_usage", refresh_args(id));
+            assert!(call.is_ok(), "{id}: {call:?}");
+        }
+    }
 }
