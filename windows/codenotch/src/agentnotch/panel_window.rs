@@ -13,8 +13,11 @@
 //!   closes when the monitor it hung on is gone.
 //! - **Foreground.** The panel is never given the foreground through Tauri's `set_focus`: tao
 //!   falls back to a synthetic Alt key press when Windows refuses, which is forcing it.
-//!   `window::request_foreground` is the plain `SetForegroundWindow`, and its answer only
-//!   decides whether the window flashes: the rules look at who has the foreground instead.
+//!   `window::request_foreground` is the plain `SetForegroundWindow`, whose answer is only
+//!   logged: the rules look at who has the foreground instead. A refused request is not
+//!   flashed: the panel is already in front of the user, where its page says "Click to type",
+//!   and `FlashWindowEx` on a window kept off the taskbar with `ITaskbarList::DeleteTab` (tao's
+//!   `skip_taskbar`) can bring its button back, flashing until the window is activated.
 //! - **Above the notch.** Upstream's topmost watchdog raises the notch whenever another window
 //!   comes to the front, and knows nothing of the panel, so the panel raises itself after it:
 //!   on every notch move and every foreground change while it is open.
@@ -245,16 +248,13 @@ impl WindowService for PanelWindow {
                 return;
             };
             let accepted = window::request_foreground(panel);
+            // Whether the panel has the keyboard is the rules' to find out, by looking; a refusal
+            // is not flashed (see the top of this file).
             super::log(&format!(
                 "panel asked for the foreground: accepted={accepted} foreground={} panel={}",
                 hex(window::foreground()),
                 hex(Some(panel))
             ));
-            // Refused: the window says so the way Windows has windows say it. Whether the panel
-            // has the keyboard is the rules' to find out, by looking.
-            if !accepted {
-                window::flash(panel);
-            }
         });
     }
 
