@@ -6,6 +6,8 @@
 //!   `AGENTNOTCH_SOCKET`, set on the child only: never on this process, whose tests share it);
 //! - the app's side in-process: the real `PipeServer` feeding the engine's real `HookIngress`,
 //!   stepped by the test from the transport's channel;
+//! - the string commands the installer writes and the two shells that run them, and temporary
+//!   folders for copies of the exes;
 //! - raw ends of a pipe for what neither of those does: a client that says nothing, a server that
 //!   never reads, the security descriptor as a client sees it.
 //!
@@ -23,6 +25,7 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::AsRawHandle;
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::ptr::{addr_of_mut, null_mut};
@@ -51,13 +54,15 @@ use windows_sys::Win32::Security::{
     OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, SE_DACL_PROTECTED,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX, SECURITY_IDENTIFICATION,
+    GetShortPathNameW, FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX, SECURITY_IDENTIFICATION,
 };
 use windows_sys::Win32::System::Pipes::{
     CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
     PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
-use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+use windows_sys::Win32::System::Threading::{
+    OpenProcess, TerminateProcess, CREATE_NO_WINDOW, PROCESS_TERMINATE,
+};
 
 pub const EXE: &str = env!("CARGO_BIN_EXE_agentnotch-hook");
 
@@ -208,6 +213,154 @@ pub fn traced(path: &Path, pid: u32) -> Vec<String> {
         .collect()
 }
 
+/// Every line of a trace, which is then deleted, as `(pid, what)`: for a run whose hook is not
+/// the process the test started (a shell ran it), so its pid is not known beforehand.
+pub fn trace_lines(path: &Path) -> Vec<(u32, String)> {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let _ = std::fs::remove_file(path);
+    text.lines()
+        .map(|line| {
+            let mut parts = line.splitn(3, ' ');
+            let (_ms, by, what) = (parts.next(), parts.next(), parts.next());
+            let pid = by.and_then(|by| by.parse().ok());
+            (
+                pid.unwrap_or_else(|| panic!("no pid in {line:?}")),
+                what.expect("a line says what happened").to_owned(),
+            )
+        })
+        .collect()
+}
+
+/// A folder of the test's own under the temporary folder, removed when dropped.
+pub struct TempFolder(PathBuf);
+
+pub fn temp_folder(what: &str) -> TempFolder {
+    let path = std::env::temp_dir().join(unique(what));
+    std::fs::create_dir_all(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    TempFolder(path)
+}
+
+impl TempFolder {
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+
+    /// A copy of the exe `from` at `relative` (its folders are made).
+    pub fn copy_exe(&self, from: &str, relative: &str) -> PathBuf {
+        let to = self.0.join(relative);
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent)
+                .unwrap_or_else(|error| panic!("{}: {error}", parent.display()));
+        }
+        std::fs::copy(from, &to).unwrap_or_else(|error| panic!("{}: {error}", to.display()));
+        to
+    }
+}
+
+impl Drop for TempFolder {
+    fn drop(&mut self) {
+        // An exe that only just exited may still be locked; a leftover in the temporary folder
+        // is not worth failing a test for.
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+// ---- string commands and the shells that run them ----
+
+/// DESIGN-WIN §4.3's test for a path written into a string command with no quotes: Claude Code
+/// runs a string command through Git Bash or PowerShell, so only characters that mean the same
+/// in both may appear. Letters and digits of any script, `_ . - / :`, and `~` anywhere but first
+/// (8.3 names hold it; at the start both shells expand it).
+pub fn unquoted(path: &str) -> bool {
+    !path.is_empty()
+        && path
+            .chars()
+            .enumerate()
+            .all(|(index, c)| c.is_alphanumeric() || "_.-/:".contains(c) || (c == '~' && index > 0))
+}
+
+fn forward_slashes(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
+/// The 8.3 form of an existing path (`GetShortPathNameW`). On a volume without 8.3 names this
+/// is the long path again.
+pub fn short_path(path: &Path) -> Option<String> {
+    let long = wide(path.to_str()?);
+    let mut buffer = vec![0u16; 32_768];
+    // SAFETY: `long` is NUL-terminated and `buffer` holds the number of units passed.
+    let length =
+        unsafe { GetShortPathNameW(long.as_ptr(), buffer.as_mut_ptr(), buffer.len() as u32) };
+    let length = length as usize;
+    (length != 0 && length < buffer.len()).then(|| String::from_utf16_lossy(&buffer[..length]))
+}
+
+/// How the installer writes an exe's path into a string command (DESIGN-WIN §4.3): with forward
+/// slashes and no quotes; else its 8.3 form, when that passes the same test; else there is no
+/// string form for it.
+///
+/// The rule is written out here because the engine's builder (`hooks::commands`, WP2) is not on
+/// this branch: once it is, the tests take the strings from it.
+pub fn string_form_path(exe: &Path) -> Option<String> {
+    let long = forward_slashes(exe.to_str()?);
+    if unquoted(&long) {
+        return Some(long);
+    }
+    short_path(exe)
+        .map(|short| forward_slashes(&short))
+        .filter(|short| unquoted(short))
+}
+
+/// The two shells Claude Code may run a string command through on Windows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shell {
+    /// `%ProgramFiles%\Git\bin\bash.exe -c <line>`.
+    GitBash,
+    /// `powershell -NoProfile -Command <line>`.
+    PowerShell,
+}
+
+impl Shell {
+    /// The shell's exe, by its full path: a test never runs whatever `PATH` happens to hold.
+    pub fn program(self) -> PathBuf {
+        let (variable, fallback, relative) = match self {
+            Shell::GitBash => ("ProgramFiles", r"C:\Program Files", r"Git\bin\bash.exe"),
+            Shell::PowerShell => (
+                "SystemRoot",
+                r"C:\Windows",
+                r"System32\WindowsPowerShell\v1.0\powershell.exe",
+            ),
+        };
+        let root =
+            std::env::var_os(variable).map_or_else(|| PathBuf::from(fallback), PathBuf::from);
+        let program = root.join(relative);
+        assert!(
+            program.is_file(),
+            "{self:?} is not at {}: these tests need it",
+            program.display()
+        );
+        program
+    }
+
+    /// The arguments that make the shell run `line`.
+    pub fn args(self, line: &str) -> Vec<String> {
+        match self {
+            Shell::GitBash => vec!["-c".into(), line.into()],
+            Shell::PowerShell => vec!["-NoProfile".into(), "-Command".into(), line.into()],
+        }
+    }
+
+    /// The shell running `line`, started the way Claude Code starts a hook's shell: with no
+    /// window of its own.
+    pub fn command(self, line: &str) -> Command {
+        let mut command = Command::new(self.program());
+        command
+            .args(self.args(line))
+            .creation_flags(CREATE_NO_WINDOW);
+        command
+    }
+}
+
 // ---- the hook exe ----
 
 /// `agentnotch-hook.exe hook` as an attended terminal session of this test process would run
@@ -215,6 +368,12 @@ pub fn traced(path: &Path, pid: u32) -> Vec<String> {
 pub fn hook_command(pipe: &str) -> Command {
     let mut command = Command::new(EXE);
     command.arg("hook");
+    with_hook_env(command, pipe)
+}
+
+/// `command` with the environment [`hook_command`] gives the exe. Whatever `command` starts
+/// inherits it, so the hook may be a grandchild: behind a shell, or behind a stand-in parent.
+pub fn with_hook_env(mut command: Command, pipe: &str) -> Command {
     for name in [
         "CLAUDE_PID",
         "CLAUDE_CONFIG_DIR",

@@ -23,6 +23,11 @@ name = "console-reader"         # test-only reader for console_type.rs; never bu
 path = "tests/bin/console-reader.rs"
 test = false
 
+[[bin]]
+name = "relay"                  # test-only parent process for hook_hygiene.rs (copied as claude.exe / code.exe); never bundled
+path = "tests/bin/relay.rs"
+test = false
+
 [dependencies]                  # no argument parser, ever (§1.8); check-seams.sh rejects clap/argh/pico-args/lexopt here
 agentnotch-proto = { path = "../agentnotch-proto" }
 serde_json = "1"
