@@ -194,6 +194,16 @@ impl ClaudeJsonReader {
         Self::default()
     }
 
+    /// The one reader the engine's jobs share (ClaudeGlobalConfigReader
+    /// .shared): account discovery and the usage store read the same files,
+    /// so a file Claude Code keeps rewriting is parsed once per change, and a
+    /// read caught mid-write falls back to the last good parse whichever job
+    /// made it. Tests make their own with [`ClaudeJsonReader::new`].
+    pub fn shared() -> &'static ClaudeJsonReader {
+        static SHARED: std::sync::OnceLock<ClaudeJsonReader> = std::sync::OnceLock::new();
+        SHARED.get_or_init(ClaudeJsonReader::new)
+    }
+
     /// The parsed file, or `None` when it doesn't exist or has never parsed.
     pub fn read(&self, path: &Path) -> Option<ClaudeGlobalConfig> {
         self.read_stamped(path).map(|(config, _)| config)

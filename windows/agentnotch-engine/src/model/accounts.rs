@@ -142,6 +142,21 @@ pub struct FolderFacts {
     pub link_targets: Vec<String>,
     /// Known already (the registry, a hook, `AGENTNOTCH_EXTRA_CONFIG_DIRS`).
     pub is_explicit: bool,
+    /// Who `<folder>\.claude.json` names, when that file exists: the identity
+    /// the folder runs as whenever `CLAUDE_CONFIG_DIR` points at it.
+    pub own_config: Option<ConfigRead>,
+    /// The folder with every link on the way resolved (normalized), when it
+    /// could be resolved: a link to the home folder is the home folder.
+    pub canonical: Option<String>,
+}
+
+/// One `.claude.json` as a snapshot read it: only its login is kept.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConfigRead {
+    /// `None` when nobody is signed in there (or the file never parsed).
+    pub identity: Option<Identity>,
+    /// When the file was last written, as of the read.
+    pub modified_at: Option<SystemTime>,
 }
 
 /// Claude Parallel Profiles' manifest: inert on native Windows (AU§0.2), its
@@ -160,6 +175,15 @@ pub struct FolderSnapshot {
     pub manifest: Option<ParallelProfilesManifest>,
     /// The manifest exists but didn't parse (a write in progress).
     pub manifest_unreadable: bool,
+    /// Who `~\.claude.json` names: the default folder's identity file while
+    /// `CLAUDE_CONFIG_DIR` is unset. `None` when the file doesn't exist.
+    pub home_config: Option<ConfigRead>,
+    /// The home folder with its links resolved, when it could be.
+    pub home_canonical: Option<String>,
+    /// The folders the read was asked about by name (normalized): one of
+    /// them missing from `folders` is gone from disk, while a folder the
+    /// registry learnt of after the read was planned is simply not in it.
+    pub requested: Vec<String>,
 }
 
 impl FolderSnapshot {

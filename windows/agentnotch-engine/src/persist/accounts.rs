@@ -2,7 +2,7 @@
 //! forgotten identities and the default folder's identity timeline. ISO 8601
 //! dates in whole seconds; absent options left out.
 //!
-//! Owner after WP0: WP3 (the registry maps these to `RunFolder`s).
+//! Owner after WP0: WP3 (`accounts::AccountRegistry` loads and writes it).
 
 use crate::core::time::IsoSeconds;
 use serde::{Deserialize, Serialize};
@@ -91,6 +91,16 @@ pub struct IdentityPrefs {
     pub color_index: i64,
     #[serde(rename = "isHidden")]
     pub is_hidden: bool,
+    /// "Ring in notch" off. The Mac keeps a ring's on/off in upstream's ring
+    /// list; here the rings are the engine's, so it is the identity's choice
+    /// like the rest. Written only when set, so a file the Mac wrote reads
+    /// and writes back unchanged.
+    #[serde(
+        rename = "ringHidden",
+        default,
+        skip_serializing_if = "std::ops::Not::not"
+    )]
+    pub ring_hidden: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
