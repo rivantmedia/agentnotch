@@ -290,6 +290,16 @@ fn make_junction(link: &Path, target: &Path) {
 
 // --- ensure_private_dir ---------------------------------------------------------------------------
 
+/// A test that can't run its body here says so. On the CI runner (an administrator, 8.3 names on)
+/// every body can run, so a skip there is a failure: a green run has to mean the test ran.
+fn skipped(why: &str) {
+    assert!(
+        std::env::var_os("GITHUB_ACTIONS").is_none(),
+        "skipped on the CI runner: {why}"
+    );
+    println!("skipped: {why}");
+}
+
 #[test]
 fn a_private_folder_lets_in_only_the_user_and_system() {
     let root = tempfile::tempdir().unwrap();
@@ -828,7 +838,7 @@ fn a_junction_and_a_symlink_are_reparse_points() {
     let dir_link = root.path().join("dir-link");
     match std::os::windows::fs::symlink_dir(&target, &dir_link) {
         Ok(()) => assert!(files.is_reparse(&dir_link).unwrap()),
-        Err(error) => println!("skipped: a directory symlink can't be made here ({error})"),
+        Err(error) => skipped(&format!("a directory symlink can't be made here ({error})")),
     }
     let file_link = root.path().join("file-link.json");
     match std::os::windows::fs::symlink_file(&file, &file_link) {
@@ -845,7 +855,7 @@ fn a_junction_and_a_symlink_are_reparse_points() {
                 files.identity(&file).unwrap()
             );
         }
-        Err(error) => println!("skipped: a file symlink can't be made here ({error})"),
+        Err(error) => skipped(&format!("a file symlink can't be made here ({error})")),
     }
 }
 
@@ -945,10 +955,10 @@ fn short_and_long_paths_round_trip() {
             );
         }
         Some(same) => {
-            println!("skipped: this volume has no 8.3 names");
+            skipped("this volume has no 8.3 names");
             assert_eq!(files.long_path(&same).unwrap(), long);
         }
-        None => println!("skipped: this volume gives no short paths"),
+        None => skipped("this volume gives no short paths"),
     }
 
     // Nothing there: no spelling at all.

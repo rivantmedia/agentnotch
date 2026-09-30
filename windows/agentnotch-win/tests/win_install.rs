@@ -547,6 +547,16 @@ fn read_every_millisecond(path: &Path) -> Watch<Reads> {
 
 // ---- Install, then uninstall ----
 
+/// A test that can't run its body here says so. On the CI runner (an administrator, 8.3 names on)
+/// every body can run, so a skip there is a failure: a green run has to mean the test ran.
+fn skipped(why: &str) {
+    assert!(
+        std::env::var_os("GITHUB_ACTIONS").is_none(),
+        "skipped on the CI runner: {why}"
+    );
+    println!("skipped: {why}");
+}
+
 #[test]
 fn install_then_uninstall_gives_the_file_back_byte_for_byte() {
     let fx = fixture();
@@ -976,7 +986,7 @@ fn a_linked_settings_json_is_written_through_to_its_target() {
     let dir = fx.config_dir(".claude", None);
     let link = settings(&dir);
     if let Err(error) = std::os::windows::fs::symlink_file(&target, &link) {
-        println!("skipped: a file symlink can't be created here ({error})");
+        skipped(&format!("a file symlink can't be created here ({error})"));
         return;
     }
     assert!(fx.files.is_reparse(&link).unwrap());
@@ -1066,7 +1076,7 @@ fn a_profile_path_with_a_space_is_hooked_by_its_short_name() {
 
     let Some(expected) = expected else {
         // 8.3 names are off on this volume: the folder can't be hooked, and isn't touched.
-        println!("skipped: this volume has no 8.3 names");
+        skipped("this volume has no 8.3 names");
         assert_eq!(outcome.result, Err(NOT_POSSIBLE.to_owned()));
         assert_eq!(fs::read(settings(&dir)).unwrap(), original);
         assert!(is_missing(&dir.join(HOOKS_DIR_NAME)));
