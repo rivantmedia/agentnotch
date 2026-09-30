@@ -85,6 +85,31 @@ pub fn exe_name(raw: &[u16]) -> String {
     String::from_utf16_lossy(&raw[..end])
 }
 
+/// Which children of `%LOCALAPPDATA%\\Packages` can hold Claude Desktop's Store-package data, in
+/// the order to look at them: names containing `claude` or `anthropic` in any case, sorted (by
+/// lowercase name, then exactly) so the order never depends on how the disk lists them.
+///
+/// It is a rule about names, not about processes; it lives here only because this is the one
+/// always-compiled file of this crate that the package owns (`paths.rs` compiles on Windows
+/// only, and `lib.rs`'s module lines are not this package's to grow), so the rule is unit-tested
+/// on every OS.
+pub fn desktop_package_names<'a>(children: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut names: Vec<String> = children
+        .into_iter()
+        .filter(|name| {
+            let lower = name.to_lowercase();
+            lower.contains("claude") || lower.contains("anthropic")
+        })
+        .map(str::to_owned)
+        .collect();
+    names.sort_by(|a, b| {
+        a.to_lowercase()
+            .cmp(&b.to_lowercase())
+            .then_with(|| a.cmp(b))
+    });
+    names
+}
+
 /// The variable that names a Claude Code process's config folder.
 pub const CONFIG_DIR_VARIABLE: &str = "CLAUDE_CONFIG_DIR";
 
@@ -589,6 +614,36 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn store_package_names_are_picked_by_claude_or_anthropic_and_sorted() {
+        let listed = [
+            "Microsoft.WindowsTerminal_8wekyb3d8bbwe",
+            "Claude_pzs8sxrjxfjjc",
+            "AnthropicPBC.Claude_x",
+            "Microsoft.Windows.Photos_8wekyb3d8bbwe",
+            "ANTHROPIC.Something",
+            "claude_lower",
+        ];
+        assert_eq!(
+            desktop_package_names(listed),
+            [
+                "ANTHROPIC.Something",
+                "AnthropicPBC.Claude_x",
+                "claude_lower",
+                "Claude_pzs8sxrjxfjjc"
+            ]
+        );
+        // The same names in another order give the same answer.
+        let mut reversed = listed;
+        reversed.reverse();
+        assert_eq!(
+            desktop_package_names(reversed),
+            desktop_package_names(listed)
+        );
+        assert!(desktop_package_names([]).is_empty());
+        assert!(desktop_package_names(["Microsoft.WindowsTerminal_x"]).is_empty());
+    }
 
     fn unix(seconds: u64, nanos: u32) -> SystemTime {
         SystemTime::UNIX_EPOCH + Duration::new(seconds, nanos)
