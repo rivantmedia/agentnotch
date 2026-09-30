@@ -1,14 +1,17 @@
 //! The real process services on Windows (DESIGN-WIN §7.3): liveness, start times, the Toolhelp
 //! parent link, the image path, the token's user and elevation, and the read of
-//! `CLAUDE_CONFIG_DIR` from a process's environment block, against a child this test spawns. The child is `cmd.exe` waiting on a pipe: a system executable that stays alive until
-//! told, never a real tool.
+//! `CLAUDE_CONFIG_DIR` from a process's environment block, against a child this test spawns.
+//! The child is `cmd.exe` waiting on a pipe: a system executable that stays alive until told,
+//! never a real tool.
 //!
 //! The runner is elevated and has one user, so these assert relative facts (the child is like
 //! this process), not constants.
 
 #![cfg(windows)]
 
+use std::ffi::OsStr;
 use std::io::{BufRead, BufReader};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, SystemTime};
 
@@ -72,10 +75,12 @@ fn an_exited_child_is_gone_and_never_gets_another_start_time() {
     finish(&mut child);
 
     assert_eq!(processes.liveness(pid), Liveness::Gone);
-    let afterwards = processes.start_time(pid);
-    assert!(
-        afterwards.is_none() || afterwards == Some(started),
-        "an exited child's start time became {afterwards:?} (was {started:?})"
+    // The `Child` still holds the process object, which could answer with its creation time:
+    // a process that has exited has no start time, so nothing pairs the pid with it again.
+    assert_eq!(
+        processes.start_time(pid),
+        None,
+        "an exited child still has a start time (it was {started:?})"
     );
 }
 
@@ -179,7 +184,12 @@ const VARIABLE: &str = "CLAUDE_CONFIG_DIR";
 /// line: by then the process has initialised and `cmd.exe` has made the block its own (it adds
 /// its per-drive entries), which is the state a real session's process is in.
 fn child_with_env(configure: impl FnOnce(&mut Command)) -> Child {
-    let mut command = Command::new("cmd.exe");
+    child_of("cmd.exe", configure)
+}
+
+/// [`child_with_env`] for the `cmd.exe` at `program`.
+fn child_of(program: impl AsRef<OsStr>, configure: impl FnOnce(&mut Command)) -> Child {
+    let mut command = Command::new(program);
     command
         .args(["/D", "/C", "echo ready& set /p x="])
         .stdin(Stdio::piped())
@@ -325,6 +335,84 @@ fn an_exited_childs_environment_is_unreadable() {
     // And so are pid 0 and a pid nobody has.
     assert_eq!(processes.config_dir_env(0), EnvRead::Unreadable);
     assert_eq!(processes.config_dir_env(u32::MAX - 2), EnvRead::Unreadable);
+}
+
+// A 32-bit process runs through WOW64 and keeps its environment behind a second, 32-bit PEB
+// the offsets here are not for. Whatever it was started with, the answer is "can't tell",
+// never "unset" (which would attribute its sessions to `~\.claude`).
+#[test]
+fn a_32_bit_childs_environment_is_unreadable_never_unset() {
+    let system_root = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
+    let cmd32 = PathBuf::from(system_root).join("SysWOW64").join("cmd.exe");
+    if !cmd32.is_file() {
+        // A system without the 32-bit subsystem has no such process to meet. The CI runner
+        // has one, so there the test never passes by not running.
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "no 32-bit cmd.exe at {cmd32:?} on the runner"
+        );
+        return;
+    }
+    let processes = WinProcesses::new();
+    let mut with = child_of(&cmd32, |command| {
+        command.env(VARIABLE, r"C:\Users\me\.claude-32");
+    });
+    let mut without = child_of(&cmd32, |command| {
+        command.env_remove(VARIABLE);
+    });
+
+    assert_eq!(processes.config_dir_env(with.id()), EnvRead::Unreadable);
+    assert_eq!(processes.config_dir_env(without.id()), EnvRead::Unreadable);
+    // In every other respect it is a process of this user like any other.
+    assert_eq!(processes.liveness(with.id()), Liveness::Alive);
+    assert_eq!(processes.same_user(with.id()), Some(true));
+    assert!(processes.start_time(with.id()).is_some());
+    let path = processes.exe_path(with.id()).expect("its image path");
+    assert!(
+        path.to_string_lossy().to_lowercase().contains("syswow64"),
+        "{}",
+        path.display()
+    );
+
+    finish(&mut with);
+    finish(&mut without);
+}
+
+// Same user only (DESIGN-WIN §4.2): the System process and the service control manager run
+// as SYSTEM, never as the user running this test. They are alive (a process that can't be
+// opened for lack of rights still exists), and their environment is never read, whether
+// the system refuses the handle or the token says they are someone else's.
+#[test]
+fn another_users_process_is_alive_and_its_environment_is_never_read() {
+    const SYSTEM_PROCESS: u32 = 4;
+    let processes = WinProcesses::new();
+    if processes.same_user(SYSTEM_PROCESS) == Some(true) {
+        // This test itself runs as SYSTEM: there is no other user's process to meet. The CI
+        // runner's user is an ordinary administrator, so there the test always runs.
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "the runner's user is SYSTEM"
+        );
+        return;
+    }
+    let table = processes.table();
+    let services = table
+        .entries
+        .iter()
+        .find(|entry| entry.exe_name.eq_ignore_ascii_case("services.exe"))
+        .expect("services.exe is in the table")
+        .pid;
+    assert!(table.get(SYSTEM_PROCESS).is_some(), "pid 4 is in the table");
+
+    for pid in [SYSTEM_PROCESS, services] {
+        assert_eq!(processes.liveness(pid), Liveness::Alive, "pid {pid}");
+        assert_ne!(processes.same_user(pid), Some(true), "pid {pid}");
+        assert_eq!(
+            processes.config_dir_env(pid),
+            EnvRead::Unreadable,
+            "pid {pid}"
+        );
+    }
 }
 
 #[test]

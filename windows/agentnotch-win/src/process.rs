@@ -304,6 +304,25 @@ mod imp {
         Some(buffer)
     }
 
+    /// Whether the process behind this handle runs as the user this one runs as. `None` when
+    /// either token can't be read: "can't tell" is never "same".
+    fn runs_as_this_user(process: &Handle) -> Option<bool> {
+        let theirs = token_user(&token_of(process.0)?)?;
+        // SAFETY: the current process's pseudo-handle is always valid and needs no closing.
+        let ours = token_user(&token_of(unsafe { GetCurrentProcess() })?)?;
+        // SAFETY: `token_user` returned each buffer filled with a TOKEN_USER and aligned for
+        // it; both buffers live to the end of this function.
+        let (theirs, ours) = unsafe {
+            (
+                &*theirs.as_ptr().cast::<TOKEN_USER>(),
+                &*ours.as_ptr().cast::<TOKEN_USER>(),
+            )
+        };
+        // SAFETY: both SIDs are valid: each points into its own live buffer, filled by the
+        // system. The call fails exactly when they differ.
+        Some(unsafe { EqualSid(theirs.User.Sid, ours.User.Sid) }.is_ok())
+    }
+
     // Where the environment block is found in an x64 process (DESIGN-WIN §4.2). These are
     // not documented; `tests/win_process.rs` proves them on the Windows the app runs on.
     /// `PEB.ProcessParameters`.
@@ -405,6 +424,11 @@ mod imp {
         else {
             return EnvRead::Unreadable;
         };
+        // Same user only, as on the Mac, and asked of the handle the memory is read through: a
+        // pid can be another process's by the time it is opened a second time.
+        if runs_as_this_user(&process) != Some(true) {
+            return EnvRead::Unreadable;
+        }
         // A process object outlives its process while anyone holds a handle to it.
         if exit_code(&process) != Some(STILL_ACTIVE) || !is_native(&process) {
             return EnvRead::Unreadable;
@@ -542,29 +566,15 @@ mod imp {
 
         /// Only the one value leaves this function: the environment holds secrets.
         fn config_dir_env(&self, pid: u32) -> EnvRead {
-            // Same user only, as on the Mac; "can't tell" is not "same".
-            if pid == 0 || self.same_user(pid) != Some(true) {
+            // Pid 0 is the idle process, never one of ours.
+            if pid == 0 {
                 return EnvRead::Unreadable;
             }
             read_config_dir(pid, self.environment_limit)
         }
 
         fn same_user(&self, pid: u32) -> Option<bool> {
-            let process = open(pid).ok()?;
-            let theirs = token_user(&token_of(process.0)?)?;
-            // SAFETY: the current process's pseudo-handle is always valid and needs no closing.
-            let ours = token_user(&token_of(unsafe { GetCurrentProcess() })?)?;
-            // SAFETY: `token_user` returned each buffer filled with a TOKEN_USER and aligned for
-            // it; both buffers live to the end of this function.
-            let (theirs, ours) = unsafe {
-                (
-                    &*theirs.as_ptr().cast::<TOKEN_USER>(),
-                    &*ours.as_ptr().cast::<TOKEN_USER>(),
-                )
-            };
-            // SAFETY: both SIDs are valid: each points into its own live buffer, filled by the
-            // system. The call fails exactly when they differ.
-            Some(unsafe { EqualSid(theirs.User.Sid, ours.User.Sid) }.is_ok())
+            runs_as_this_user(&open(pid).ok()?)
         }
 
         fn elevated(&self, pid: u32) -> Option<bool> {
