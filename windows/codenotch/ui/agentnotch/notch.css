@@ -1,3 +1,81 @@
-/* Agent Notch's additions to upstream's notch page (DESIGN-WIN §5.2): count badges, the success
-   ring, resting marks. Loaded by seam WS1, before the page's own <style>, so nothing here can
-   override upstream by accident. Empty in the scaffold: the fork's UI package (WP10) fills it. */
+/* Agent Notch's additions to upstream's notch page (DESIGN-WIN §5.2): count badges on the
+   Claude rings, the Claude card's session rows, and the folded notch's resting marks. Loaded by
+   seam WS1, before the page's own <style>; everything here is under a fork class or id, so
+   nothing can restyle upstream's own elements by accident. Colours are upstream's tokens
+   (--watch, --ample, --crit, --ink, --pill), so light and dark follow the notch. */
+
+/* ---- count badges (ClaudeRingDecoration, ClaudeRingBadgeLayout) -------------------------
+   A 12 px capsule, 12-18 wide, 9 px bold digits in black, and a 1.5 px knockout ring in the
+   pill's own colour so it reads over the track and the weekly ring. Centred on the point
+   notch.js computes (r = 33 in the 44 px ring square); never takes a click: the ring under it
+   is the button. */
+.ringwrap > .an-badge{
+  position:absolute;box-sizing:border-box;height:12px;min-width:12px;max-width:18px;padding:0 3px;
+  transform:translate(-50%,-50%);border-radius:6px;
+  font:700 9px/12px "Segoe UI Variable Display","Segoe UI",system-ui,sans-serif;
+  font-variant-numeric:tabular-nums;letter-spacing:-.2px;text-align:center;white-space:nowrap;overflow:hidden;
+  color:#000;box-shadow:0 0 0 1.5px var(--pill);pointer-events:none;z-index:2;
+  animation:an-badge-in .3s cubic-bezier(.3,1.35,.6,1) both;
+}
+.ringwrap > .an-badge-needs{background:var(--watch)}
+.ringwrap > .an-badge-review{background:var(--ample)}
+@keyframes an-badge-in{from{opacity:0;transform:translate(-50%,-50%) scale(.4)}}
+
+/* ---- the Claude card's session rows (TooltipCard SessionRow) ----------------------------- */
+#card .an-card-sessions{padding-top:2px}
+#card .an-srow{
+  display:block;width:calc(100% + 12px);margin:0 -6px;padding:6px 6px;border:0;border-radius:8px;background:transparent;
+  color:inherit;font:inherit;text-align:left;cursor:pointer;
+}
+#card .an-srow + .an-srow{margin-top:2px}
+#card .an-srow:hover,#card .an-srow:focus-visible{background:var(--btn-hover);outline:none}
+#card .an-srow-line{display:flex;align-items:baseline;gap:10px;min-width:0;font-size:11px;line-height:1.35}
+#card .an-srow-sub{margin-top:3px}
+#card .an-srow-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+#card .an-srow-detail{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-dim)}
+#card .an-srow-since{flex:none;color:var(--ink-dim);font-variant-numeric:tabular-nums;white-space:nowrap}
+#card .an-srow-state{flex:none;display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+#card .an-srow-state .an-ring{width:7px;height:7px;flex:none;align-self:center}
+#card .an-st-needs_you{color:var(--watch)}
+#card .an-st-failed{color:var(--crit)}
+#card .an-st-working{color:var(--ink)}
+#card .an-st-review{color:var(--ample)}
+#card .an-st-idle{color:var(--ink-dim)}
+/* Status marks drawn in currentColor; the working arc turns in steps, as upstream's arcs do,
+   to spare the compositor of an always-on-top transparent window. */
+#card .an-spin{animation:an-card-spin 1.4s steps(12) infinite;transform-origin:50% 50%}
+@keyframes an-card-spin{to{transform:rotate(360deg)}}
+#card .an-breathe{animation:an-card-breathe .9s ease-in-out 7 alternate both}
+@keyframes an-card-breathe{from{opacity:.35}to{opacity:1}}
+
+/* ---- resting marks on the folded notch (ClaudeRestingMarks) -----------------------------
+   The same box as #rest (10 × 79 on a side edge, 79 × 10 lying flat), the marks centred along
+   it and across what shows of it. Shown only folded: out in 0.1 s when the notch opens, back in
+   0.25 s after 0.3 s once it has folded. */
+#an-marks{position:absolute;pointer-events:none;right:0;top:50%;width:10px;height:79px;translate:0 -50%;
+  opacity:0;transition:opacity .1s ease-out;z-index:3}
+body.folded #an-marks{opacity:1;transition:opacity .25s ease-in .3s}
+body[data-edge="left"] #an-marks{right:auto;left:0}
+body[data-edge="top"] #an-marks,body[data-edge="bottom"] #an-marks{right:auto;left:50%;top:auto;translate:-50% 0;width:79px;height:10px}
+body[data-edge="top"] #an-marks{top:0}
+body[data-edge="bottom"] #an-marks{bottom:0}
+#an-marks .an-mark{position:absolute;border-radius:2px;left:50%;top:50%;
+  width:4px;height:4px;transform:translate(-50%,-50%) translateY(var(--an-along))}
+/* Lying flat the pill runs across the screen: marks run along x, and the bar lies down. */
+body[data-edge="top"] #an-marks .an-mark,body[data-edge="bottom"] #an-marks .an-mark{
+  transform:translate(-50%,-50%) translateX(var(--an-along))}
+#an-marks .an-mark-needs{height:9px;background:var(--watch);animation:an-mark-breathe .8s ease-in-out 7 alternate both}
+body[data-edge="top"] #an-marks .an-mark-needs,body[data-edge="bottom"] #an-marks .an-mark-needs{width:9px;height:4px}
+#an-marks .an-mark-review{background:var(--ample)}
+#an-marks .an-mark-working{background:var(--ink)}
+/* A needs-you bar dims at once, then breathes back to bright: 7 half-cycles, ending bright. */
+@keyframes an-mark-breathe{from{opacity:.3}to{opacity:1}}
+
+@media (prefers-reduced-motion: reduce){
+  .ringwrap > .an-badge,#card .an-spin,#card .an-breathe,#an-marks .an-mark-needs{animation:none}
+  #an-marks,body.folded #an-marks{transition:none}
+}
+/* Snapshot scenes: the resting state, not a frame of a transition. */
+html.an-static .ringwrap > .an-badge,html.an-static #card .an-spin,html.an-static #card .an-breathe,
+html.an-static #an-marks .an-mark-needs,html.an-static .arc-spin,html.an-static .arc-pulse{animation:none}
+html.an-static #an-marks,html.an-static body.folded #an-marks{transition:none}
