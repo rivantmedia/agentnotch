@@ -24,7 +24,12 @@ pub(super) fn forward(app: &AppHandle, event: &HubEvent) {
             // "Keep open" is a setting; the panel's window rules need its value.
             panel::set_pinned(app, snapshot.ui.panel_pinned);
         }
-        HubEvent::Settings(settings) => emit_to(app, SETTINGS, "an:settings", settings),
+        HubEvent::Settings(settings) => {
+            emit_to(app, SETTINGS, "an:settings", settings);
+            // Two settings the glue itself acts on: the panel shortcut and the tray's dot.
+            super::hotkey::apply_setting(app, &settings.attention.hotkey);
+            super::tray::set_dot_enabled(app, settings.attention.tray_badge);
+        }
         HubEvent::Cloud(cloud) => emit_to(app, SETTINGS, "an:cloud", cloud),
         HubEvent::Chat(update) => emit_to(app, panel::LABEL, "an:chat", update),
         HubEvent::Panel(request) => panel::open_request(app, request.clone()),

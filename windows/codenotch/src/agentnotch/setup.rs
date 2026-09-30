@@ -17,7 +17,7 @@ use agentnotch_engine::platform::{Platform, Roots};
 use agentnotch_win::proto;
 use tauri::AppHandle;
 
-use super::{deeplink, emit, panel_window, selftest, IDENTIFIER};
+use super::{deeplink, emit, hotkey, panel_window, selftest, IDENTIFIER};
 
 pub fn setup(app: &AppHandle) {
     // Upstream makes its config folder only when it first saves a setting, so on a first launch
@@ -69,6 +69,8 @@ fn start(app: &AppHandle) -> Result<(), String> {
             deeplink::handle(url.to_string());
         }
     }
+    // The panel shortcut, from the settings as they are now (never when sealed).
+    hotkey::start(app, &hub);
     selftest::start(app);
     Ok(())
 }

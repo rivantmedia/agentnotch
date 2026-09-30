@@ -197,8 +197,6 @@ impl<S: WindowService> Core<S> {
 
     /// The hot key: opens the list for every account; closes a panel that has the keyboard;
     /// gives the keyboard to one that hasn't.
-    // Reached from the hot key's registration, which comes with `hotkey.rs`.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn hotkey(&self) {
         let mut s = self.lock();
         if !s.open {
@@ -500,6 +498,11 @@ pub(super) fn toggle(
     ring: Option<RingRect>,
 ) {
     core(app).toggle(ring_id, reason, ring);
+}
+
+/// The panel shortcut was pressed (`hotkey.rs`).
+pub(super) fn hotkey(app: &AppHandle) {
+    core(app).hotkey();
 }
 
 pub(super) fn close(app: &AppHandle) {
