@@ -43,8 +43,20 @@ fn roaming_folders(roots: &Roots) -> Vec<PathBuf> {
     if let Some(parent) = roots.data.parent().filter(|p| !p.as_os_str().is_empty()) {
         folders.push(parent.to_path_buf());
     }
-    folders.push(roots.home.join("AppData").join("Roaming"));
+    push_unless_there(&mut folders, roots.home.join("AppData").join("Roaming"));
     folders
+}
+
+/// The usual place is the same folder as the derived one on a normal
+/// profile: it is listed once.
+fn push_unless_there(folders: &mut Vec<PathBuf>, folder: PathBuf) {
+    let key = folder.to_string_lossy().to_lowercase();
+    if !folders
+        .iter()
+        .any(|known| known.to_string_lossy().to_lowercase() == key)
+    {
+        folders.push(folder);
+    }
 }
 
 /// `%LOCALAPPDATA%` as far as the roots tell: the folder that holds the
@@ -63,7 +75,7 @@ fn local_folders(roots: &Roots) -> Vec<PathBuf> {
     {
         folders.push(parent.to_path_buf());
     }
-    folders.push(roots.home.join("AppData").join("Local"));
+    push_unless_there(&mut folders, roots.home.join("AppData").join("Local"));
     folders
 }
 
