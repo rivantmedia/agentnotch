@@ -631,9 +631,18 @@ mod imp {
     /// The one rename of the stage onto `target`: all or nothing, so the target holds its old
     /// bytes or the new ones at every instant. With `replace` false an existing target is an
     /// error instead. Someone holding the target open without sharing delete refuses the rename;
-    /// that is retried on the schedule and then given up, the target untouched. The stage's
-    /// handle is consumed (closed) either way.
-    fn rename_onto(file: Handle, stage: &[u16], target: &[u16], replace: bool) -> io::Result<()> {
+    /// that is retried on the schedule and then given up, the target untouched. Before each
+    /// retry `still` looks at the target again: whoever held it may have saved it meanwhile,
+    /// and a save made while we waited must not be replaced by bytes planned from the one
+    /// before (`Ok(Some(result))`, nothing renamed). The stage's handle is consumed (closed)
+    /// either way.
+    fn rename_onto(
+        file: Handle,
+        stage: &[u16],
+        target: &[u16],
+        replace: bool,
+        still: &dyn Fn() -> io::Result<Option<WriteResult>>,
+    ) -> io::Result<Option<WriteResult>> {
         let info = rename_info(target, replace);
         let fallback = if replace {
             MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH
@@ -655,9 +664,14 @@ mod imp {
                 None => move_file(stage, target, fallback),
             };
             match outcome {
-                Ok(()) => return Ok(()),
+                Ok(()) => return Ok(None),
                 Err(code) if is_transient(code) => match delays.next() {
-                    Some(delay) => std::thread::sleep(delay),
+                    Some(delay) => {
+                        std::thread::sleep(delay);
+                        if let Some(result) = still()? {
+                            return Ok(Some(result));
+                        }
+                    }
                     None => return Err(from_code(code)),
                 },
                 Err(code) => return Err(from_code(code)),
@@ -685,8 +699,8 @@ mod imp {
     }
 
     /// Stages the bytes and renames the stage over `target`. `Ok(Some(result))` when the last
-    /// check found the target changed or gone; the caller then removes the stage, as it does
-    /// on an error.
+    /// check, or one between rename retries, found the target changed or gone; the caller then
+    /// removes the stage, as it does on an error.
     fn stage_and_replace(
         stage: &[u16],
         target: &[u16],
@@ -708,8 +722,7 @@ mod imp {
         if let Some(result) = check(target, expect)? {
             return Ok(Some(result));
         }
-        rename_onto(file, stage, target, true)?;
-        Ok(None)
+        rename_onto(file, stage, target, true, &|| check(target, expect))
     }
 
     // --- paths --------------------------------------------------------------------------------
@@ -850,10 +863,11 @@ mod imp {
                 let file = create_stage(&stage, Some(&security), FILE_ATTRIBUTE_NORMAL.0)?;
                 write_all(&file, bytes)?;
                 flush(&file)?;
-                rename_onto(file, &stage, &target, false)
+                // Nothing to look at between tries: a name taken meanwhile refuses the rename.
+                rename_onto(file, &stage, &target, false, &|| Ok(None))
             })();
             match result {
-                Ok(()) => Ok(true),
+                Ok(_) => Ok(true),
                 Err(error) => {
                     delete_quietly(&stage);
                     if code_in(&error, already_exists) {

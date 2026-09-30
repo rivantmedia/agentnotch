@@ -10,7 +10,7 @@
 #![cfg(windows)]
 
 use std::fs::{self, OpenOptions};
-use std::io;
+use std::io::{self, Write};
 use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use agentnotch_engine::core::settings_doc::Json;
 use agentnotch_engine::hooks::apply::{
     apply_installs_with, previous_status_line_path, read_saved_status_line, read_status, Setup,
-    VANISHED,
+    MAX_REPLANS, VANISHED,
 };
 use agentnotch_engine::hooks::backups::{our_backups, ORIGINAL_BACKUP_NAME};
 use agentnotch_engine::hooks::commands::{
@@ -465,6 +465,36 @@ fn hold_open(path: &Path, hold: Duration) -> Hold {
     };
     is_open.recv().unwrap();
     (thread, releasing)
+}
+
+/// As `hold_open`, but the holder saves: after `save_after` it writes `bytes` over the file in
+/// place (an editor or Claude Code saving through a handle that doesn't share delete), then
+/// keeps it open until `hold` is up. The flag turns true once the save is flushed.
+fn hold_and_save(path: &Path, save_after: Duration, bytes: Vec<u8>, hold: Duration) -> Hold {
+    let (opened, is_open) = mpsc::channel();
+    let saved = Arc::new(AtomicBool::new(false));
+    let thread = {
+        let path = path.to_owned();
+        let saved = Arc::clone(&saved);
+        thread::spawn(move || {
+            let mut held = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .share_mode(FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0)
+                .open(&path)
+                .unwrap();
+            opened.send(()).unwrap();
+            thread::sleep(save_after);
+            held.set_len(0).unwrap();
+            held.write_all(&bytes).unwrap();
+            held.sync_all().unwrap();
+            saved.store(true, Ordering::SeqCst);
+            thread::sleep(hold.saturating_sub(save_after));
+            drop(held);
+        })
+    };
+    is_open.recv().unwrap();
+    (thread, saved)
 }
 
 /// Files that take hold of settings.json for `hold` just before its first replace.
@@ -970,6 +1000,61 @@ fn a_settings_json_saved_after_the_plan_is_planned_again() {
     assert!(written.starts_with(&BOM));
     assert_hooked(&hooks_of(&written), &hook_command(&dir));
     assert!(stages(&dir).is_empty(), "{:?}", stages(&dir));
+}
+
+/// The same save, made by whoever holds settings.json while the replace waits for them to let
+/// go: the retry looks first, so the save is planned from, never written over.
+#[test]
+fn a_settings_json_saved_while_the_replace_waits_is_planned_again() {
+    let fx = fixture();
+    let original = original();
+    let dir = fx.config_dir(".claude", Some(&original));
+    let theirs = String::from_utf8(original.clone())
+        .unwrap()
+        .replace("\"opus\"", "\"sonnet-with-a-longer-name\"")
+        .into_bytes();
+    let held = Arc::new(Mutex::new(None));
+    let files = {
+        let (held, theirs) = (Arc::clone(&held), theirs.clone());
+        Hooked::new(move |path| {
+            let mut held = held.lock().unwrap();
+            if held.is_none() {
+                *held = Some(hold_and_save(
+                    path,
+                    Duration::from_millis(50),
+                    theirs.clone(),
+                    Duration::from_millis(300),
+                ));
+            }
+        })
+    };
+
+    let reader = read_every_millisecond(&settings(&dir));
+    let outcome = fx.install_with(&dir, &files);
+    let (holder, saved) = held.lock().unwrap().take().expect("the file was held");
+    let saved = saved.load(Ordering::SeqCst);
+    holder.join().unwrap();
+    let reads = reader.finish();
+
+    assert!(saved, "the holder never saved");
+    assert_eq!(outcome.result, Ok(InstallChange::Written));
+    // The first replace stood down when it saw their save; a later one was planned from it.
+    // (Closing a handle that wrote may stamp the file once more, which asks for one more plan.)
+    assert!(
+        (2..=1 + MAX_REPLANS).contains(&files.settings_writes()),
+        "{} writes",
+        files.settings_writes()
+    );
+    let written = fs::read(settings(&dir)).unwrap();
+    let text = String::from_utf8(written.clone()).unwrap();
+    assert!(text.contains("\"sonnet-with-a-longer-name\""), "{text}");
+    assert!(written.starts_with(&BOM));
+    assert_hooked(&hooks_of(&written), &hook_command(&dir));
+    assert!(stages(&dir).is_empty(), "{:?}", stages(&dir));
+    // Our replace never left the name empty. (Their in-place save may be read half done;
+    // that one is theirs.)
+    assert_eq!(reads.missing, 0, "settings.json was missing");
+    assert_eq!(reads.contents.last(), Some(&written));
 }
 
 // ---- A linked settings.json ----

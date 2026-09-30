@@ -7,7 +7,7 @@
 
 use std::ffi::c_void;
 use std::fs::OpenOptions;
-use std::io;
+use std::io::{self, Write};
 use std::os::windows::ffi::OsStrExt;
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
@@ -268,6 +268,41 @@ fn hold_open(path: &Path, hold: Duration) -> (JoinHandle<()>, Arc<AtomicBool>) {
     };
     is_open.recv().unwrap();
     (thread, releasing)
+}
+
+/// As `hold_open`, but the holder saves: after `save_after` it writes `bytes` over the file in
+/// place (an editor or Claude Code saving through a handle that doesn't share delete), then
+/// keeps it open until `hold` is up. The flag turns true once the save is flushed.
+fn hold_and_save(
+    path: &Path,
+    save_after: Duration,
+    bytes: Vec<u8>,
+    hold: Duration,
+) -> (JoinHandle<()>, Arc<AtomicBool>) {
+    let (opened, is_open) = mpsc::channel();
+    let saved = Arc::new(AtomicBool::new(false));
+    let thread = {
+        let path = path.to_owned();
+        let saved = Arc::clone(&saved);
+        thread::spawn(move || {
+            let mut held = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .share_mode(FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0)
+                .open(&path)
+                .unwrap();
+            opened.send(()).unwrap();
+            thread::sleep(save_after);
+            held.set_len(0).unwrap();
+            held.write_all(&bytes).unwrap();
+            held.sync_all().unwrap();
+            saved.store(true, Ordering::SeqCst);
+            thread::sleep(hold.saturating_sub(save_after));
+            drop(held);
+        })
+    };
+    is_open.recv().unwrap();
+    (thread, saved)
 }
 
 /// `mklink /J`: a junction needs no privilege, unlike a symlink.
@@ -553,6 +588,41 @@ fn a_replace_gives_up_cleanly_on_a_long_hold() {
         WriteResult::Written
     );
     assert_eq!(std::fs::read(&path).unwrap(), b"{\"new\":2}");
+    assert!(leftovers(root.path()).is_empty());
+}
+
+/// Whoever holds the target may save it while the replace waits for them to let go. Each retry
+/// looks at the target first, so that save is kept (`Changed`: the caller plans again from it),
+/// never replaced by bytes planned from the file as it was before.
+#[test]
+fn a_save_made_while_the_replace_waits_is_kept() {
+    let root = tempfile::tempdir().unwrap();
+    let files = WinFiles::new();
+    let path = root.path().join("settings.json");
+    std::fs::write(&path, b"{\"old\":1}").unwrap();
+    let before = files.identity(&path).unwrap();
+    // Longer than what was there, so the save shows in the size at once.
+    let theirs = b"{\"theirs\":\"saved while we waited\"}".to_vec();
+
+    let (holder, saved) = hold_and_save(
+        &path,
+        Duration::from_millis(50),
+        theirs.clone(),
+        Duration::from_millis(300),
+    );
+    let result = files.write_atomic(
+        &path,
+        b"{\"ours\":2}",
+        WriteMode::KeepTargetSecurity,
+        Expect::Same(before),
+    );
+    let saved_first = saved.load(Ordering::SeqCst);
+    holder.join().unwrap();
+
+    assert_eq!(result.unwrap(), WriteResult::Changed);
+    assert!(saved_first, "reported a change before there was one");
+    assert_eq!(std::fs::read(&path).unwrap(), theirs);
+    assert_ne!(files.identity(&path).unwrap(), before);
     assert!(leftovers(root.path()).is_empty());
 }
 
