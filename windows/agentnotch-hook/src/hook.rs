@@ -96,7 +96,7 @@ pub fn run(exec_form: bool) {
     }
 }
 
-fn set_or_unset(set: bool) -> &'static str {
+pub(crate) fn set_or_unset(set: bool) -> &'static str {
     if set {
         "set"
     } else {
@@ -120,9 +120,9 @@ fn event_label(name: &str) -> String {
 }
 
 /// A test switch, compiled into debug builds only (never into the shipped exe): panics inside
-/// the hook body, so `tests/fail_open.rs` can prove a panic still ends as exit 0 with nothing
-/// printed.
-fn forced_panic_for_tests() {
+/// the hook body (and the status line wrapper's), so `tests/fail_open.rs` can prove a panic
+/// still ends as exit 0 with nothing printed.
+pub(crate) fn forced_panic_for_tests() {
     #[cfg(debug_assertions)]
     if std::env::var_os("AGENTNOTCH_HOOK_TEST_PANIC").is_some() {
         panic!("forced by AGENTNOTCH_HOOK_TEST_PANIC");

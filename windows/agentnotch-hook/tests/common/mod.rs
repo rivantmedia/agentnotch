@@ -381,6 +381,7 @@ pub fn with_hook_env(mut command: Command, pipe: &str) -> Command {
         "CLAUDE_CODE_ENTRYPOINT",
         "AGENTNOTCH_HOOK_TRACE",
         "AGENTNOTCH_HOOK_TEST_PANIC",
+        "AGENTNOTCH_HOOK_TEST_PREVIOUS_TIMEOUT_MS",
         "AGENTNOTCH_STATUSLINE_DEPTH",
         "WT_SESSION",
         "TERM_PROGRAM",
