@@ -5,6 +5,7 @@
 //! Owner: WP2. WP0 stub: the §3.4 signatures; it never writes anything.
 
 pub mod facts;
+pub mod version;
 
 use crate::core::settings::ControlSettings;
 use crate::model::{Account, AccountId, RunFolder};
