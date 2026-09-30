@@ -150,15 +150,24 @@ fn glue_method(
 }
 
 /// `panel_toggle`'s `rect`: `[x, y, w, h]`, the clicked ring in physical pixels from the top-left
-/// of the calling window's client area. Exactly four finite numbers, no negative size.
+/// of the calling window's client area. Exactly four finite numbers, no negative size, none
+/// farther than [`MAX_RING_COORD`] from zero.
 fn ring_rect(value: Option<&Value>) -> Option<panel::RingRect> {
     let numbers = value?.as_array()?;
     let [x, y, w, h] = numbers.as_slice() else {
         return None;
     };
     let rect = [x.as_f64()?, y.as_f64()?, w.as_f64()?, h.as_f64()?];
-    (rect.iter().all(|n| n.is_finite()) && rect[2] >= 0.0 && rect[3] >= 0.0).then_some(rect)
+    let sane = rect
+        .iter()
+        .all(|n| n.is_finite() && n.abs() <= MAX_RING_COORD);
+    (sane && rect[2] >= 0.0 && rect[3] >= 0.0).then_some(rect)
 }
+
+/// Far beyond any desktop (Windows' virtual screen stays within ±32,768 px): the placement adds
+/// and halves these as whole pixels, so a larger number would wrap around instead of meaning
+/// anything.
+const MAX_RING_COORD: f64 = 1_000_000.0;
 
 pub(super) fn error(code: &str, message: impl Into<String>) -> CallError {
     CallError {
@@ -679,6 +688,11 @@ mod tests {
             parse(json!([-8, -4.5, 44, 44])),
             Some([-8.0, -4.5, 44.0, 44.0])
         );
+        // A notch on a monitor far left of and above the primary one, at the bound.
+        assert_eq!(
+            parse(json!([-1_000_000, 1_000_000, 44, 44])),
+            Some([-1_000_000.0, 1_000_000.0, 44.0, 44.0])
+        );
 
         assert_eq!(ring_rect(None), None);
         for wrong in [
@@ -693,6 +707,11 @@ mod tests {
             json!([[1, 2, 3, 4]]),
             json!({ "x": 1, "y": 2, "w": 3, "h": 4 }),
             json!("1,2,3,4"),
+            // No desktop is that large: the placement's whole-pixel sums would wrap around.
+            json!([1e12, 2, 3, 4]),
+            json!([1, -2e9, 3, 4]),
+            json!([1, 2, 3e7, 4]),
+            json!([1, 2, 3, f64::MAX]),
             // Too large for a float: JSON has no NaN or infinity of its own, and a number that
             // can't be read as one is refused rather than rounded to infinity.
             serde_json::from_str::<Value>("[1, 2, 1e999, 4]").unwrap_or(json!([1, 2, "inf", 4])),

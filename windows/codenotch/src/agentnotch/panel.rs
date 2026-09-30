@@ -5,8 +5,10 @@
 //! real one is `panel_window`, and the tests drive a fake. The rules:
 //!
 //! - **Opening.** A click, the hot key, a banner or Settings saves the window that has the
-//!   keyboard, shows the panel and asks for the foreground. An automatic open never asks, never
-//!   replaces a panel already open, and lands on the list.
+//!   keyboard, shows the panel and asks for the foreground. An automatic open never asks and
+//!   never replaces a panel already open. A banner click and an automatic open that name a
+//!   session land on the list with its row pointed out, not on its chat (the Mac's
+//!   `ClaudePanelPolicy.presentation`).
 //! - **The keyboard gate.** The page shows a caret and takes shortcuts only after
 //!   `an:panel_focus {focused: true}`, and that is sent only when the foreground window *is
 //!   observed to be* the panel: 50 ms and 250 ms after every attempt, and on every focus event.
@@ -43,6 +45,8 @@ const CHAT_PREFIX: &str = "session:";
 const CONFIRM_AFTER_MS: [u64; 2] = [50, 250];
 /// The hub's reason for closing after a jump to the terminal, which a pinned panel ignores.
 const JUMP: &str = "jump";
+/// The reason of a panel opened from a banner (a toast's Open).
+const NOTIFICATION: &str = "notification";
 
 /// Something the panel's rules asked to be told about later ([`WindowService::after`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -310,10 +314,14 @@ impl<S: WindowService> Core<S> {
             return;
         }
         let was_open = s.open;
-        // An automatic open shows the list with the session's row pointed out, not its chat: a
-        // chat's composer is where a stray key would do harm.
+        // A banner click or an automatic open shows the list with the session's row pointed
+        // out, not its chat (the Mac's `ClaudePanelPolicy.presentation`, `landsOnList`): the
+        // answer is one key away there, a chat's composer is where a stray key would do harm,
+        // and opening a chat marks a finished session reviewed, which would resolve (and so
+        // close) a panel that opened for it the moment it appeared.
+        let lands_on_list = auto || request.reason == NOTIFICATION;
         let (route, highlight) = match request.route.strip_prefix(CHAT_PREFIX) {
-            Some(session) if auto => (
+            Some(session) if lands_on_list => (
                 LIST.to_string(),
                 request.highlight.or_else(|| Some(session.to_string())),
             ),
@@ -971,6 +979,74 @@ mod tests {
         );
     }
 
+    // The Mac's `aBannerOrAnAutoOpenLandsOnTheListWithTheRowHighlighted`.
+    #[test]
+    fn a_banner_click_lands_on_the_list_with_the_row_pointed_out_and_asks_for_the_keyboard() {
+        let rig = Rig::new();
+        rig.open("session:abc", Some(RING_A), "notification");
+        assert_eq!(rig.status().route.as_deref(), Some(LIST));
+        let requests: Vec<Value> = rig
+            .fake
+            .ops()
+            .into_iter()
+            .filter_map(|op| match op {
+                Op::Emit(event, payload) if event == "an:panel" => Some(payload),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            requests,
+            [json!({
+                "route": "sessions", "ring_id": RING_A, "highlight": "abc", "reason": "notification"
+            })]
+        );
+        // The list, not the chat, is what the window is fitted to.
+        assert_eq!(rig.fake.desk().places[0].mode, PanelMode::List);
+        // Unlike an automatic open, the banner was clicked: the panel asks for the keyboard.
+        assert_eq!(rig.fake.count(&Op::RequestForeground), 1);
+        assert_eq!(rig.status().saved_foreground, Some(TERMINAL));
+        // A highlight the hub already chose wins over the route's session.
+        let rig = Rig::new();
+        rig.core.open(PanelRequest {
+            route: "session:abc".into(),
+            ring_id: Some(RING_A.into()),
+            highlight: Some("xyz".into()),
+            reason: "notification".into(),
+        });
+        let sent = rig.fake.ops().into_iter().find_map(|op| match op {
+            Op::Emit(event, payload) if event == "an:panel" => Some(payload),
+            _ => None,
+        });
+        assert_eq!(sent.expect("an:panel")["highlight"], "xyz");
+    }
+
+    // The same test's other half: a hover row or a peek click asks for the chat, and gets it.
+    #[test]
+    fn a_row_or_a_peek_click_opens_the_chat_it_asked_for() {
+        for reason in [
+            "hover_row",
+            "peek_click",
+            "settings",
+            "hotkey",
+            "ring_click",
+        ] {
+            let rig = Rig::new();
+            rig.open("session:abc", Some(RING_A), reason);
+            assert_eq!(
+                rig.status().route.as_deref(),
+                Some("session:abc"),
+                "{reason}"
+            );
+            assert_eq!(rig.fake.desk().places[0].mode, PanelMode::Chat, "{reason}");
+        }
+        // Anything that names no session shows what it asks for, whatever opened it.
+        for reason in ["auto", "notification"] {
+            let rig = Rig::new();
+            rig.open(LIST, Some(RING_A), reason);
+            assert_eq!(rig.status().route.as_deref(), Some(LIST), "{reason}");
+        }
+    }
+
     #[test]
     fn panel_take_focus_makes_it_focusable_and_the_gate_opens_only_on_confirmation() {
         let rig = Rig::new();
@@ -1373,8 +1449,9 @@ mod tests {
         let rect = [12.0, 300.5, 44.0, 44.0];
         rig.core
             .toggle(Some(RING_A.into()), "ring_click".into(), Some(rect));
-        // A chat opened by the hub: no page measured a ring for it.
-        rig.open("session:abc", Some(RING_B), "notification");
+        // A chat asked for from a hover card's row: no page measured a ring for it. (A banner's
+        // is placed as the list it lands on: see the test above.)
+        rig.open("session:abc", Some(RING_B), "hover_row");
         // One that opens by itself lands on the list, and is placed as the list.
         rig.core.close();
         rig.open("session:abc", Some(RING_B), "auto");

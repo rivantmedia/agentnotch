@@ -67,8 +67,15 @@ pub fn rebrand(text: &str) -> String {
 /// The tray icon's hover text when upstream has no readings to show (WR-TRAY), with the fork's
 /// needs-you count when there is one (the tray dot's words, DESIGN-WIN §4.10).
 pub fn tray_tooltip() -> String {
-    match NEEDS_YOU.load(Ordering::Relaxed) {
+    tooltip_for(NEEDS_YOU.load(Ordering::Relaxed))
+}
+
+/// The tooltip for `count` sessions needing the user, in the Mac's words ("1 needs you",
+/// "2 need you").
+fn tooltip_for(count: u32) -> String {
+    match count {
         0 => format!("{DISPLAY_NAME} v{}", app_version()),
+        1 => format!("{DISPLAY_NAME} — 1 needs you"),
         n => format!("{DISPLAY_NAME} — {n} need you"),
     }
 }
@@ -223,7 +230,20 @@ fn log(line: &str) {
 mod tests {
     use agentnotch_engine::hub::Call;
 
-    use super::{hooks_change_allowed, is_claude_provider, refresh_args, TURN_ON_FIRST};
+    use super::{
+        hooks_change_allowed, is_claude_provider, refresh_args, tooltip_for, TURN_ON_FIRST,
+    };
+
+    #[test]
+    fn the_tray_says_how_many_need_you_in_the_macs_words() {
+        assert_eq!(
+            tooltip_for(0),
+            format!("Agent Notch v{}", super::app_version())
+        );
+        assert_eq!(tooltip_for(1), "Agent Notch — 1 needs you");
+        assert_eq!(tooltip_for(2), "Agent Notch — 2 need you");
+        assert_eq!(tooltip_for(12), "Agent Notch — 12 need you");
+    }
 
     #[test]
     fn turning_hooks_on_needs_the_consent() {

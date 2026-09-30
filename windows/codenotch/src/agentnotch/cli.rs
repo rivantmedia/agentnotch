@@ -11,6 +11,10 @@
 //! read Claude's credentials. An argument naming the `agentnotch:` scheme is never a command,
 //! whatever else argv holds: such an argv is either an app launch (`None`) or, when it also names
 //! one of these commands, refused without running anything.
+//!
+//! Sealed (`AGENTNOTCH_SAFE_MODE`), the commands that would read or write the real Claude
+//! folders (`inspect-accounts`, `install-hooks`, `uninstall-hooks`) do neither and say so; the
+//! doctor asks the sealed hub.
 
 use std::io::Write;
 use std::panic::{self, AssertUnwindSafe};
@@ -31,7 +35,7 @@ const COMMANDS: [&str; 6] = [
 ];
 
 /// The exit code of a command that was refused with nothing run: a command line naming a command
-/// and a link at once, `install-hooks` without the consent.
+/// and a link at once, `install-hooks` without the consent, a Claude folder's command sealed.
 const REFUSED: i32 = 2;
 /// The scheme the installer registers for the app's links.
 const LINK_SCHEME: &str = "agentnotch";
@@ -54,7 +58,9 @@ pub fn run(args: &[String]) -> Option<i32> {
     crate::attach_console();
     let rest: Vec<&str> = args.iter().skip(2).map(String::as_str).collect();
     let quiet = command == "uninstall-hooks" && rest.contains(&"--quiet");
+    let sealed = super::sealed();
     let outcome = panic::catch_unwind(AssertUnwindSafe(|| match command {
+        _ if sealed && touches_claude_folders(command) => sealed_answer(command),
         "doctor" => doctor(&rest),
         "inspect-accounts" => inspect_accounts(),
         "install-hooks" => install_hooks(),
@@ -74,6 +80,35 @@ pub fn run(args: &[String]) -> Option<i32> {
     }
     write_log(command, &text);
     Some(code)
+}
+
+/// The commands that read or write the real Claude folders (through the real platform, which
+/// a sealed run never builds: DESIGN-WIN §4.13).
+fn touches_claude_folders(command: &str) -> bool {
+    matches!(
+        command,
+        "inspect-accounts" | "install-hooks" | "uninstall-hooks"
+    )
+}
+
+/// What one of those answers in a sealed run, with nothing read or written. A sealed run never
+/// installs hooks, so there are none of its own to remove: `uninstall-hooks` is done (0, which
+/// the uninstaller's `--quiet` needs anyway); the other two are refused.
+fn sealed_answer(command: &str) -> (i32, String) {
+    match command {
+        "uninstall-hooks" => (
+            0,
+            "Sealed: nothing was removed (a sealed run touches no Claude folder).".into(),
+        ),
+        "install-hooks" => (
+            REFUSED,
+            "Sealed: a sealed run installs no hooks (it touches no Claude folder).".into(),
+        ),
+        _ => (
+            REFUSED,
+            format!("Sealed: {command} reads the Claude folders, which a sealed run never does."),
+        ),
+    }
 }
 
 fn doctor(rest: &[&str]) -> (i32, String) {
@@ -279,6 +314,32 @@ mod tests {
             super::install_hooks_with(Some(true), || Err("settings.json doesn't parse".into()));
         assert_eq!(code, 1);
         assert_eq!(text, "install-hooks: settings.json doesn't parse");
+    }
+
+    // DESIGN-WIN §4.13: a sealed run reads and writes no Claude folder, the command line included.
+    #[test]
+    fn a_sealed_run_never_reaches_the_claude_folders_from_the_command_line() {
+        for command in ["inspect-accounts", "install-hooks", "uninstall-hooks"] {
+            assert!(super::touches_claude_folders(command), "{command}");
+            let (_, text) = super::sealed_answer(command);
+            assert!(text.starts_with("Sealed: "), "{text}");
+        }
+        // The doctor asks the sealed hub; control and autostart are no Claude folder's.
+        for command in ["doctor", "control", "autostart"] {
+            assert!(!super::touches_claude_folders(command), "{command}");
+        }
+        for command in COMMANDS {
+            assert!(
+                super::touches_claude_folders(command)
+                    || ["doctor", "control", "autostart"].contains(&command),
+                "{command} must say whether it reaches the Claude folders"
+            );
+        }
+        // Nothing installed, nothing to remove: done, as the uninstaller's --quiet needs.
+        assert_eq!(super::sealed_answer("uninstall-hooks").0, 0);
+        // Never "installed" or an account list made up: refused, with nothing done.
+        assert_eq!(super::sealed_answer("install-hooks").0, super::REFUSED);
+        assert_eq!(super::sealed_answer("inspect-accounts").0, super::REFUSED);
     }
 
     #[test]
