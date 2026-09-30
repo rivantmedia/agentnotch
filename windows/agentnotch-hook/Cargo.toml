@@ -36,6 +36,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage
 [dev-dependencies]
 agentnotch-win = { path = "../agentnotch-win" }
 agentnotch-engine = { path = "../agentnotch-engine", features = ["testkit"] }
+crossbeam-channel = "0.5"     # the transport's event channel, for tests/common (the engine and agentnotch-win use the same)
 
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
