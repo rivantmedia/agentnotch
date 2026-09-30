@@ -13,7 +13,7 @@
 //! native Windows (AU§0.2): there every folder is a run folder, and these
 //! rules are kept, pure and tested, for the setups they describe.
 
-use crate::core::paths::Paths;
+use crate::core::paths::{PathStyle, Paths};
 use crate::model::{FolderFacts, FolderKind, FolderSnapshot, ParallelProfilesManifest};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -432,6 +432,15 @@ pub fn looks_like_backup(folder_name: &str) -> bool {
     })
 }
 
+/// A root, or a drive letter alone (`C:`, the current folder of a drive).
+fn is_root_or_bare_drive(paths: &Paths, dir: &str) -> bool {
+    if paths.is_root(dir) {
+        return true;
+    }
+    let normalized = paths.normalize(dir);
+    paths.style() == PathStyle::Windows && normalized.len() == 2 && normalized.ends_with(':')
+}
+
 /// The home folder, and anything holding it, can never be an account: not
 /// as written, and not through a link (`~\.claude-x` → `~`). The resolved
 /// forms are compared when both are known.
@@ -442,7 +451,11 @@ pub fn can_be_account(
     home_canonical: Option<&str>,
 ) -> bool {
     let home = paths.home().to_owned();
-    let as_written = !paths.same(dir, &home) && !paths.is_ancestor(dir, &home);
+    // A root (`/`, `C:\`, a share's `\\server\share`, a bare `C:`) holds
+    // more than the home folder: a share root is not even above it.
+    let as_written = !is_root_or_bare_drive(paths, dir)
+        && !paths.same(dir, &home)
+        && !paths.is_ancestor(dir, &home);
     let resolved = match (dir_canonical, home_canonical) {
         (Some(folder), Some(home)) => !paths.same(folder, home) && !paths.is_ancestor(folder, home),
         (Some(folder), None) => !paths.same(folder, &home) && !paths.is_ancestor(folder, &home),
