@@ -255,8 +255,9 @@ fn read_lines(mut stdout: Box<dyn Read + Send>, sender: mpsc::Sender<Output>) {
     }
 }
 
-/// Keeps the last [`STDERR_TAIL_BYTES`] of `stderr`.
-fn read_tail(mut stderr: Box<dyn Read + Send>, tail: Arc<Mutex<Vec<u8>>>) {
+/// Keeps the last [`STDERR_TAIL_BYTES`] of `stderr`. `_done` is dropped when
+/// stderr ends, which tells the probe the tail is complete.
+fn read_tail(mut stderr: Box<dyn Read + Send>, tail: Arc<Mutex<Vec<u8>>>, _done: mpsc::Sender<()>) {
     let mut chunk = [0u8; 4096];
     while let Ok(read) = stderr.read(&mut chunk) {
         if read == 0 {
@@ -325,12 +326,19 @@ pub fn converse(
         drop(sender);
     }
     let stderr_tail = Arc::new(Mutex::new(Vec::new()));
+    let (stderr_done, stderr_ended) = mpsc::channel();
     if let Some(stderr) = child.take_stderr() {
         let tail = stderr_tail.clone();
-        std::thread::spawn(move || read_tail(stderr, tail));
+        std::thread::spawn(move || read_tail(stderr, tail, stderr_done));
+    } else {
+        drop(stderr_done);
     }
+    let stderr = StderrTail {
+        tail: stderr_tail,
+        ended: stderr_ended,
+    };
 
-    let outcome = exchange(&mut *child, &mut stdin, &receiver, &stderr_tail, timing);
+    let outcome = exchange(&mut *child, &mut stdin, &receiver, &stderr, timing);
 
     // Closing stdin lets Claude Code exit on its own; its tree is ended if
     // it lingers.
@@ -342,12 +350,32 @@ pub fn converse(
     outcome
 }
 
+/// The child's stderr as far as it was read, and word of its end.
+struct StderrTail {
+    tail: Arc<Mutex<Vec<u8>>>,
+    /// Disconnected once the reader has seen the end of stderr.
+    ended: mpsc::Receiver<()>,
+}
+
+impl StderrTail {
+    /// The tail once stderr has ended, or as it stands after `grace` (a
+    /// grandchild may hold the pipe open): the child's last words are
+    /// written just before it exits and may still be on their way.
+    fn after_exit(&self, grace: Duration) -> Vec<u8> {
+        let _ = self.ended.recv_timeout(grace);
+        self.tail
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+}
+
 /// The two requests and their answers, within `timing.timeout`.
 fn exchange(
     child: &mut dyn RunningCommand,
     stdin: &mut Option<Box<dyn Write + Send>>,
     receiver: &mpsc::Receiver<Output>,
-    stderr_tail: &Arc<Mutex<Vec<u8>>>,
+    stderr: &StderrTail,
     timing: &ProbeTiming,
 ) -> Outcome {
     // A child that already exited or closed its input reports that through
@@ -362,11 +390,10 @@ fn exchange(
     send(INITIALIZE_REQUEST);
 
     let exited = |exit: Exit| {
-        let tail = stderr_tail
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone();
-        Outcome::Failed(exit_description(exit, &tail))
+        Outcome::Failed(exit_description(
+            exit,
+            &stderr.after_exit(timing.exit_grace),
+        ))
     };
     let started = Instant::now();
     let mut sent_usage_request = false;
