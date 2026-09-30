@@ -168,6 +168,66 @@
       "maxHeight": 1400
     },
     {
+      "name": "panel-needs-you",
+      "page": "agentnotch/panel.html",
+      "global": "agentnotchPanel",
+      "scene": "panel-needs-you",
+      "widths": true,
+      "height": "fit",
+      "panel": {
+        "route": "sessions",
+        "ring_id": null,
+        "highlight": null,
+        "reason": "ring_click"
+      },
+      "maxHeight": 2400
+    },
+    {
+      "name": "panel-banners",
+      "page": "agentnotch/panel.html",
+      "global": "agentnotchPanel",
+      "scene": "panel-banners",
+      "widths": true,
+      "height": "fit",
+      "panel": {
+        "route": "sessions",
+        "ring_id": null,
+        "highlight": null,
+        "reason": "ring_click"
+      },
+      "maxHeight": 2400
+    },
+    {
+      "name": "panel-consent",
+      "page": "agentnotch/panel.html",
+      "global": "agentnotchPanel",
+      "scene": "panel-consent",
+      "widths": true,
+      "height": "fit",
+      "panel": {
+        "route": "sessions",
+        "ring_id": null,
+        "highlight": null,
+        "reason": "ring_click"
+      },
+      "maxHeight": 2400
+    },
+    {
+      "name": "panel-scope-notice",
+      "page": "agentnotch/panel.html",
+      "global": "agentnotchPanel",
+      "scene": "panel-scope-notice",
+      "widths": true,
+      "height": "fit",
+      "panel": {
+        "route": "sessions",
+        "ring_id": null,
+        "highlight": null,
+        "reason": "ring_click"
+      },
+      "maxHeight": 2400
+    },
+    {
       "name": "panel-regular-rows",
       "page": "agentnotch/panel.html",
       "global": "agentnotchPanel",

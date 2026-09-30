@@ -218,14 +218,15 @@ test('the theme comes from Rust when the page has none, and follows theme_resolv
 });
 
 test('the first request on the window sets the route, the filter, the highlight, the reason and the placement', async () => {
-  const page = await open({ route: 'sessions', ring_id: WORK, highlight: 'needs-question', reason: 'notification',
+  // (a row of the filtered account: a selection the list does not show is dropped)
+  const page = await open({ route: 'sessions', ring_id: WORK, highlight: 'needs-permission', reason: 'notification',
     placement: { kind: 'beside', tail_edge: 'right', tail_offset: 40, width: 400 } });
   clean(page);
   const s = state(page);
   assert.equal(s.route, 'sessions');
   assert.equal(s.filter, WORK);
-  assert.equal(s.highlight, 'needs-question');
-  assert.equal(s.selected, 'needs-question');
+  assert.equal(s.highlight, 'needs-permission');
+  assert.equal(s.selected, 'needs-permission');
   assert.equal(s.reason, 'notification');
   assert.deepEqual(s.placement, { kind: 'beside', tail: 'right', offset: 40, width: 400 });
   assert.equal(page.$('#an-panel').getAttribute('data-tail'), 'right');
@@ -962,7 +963,7 @@ test('the region ids and action attributes the later sub-tasks build on exist an
   assert.equal(page.$('#an-chat').hasAttribute('hidden'), true);
   assert.ok(page.$('#an-card').contains(page.$('#an-rows')));
   assert.deepEqual(plain(page.run('Object.keys(agentnotchPanel.actions)')).sort(),
-    ['close', 'dismiss-failure', 'filter', 'fold', 'gear', 'jump', 'mark-all-reviewed', 'mark-reviewed', 'menu-auto', 'menu-notify', 'open-chat', 'open-settings', 'pin', 'undo-review']);
+    ['answer', 'close', 'consent-later', 'consent-on', 'dismiss-failure', 'filter', 'fold', 'gear', 'jump', 'mark-all-reviewed', 'mark-reviewed', 'menu-auto', 'menu-notify', 'open-chat', 'open-settings', 'pin', 'scope-off', 'scope-ok', 'undo-review']);
   assert.deepEqual(plain(page.run('Object.keys(agentnotchPanel.scenes)')).sort(),
-    ['panel-busy-full', 'panel-busy-window', 'panel-empty', 'panel-every-state', 'panel-filtered', 'panel-header', 'panel-keyboard-folded', 'panel-menu', 'panel-pinned', 'panel-regular-rows', 'panel-single-account', 'panel-undo']);
+    ['panel-banners', 'panel-busy-full', 'panel-busy-window', 'panel-consent', 'panel-empty', 'panel-every-state', 'panel-filtered', 'panel-header', 'panel-keyboard-folded', 'panel-menu', 'panel-needs-you', 'panel-pinned', 'panel-regular-rows', 'panel-scope-notice', 'panel-single-account', 'panel-undo']);
 });

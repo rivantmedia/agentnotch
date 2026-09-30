@@ -622,14 +622,17 @@ test('a click anywhere on a row opens its chat; a session that cannot be jumped 
   clean(page);
 });
 
-test('the action bar has a named slot on every regular row for the next sub-task, empty until it is filled', async () => {
+test('the action bar has a named slot on every regular row, empty for a row with nothing to answer', async () => {
   const page = await open();
+  const bars = {};
   for (const r of rows(page).filter((x) => x.classList.contains('an-reg'))) {
     const slot = r.querySelector('.an-row-actions');
     assert.ok(slot, r.getAttribute('data-id'));
     assert.equal(slot.getAttribute('data-slot'), 'actions');
-    assert.equal(slot.childNodes.length, 0);
+    bars[r.getAttribute('data-id')] = slot.childNodes.length > 0;
   }
+  // the bars themselves are panel-actions.test.cjs's; here only that the slot is where they go
+  assert.deepEqual(bars, { 'needs-permission': true, 'needs-question': true, 'needs-plan': true, 'needs-elicitation': true, 'needs-ratelimit': false });
   assert.match(CSS, /\.an-row-actions:empty \{ display: none/);
   const filled = await open();
   filled.run('agentnotchPanel.slots.actions = function (row) { return \'<span class="x-bar">\' + row.session_id + \'</span>\'; }');

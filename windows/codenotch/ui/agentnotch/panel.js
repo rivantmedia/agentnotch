@@ -2,18 +2,28 @@
 // It owns the card and its tail, the header (title, Sealed badge, pin, gear menu, close, the
 // attention strip and the account chips), the route (list or one session's chat), the keyboard
 // gate's state, Esc, the size report and the sealed scenes. The list (sections, rows, folding,
-// the undo toast) is panel-list.js's markup driven from here; the setup banners and the row
-// action bars are drawn by a later sub-task into the regions this file leaves for them; the
-// chat is chat.js's.
+// the undo toast) is panel-list.js's markup driven from here; the chat is chat.js's.
+//
+// This file is also the part of the panel that ACTS: the row action bars (Deny / Always / Allow,
+// the question chips, Review plan / Approve), the keyboard, and the consent card that lets the
+// app write settings.json. Three rules hold everywhere below, and the tests pin each:
+//   * every answer goes through ONE AnswerGate (agentnotchCommon.createAnswerGate): a request can
+//     be answered once, and only after it has been on screen for 350 ms, so a click or a key
+//     meant for the request it replaced never lands on it;
+//   * the keyboard gate: no shortcut does anything and no field takes a key until the glue says
+//     the panel is the foreground window (`an:panel_focus {focused:true}`). A DOM focus event
+//     never opens it. Keys that arrive while it is shut are dropped, never queued;
+//   * consent: `hook_consent {grant:true}` is sent by a click on "Turn on" and by nothing else.
+//     No key reaches it (Enter on it is swallowed), it is never focused, never a default.
 //
 // How it is built, so the next sub-task can add to it without rewriting it:
 //   * ONE state object (`state`) and ONE render(): it draws the whole page from the last whole
 //     snapshot plus the view state (route, filter, menu, overrides) into fixed regions with
 //     agentnotchCommon.morph, so a snapshot never drops focus, an open menu or a half-typed answer.
 //       #an-header  -> headerHtml(v)      title row, attention strip, account chips
-//       #an-banners -> bannersHtml(v)     setup banners (sub-task 6)
+//       #an-banners -> bannersHtml(v)     setup banners (consent card, scope notice, pipe error, ...)
 //       #an-rows    -> listHtml(v)        the sections and rows (agentnotchPanelList); the empty states
-//       #an-toast   -> toastHtml(v)       the undo toast
+//       #an-toast   -> toastHtml(v)       the undo toast, and a notice when an answer did not arrive
 //       #an-overlay -> overlayHtml(v)     the gear menu (a layer inside the card: the window is
 //                                          exactly the card, so nothing can pop out of it)
 //       #an-chat    -> agentnotchChat     mounted on a session route, never morphed here
@@ -56,6 +66,37 @@
   var TICK_MS = 15000;
   /** A set_setting's local value stands this long after its reply, for a snapshot still in flight. */
   var OVERRIDE_MS = 2000;
+  /** How long "That request was already answered" stays. */
+  var NOTICE_MS = 6000;
+  /** What is kept of an untrusted string in a banner (the CSS wraps the rest). */
+  var BANNER_CHARS = 400;
+  var PATH_CHARS = 300;
+
+  /**
+   * The official app, named on purpose: its own hooks run beside ours, and the user knows it by
+   * this name (DESIGN-WIN §1.8). The one place the fork's panel says it (check-seams NAME_OK).
+   */
+  var OFFICIAL_APP = 'Codenotch';
+
+  /** Word for word the Mac's (ConsentCopy, HookHealth), with the Windows substitutions. */
+  var COPY = {
+    consentTitle: 'Turn on Claude Code control',
+    consentText: 'To show every session live and let you answer prompts from here, this app adds its hooks and a status-line wrapper to the settings.json of each folder Claude Code runs in. Nothing is written until you turn it on, and turning it off puts your status line back exactly.',
+    // The official Codenotch's hooks run beside ours and are never removed by "Turn on".
+    codenotchStays: OFFICIAL_APP + '’s hooks stay; remove them per folder in Settings › Claude Code.',
+    installOff: 'Installing is off for this run (--no-install).',
+    scopeTitle: 'Claude Code control now covers your VS Code workspaces',
+    pipeTitle: 'Not receiving hook events',
+    pipeTail: 'Sessions still update from Claude Code’s session files, without approvals.',
+    offTitle: 'Claude Code control is off',
+    offText: 'Answer prompts where Claude Code runs (VS Code or the terminal). Sessions still show here and finish from their transcripts.',
+    codenotchTitle: OFFICIAL_APP + '’s hooks are installed too',
+    installOffText: 'Nothing is written to any settings.json in this run; hooks that are already installed keep working.',
+    tooLong: 'Too long to judge from here: review it whole first.',
+    notPending: 'That request was already answered or is no longer waiting.',
+    peerGone: 'The session went away before the answer arrived.',
+    notSent: 'The answer didn’t reach Claude Code. Answer it where Claude Code runs.',
+  };
 
   var state = {
     /** The last whole snapshot (HubSnapshot), or null before the first. */
@@ -95,12 +136,25 @@
     /** A row to bring into view on the next render (a highlight). */
     scrollTo: null,
     field: false,
+    /** "Turn on" or "Not now" was clicked here: the card goes at once, before the engine says so. */
+    consentAnswered: false,
+    /** OK or Turn off on the scope notice was clicked here. */
+    scopeAnswered: false,
+    /** A line about an answer that did not arrive: {text, timer}; shown where the toast is. */
+    notice: null,
+    /** The panel was opened (again): requests on screen start their wait over. */
+    rearm: false,
     engagedSent: false,
     reported: { w: 0, h: 0 },
     chatId: null,
   };
 
   var ACTIONS = Object.create(null);
+  /** The page's one AnswerGate (made at start), and the timer that redraws a bar when it arms. */
+  var gate = null;
+  var armTimer = null;
+  /** The screen the gate's requests were last noted for (`list` | `chat`). */
+  var gateMode = 'list';
 
   function clone(value) {
     return JSON.parse(JSON.stringify(value));
@@ -434,14 +488,408 @@
 
   // ---- the other regions (later sub-tasks fill these) ------------------------------------
 
-  /** The setup banners (consent card, scope notice, pipe error, control off, hooks missing). */
-  function bannersHtml() {
-    return '';
+  function cut(text, max) {
+    var chars = Array.from(text == null ? '' : String(text));
+    return chars.length <= max ? chars.join('') : chars.slice(0, max - 1).join('') + '…';
   }
 
-  /** The undo toast, while a mark-all-reviewed can still be taken back. */
+  function strings(list, max) {
+    return (Array.isArray(list) ? list : []).filter(function (x) { return typeof x === 'string' && x; })
+      .map(function (x) { return cut(C.oneLine(x), max); });
+  }
+
+  function setupOf(v) {
+    return v && v.setup && typeof v.setup === 'object' ? v.setup : {};
+  }
+
+  /** The consent card shows: the engine asks for consent and nobody answered it in this panel. */
+  function consentShown(v) {
+    return !!setupOf(v).needs_hook_consent && !state.consentAnswered;
+  }
+
+  /** A pill button (ClaudeButtonStyle): kind primary | secondary | tinted | quiet. */
+  function pill(kind, compact, label, attrs) {
+    return '<button type="button" class="an-btn an-btn-' + kind + (compact ? ' an-compact' : '') + '"' + (attrs || '') +
+      '><span data-an-text>' + C.esc(label) + '</span></button>';
+  }
+
+  function bannerButton(action, label, key) {
+    return pill('secondary', true, label, ' data-key="' + key + '" data-an-action="' + action + '"');
+  }
+
+  /** One thing to know (NoticeBanner): a coloured mark, a line, an explanation, its actions. */
+  function noticeBanner(id, icon, tone, title, message, actions) {
+    return '<div class="an-banner" data-key="b-' + id + '" role="group" aria-label="' + tip(title) + '">' +
+      '<span class="an-banner-ic an-tone-' + tone + '" aria-hidden="true">' + C.icon(icon) + '</span>' +
+      '<div class="an-banner-body"><div class="an-banner-title" data-an-text>' + C.esc(title) + '</div>' +
+      '<div class="an-banner-msg" data-an-text>' + C.esc(message) + '</div></div>' +
+      (actions ? '<div class="an-banner-acts">' + actions + '</div>' : '') + '</div>';
+  }
+
+  /**
+   * "Turn on Claude Code control": every settings.json it would edit, and nothing written until
+   * the user clicks Turn on. The list is whole (a consent names everything it covers) and wraps.
+   * Turn on is the emphasised button but not a default: `data-an-noenter` keeps Enter off it.
+   */
+  function consentCard(setup) {
+    var files = (Array.isArray(setup.consent_files) ? setup.consent_files : []).filter(function (f) {
+      return f && typeof f === 'object' && typeof f.path === 'string' && f.path;
+    });
+    var html = '<section class="an-consent" data-key="consent" aria-label="' + C.esc(COPY.consentTitle) + '">' +
+      '<div class="an-consent-head"><span class="an-consent-ic" aria-hidden="true">' + C.icon('terminal') + '</span>' +
+      '<h2 class="an-consent-title" data-an-text>' + C.esc(COPY.consentTitle) + '</h2></div>' +
+      '<p class="an-cap" data-an-text>' + C.esc(COPY.consentText) + '</p>';
+    if (files.length) {
+      html += '<ul class="an-cfiles" data-key="files" aria-label="Files it edits">';
+      files.forEach(function (f) {
+        var account = typeof f.account === 'string' && f.account ? cut(C.oneLine(f.account), 120) : '';
+        html += '<li class="an-cfile" data-an-text>' + C.esc(cut(C.oneLine(f.path), PATH_CHARS)) +
+          (account ? ' <span class="an-cfile-acct">(' + C.esc(account) + ')</span>' : '') + '</li>';
+      });
+      html += '</ul>';
+    }
+    if (strings(setup.codenotch_hooks_folders, PATH_CHARS).length) {
+      html += '<p class="an-cap" data-key="codenotch" data-an-text>' + C.esc(COPY.codenotchStays) + '</p>';
+    }
+    if (setup.install_disabled) {
+      html += '<p class="an-cap an-cap-warn" data-key="install-off" data-an-text>' + C.esc(COPY.installOff) + '</p>';
+    }
+    html += '<div class="an-consent-btns" data-key="btns">' +
+      pill('secondary', false, 'Not now', ' data-key="later" data-an-action="consent-later"') +
+      pill('primary', false, 'Turn on', ' data-key="on" data-an-action="consent-on" data-an-noenter' + (setup.install_disabled ? ' disabled' : '')) +
+      '</div></section>';
+    return html;
+  }
+
+  /** "Hooks are missing in Work." / "…in Work and Side project." / "…in 3 accounts." (HookHealth.summary). */
+  function missingSummary(names) {
+    if (names.length === 1) return 'Hooks are missing in ' + names[0] + '.';
+    if (names.length === 2) return 'Hooks are missing in ' + names[0] + ' and ' + names[1] + '.';
+    return 'Hooks are missing in ' + names.length + ' accounts.';
+  }
+
+  function scopeMessage(count) {
+    var folders = count === 1 ? '1 VS Code workspace’s folder' : count + ' VS Code workspaces’ folders';
+    return 'This version puts its hooks and status line in ' + folders + ' too, and in new ones as they appear: Claude Parallel Profiles runs Claude Code there. Each settings.json has a backup beside it. Account stores never get hooks.';
+  }
+
+  /** The setup banners, in order of what blocks the most (SetupBanners.swift). */
+  function bannersHtml(v) {
+    if (!v) return '';
+    var setup = setupOf(v);
+    var needsConsent = !!setup.needs_hook_consent;
+    var html = '';
+    if (consentShown(v)) html += consentCard(setup);
+    var scope = strings(setup.new_install_folders, PATH_CHARS);
+    if (scope.length && !needsConsent && !state.scopeAnswered) {
+      html += noticeBanner('scope', 'info', 'idle', COPY.scopeTitle, scopeMessage(scope.length),
+        bannerButton('scope-ok', 'OK', 'ok') + bannerButton('scope-off', 'Turn off', 'off'));
+    }
+    if (typeof setup.transport_error === 'string' && setup.transport_error) {
+      html += noticeBanner('pipe', 'bolt', 'error', COPY.pipeTitle, cut(C.oneLine(setup.transport_error), BANNER_CHARS) + ' ' + COPY.pipeTail, '');
+    }
+    var missing = strings(setup.missing_hooks_accounts, 80);
+    if (setup.control_off && !needsConsent) {
+      html += noticeBanner('off', 'pause', 'idle', COPY.offTitle, COPY.offText, bannerButton('open-settings', 'Turn on…', 'settings'));
+    } else if (missing.length && !needsConsent) {
+      html += noticeBanner('missing', 'exclaim', 'needs', missingSummary(missing),
+        (missing.length === 1 ? 'Its' : 'Their') + ' sessions still show here; answer their prompts where Claude Code runs (VS Code or the terminal) until the hooks are back.',
+        bannerButton('open-settings', 'Settings…', 'settings'));
+    }
+    // Inside the consent card these two are a line of the card; after consent they stand alone.
+    var codenotch = strings(setup.codenotch_hooks_folders, PATH_CHARS);
+    if (codenotch.length && !needsConsent) {
+      html += noticeBanner('codenotch', 'info', 'idle', COPY.codenotchTitle,
+        'The official ' + OFFICIAL_APP + ' has its own hooks in ' + C.plural(codenotch.length, 'folder') + '. They run beside this app’s; remove them per folder in Settings › Claude Code.',
+        bannerButton('open-settings', 'Settings…', 'settings'));
+    }
+    if (setup.install_disabled && !needsConsent) {
+      html += noticeBanner('install-off', 'info', 'idle', COPY.installOff, COPY.installOffText, '');
+    }
+    return html;
+  }
+
+  /** The undo toast, while a mark-all-reviewed can still be taken back; a notice about an answer. */
   function toastHtml() {
-    return L.toastHtml(state.pending);
+    var notice = state.notice
+      ? '<div class="an-notice" data-key="notice" role="status"><span class="an-notice-ic an-tone-needs" aria-hidden="true">' + C.icon('exclaim') +
+        '</span><span class="an-notice-t" data-an-text>' + C.esc(cut(C.oneLine(state.notice.text), BANNER_CHARS)) + '</span></div>'
+      : '';
+    return L.toastHtml(state.pending) + notice;
+  }
+
+  /** Says why an answer did nothing, for a few seconds. Never a retry: the request has moved on. */
+  function showNotice(text) {
+    if (state.notice && state.notice.timer !== null) window.clearTimeout(state.notice.timer);
+    var notice = { text: String(text), timer: null };
+    state.notice = notice;
+    notice.timer = window.setTimeout(function () {
+      if (state.notice !== notice) return;
+      state.notice = null;
+      render();
+    }, NOTICE_MS);
+    render();
+  }
+
+  // ---- answering: the row action bars and the one gate every answer passes ----------------
+
+  /** The session's row in what the page shows now, or null. */
+  function rowOf(sessionId) {
+    var v = view();
+    return sessionsOf(v).filter(function (s) { return s && String(s.session_id) === String(sessionId); })[0] || null;
+  }
+
+  /** The requests whose answer bars are on screen: the unfolded rows of the list that carry one. */
+  function shownRequests(v) {
+    if (!v || mode() !== 'list') return [];
+    var ids = [];
+    listLayout(v).sections.forEach(function (section) {
+      if (section.collapsed) return;
+      section.rows.forEach(function (row) {
+        var id = C.primaryActions(row).toolUseId;
+        if (typeof id === 'string' && id) ids.push(id);
+      });
+    });
+    return ids;
+  }
+
+  /**
+   * Tells the gate what is on screen, before the bars are drawn from it. A scene's requests are
+   * armed at once (a still picture has no wait). In a chat the list's bars are gone: chat.js
+   * reports its own bar through `agentnotchPanel.noteShown`.
+   */
+  function noteRequests(v) {
+    if (!gate) return;
+    var now = C.now();
+    var m = mode();
+    // The list's bars are off screen in a chat, and the chat's in the list: none stays armed
+    // across the change. A panel opened again starts every wait over too, so a click aimed at
+    // what was under it never lands on a bar.
+    if (m !== gateMode || state.rearm) gate.noteShown([], now);
+    gateMode = m;
+    state.rearm = false;
+    if (m !== 'list') return;
+    var ids = shownRequests(v);
+    if (state.scene) gate.noteShownArmed(ids);
+    gate.noteShown(ids, now);
+  }
+
+  /** One timer for the page: redraws the bars the moment the next waiting request arms. */
+  function scheduleArming() {
+    if (armTimer !== null) {
+      window.clearTimeout(armTimer);
+      armTimer = null;
+    }
+    if (!gate || state.scene) return;
+    var now = C.now();
+    var next = gate.nextArming(now);
+    if (next === null) return;
+    armTimer = window.setTimeout(function () {
+      armTimer = null;
+      render();
+      // The chat draws its own bar: tell it the wait is over.
+      var chat = window.agentnotchChat;
+      if (mode() === 'chat' && chat && typeof chat.refresh === 'function') chat.refresh();
+    }, Math.max(1, next - now));
+  }
+
+  function answerButton(kind, label, title, row, toolUseId, arg, extra) {
+    // A still scene has no wait: its bars are drawn answerable (and answer nothing).
+    var answered = !!gate && !state.scene && gate.wasAnswered(toolUseId);
+    var armed = state.scene ? true : !!gate && gate.isArmed(toolUseId, C.now());
+    return '<button type="button" class="an-btn an-btn-' + kind + ' an-compact' + (armed ? '' : ' an-unarmed') + (answered ? ' an-answered' : '') +
+      '" data-key="ans-' + C.esc(arg) + '-' + C.esc(toolUseId) + '" data-an-action="answer" data-an-arg="' + C.esc(arg) +
+      '" data-an-session="' + C.esc(row.session_id) + '" data-an-tool="' + C.esc(toolUseId) + '" data-an-noenter title="' + tip(title) + '"' +
+      (armed ? '' : ' aria-disabled="true"') + (extra && extra.label ? ' aria-label="' + tip(extra.label) + '"' : '') + '>' +
+      (extra && extra.number ? '<span class="an-chipnum" data-an-text aria-hidden="true">' + extra.number + '</span>' : '') +
+      '<span data-an-text>' + C.esc(cut(C.oneLine(label), 80)) + '</span></button>';
+  }
+
+  function chatButton(kind, label, title, row, key) {
+    return pill(kind, true, label, ' data-key="' + key + '" data-an-action="open-chat" data-an-arg="' + C.esc(row.session_id) + '" title="' + tip(title) + '"');
+  }
+
+  /**
+   * A row's action bar (RowActionBar.swift): what `agentnotchCommon.primaryActions` says the row
+   * offers. Every answering button carries the session and the request it was drawn for.
+   */
+  function actionBarHtml(row) {
+    var a = C.primaryActions(row);
+    var p = row.pending || {};
+    switch (a.kind) {
+      case 'permission': {
+        var showsAlways = a.alwaysInline && !a.needsReview;
+        var caption = showsAlways ? 'Always: ' + cut(C.oneLine(p.always), BANNER_CHARS) : a.needsReview ? COPY.tooLong : '';
+        return (caption ? '<div class="an-act-cap" data-key="cap" data-an-text>' + C.esc(caption) + '</div>' : '') +
+          '<div class="an-acts' + (showsAlways ? ' an-acts-always' : '') + '" data-key="acts">' +
+          answerButton('secondary', 'Deny', 'Deny (Ctrl+Backspace)', row, a.toolUseId, 'deny') +
+          // A lasting rule: plain, never the eye-catching one.
+          (showsAlways ? answerButton('secondary', 'Always', cut(C.oneLine(p.always), 160) + ' (Ctrl+Alt+Enter)', row, a.toolUseId, 'always') : '') +
+          (a.needsReview
+            ? chatButton('primary', 'Review…', 'Open the whole request in the chat (Ctrl+Enter)', row, 'review')
+            : answerButton('primary', 'Allow', 'Allow (Ctrl+Enter)', row, a.toolUseId, 'allow')) +
+          '</div>';
+      }
+      case 'question_chips': {
+        var chips = a.question.options.map(function (option, index) {
+          var label = option && option.label != null ? String(option.label) : '';
+          var n = index + 1;
+          var title = option && typeof option.description === 'string' && option.description
+            ? option.description + ' (' + n + ')' : 'Answer ' + label + ' (' + n + ')';
+          return answerButton('tinted', label, title, row, a.toolUseId, 'option:' + index, { number: n, label: label });
+        }).join('');
+        return '<div class="an-acts an-acts-chips" data-key="acts">' + chips +
+          chatButton('quiet', 'Other…', 'Type another answer in the chat', row, 'other') + '</div>';
+      }
+      case 'answer_in_chat':
+        return '<div class="an-acts" data-key="acts">' + chatButton('primary', 'Answer…', 'Answer in the chat (Ctrl+Enter)', row, 'answer-chat') + '</div>';
+      case 'plan':
+        return '<div class="an-acts" data-key="acts">' +
+          chatButton('secondary', 'Review plan', 'Read the whole plan (Enter)', row, 'review-plan') +
+          answerButton('primary', 'Approve', 'Approve the plan and let Claude start (Ctrl+Enter)', row, a.toolUseId, 'approve') + '</div>';
+      case 'answer_in_terminal':
+        return '<div class="an-acts an-acts-term" data-key="acts"><span class="an-act-note" data-an-text>Answer in the terminal</span>' +
+          (row.focus_label ? pill('secondary', true, cut(C.oneLine(row.focus_label), 40), ' data-key="jump" data-an-action="jump" data-an-arg="' + C.esc(row.session_id) +
+            '" title="' + tip(String(row.focus_label) + ' (Ctrl+J)') + '"') : '') + '</div>';
+      default:
+        return '';
+    }
+  }
+
+  /**
+   * Claude Code's `answers` map (question text -> answer) for a question form, or null until every
+   * question has one (ChatQuestionAnswers). `picks[i]`: `{labels: [...], other: 'typed' | null}`.
+   * One choice answers with its label; several are joined by ", " in the options' order, the
+   * typed "Other" last; a single-select "Other" answers with the typed text alone.
+   */
+  function questionAnswers(questions, picks) {
+    if (!Array.isArray(questions) || !questions.length) return null;
+    var out = {};
+    for (var i = 0; i < questions.length; i++) {
+      var q = questions[i] || {};
+      var pick = picks && picks[i];
+      if (!pick) return null;
+      var chosen = Array.isArray(pick.labels) ? pick.labels.map(String) : [];
+      var options = (Array.isArray(q.options) ? q.options : []).map(function (o) { return String(o && o.label); });
+      var ordered = options.filter(function (l) { return chosen.indexOf(l) >= 0; })
+        .concat(chosen.filter(function (l) { return options.indexOf(l) < 0; }));
+      var other = typeof pick.other === 'string' ? pick.other.trim() : '';
+      var answer;
+      if (q.multi_select) {
+        var parts = other ? ordered.concat([other]) : ordered;
+        answer = parts.length ? parts.join(', ') : null;
+      } else if (typeof pick.other === 'string') {
+        answer = other || null;
+      } else {
+        answer = ordered.length ? ordered[0] : null;
+      }
+      if (answer === null) return null;
+      // An own key whatever the question says (a question named "__proto__" is still a question).
+      Object.defineProperty(out, String(q.text), { value: answer, enumerable: true, writable: true, configurable: true });
+    }
+    return out;
+  }
+
+  /**
+   * The answer a command stands for, checked against what the session is waiting for NOW: the
+   * request named must be the pending one and of the kind the answer fits, and from the list
+   * only what the row offers (never Allow or Always past "review it whole first"). Null refuses.
+   */
+  function answerFor(cmd) {
+    var row = rowOf(cmd.sessionId);
+    if (!row) return null;
+    var a = C.primaryActions(row);
+    if (!a.toolUseId || a.toolUseId !== cmd.toolUseId) return null;
+    var inChat = mode() === 'chat';
+    switch (cmd.cmd) {
+      case 'allow':
+        return a.kind === 'permission' && (inChat || !a.needsReview) ? { allow: { always: false } } : null;
+      case 'alwaysAllow':
+        return a.kind === 'permission' && a.hasAlways && (inChat || (a.alwaysInline && !a.needsReview)) ? { allow: { always: true } } : null;
+      case 'deny':
+        return a.kind === 'permission' ? { deny: { reason: null } } : null;
+      case 'approvePlan':
+        return a.kind === 'plan' ? 'approve_plan' : null;
+      case 'keepPlanning':
+        return a.kind === 'plan' ? 'keep_planning' : null;
+      case 'chooseOption': {
+        if (a.kind !== 'question_chips') return null;
+        var option = a.question.options[cmd.index];
+        if (!option || option.label == null) return null;
+        var answers = questionAnswers([a.question], [{ labels: [String(option.label)], other: null }]);
+        return answers ? { questions: { answers: answers } } : null;
+      }
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * Sends one answer for one request, once. The gate decides: not before the request has been on
+   * screen for 350 ms, never twice. A reply that says the request had moved on is said and left
+   * at that; nothing here ever sends again. A sealed scene sends nothing. True when it was sent.
+   */
+  function sendAnswer(sessionId, toolUseId, answer) {
+    if (!gate || state.scene || answer == null) return false;
+    if (typeof sessionId !== 'string' || typeof toolUseId !== 'string' || !sessionId || !toolUseId) return false;
+    if (!gate.claim(toolUseId, C.now())) return false;
+    render();
+    C.call('answer', { session_id: sessionId, tool_use_id: toolUseId, answer: answer }).then(function (reply) {
+      var result = reply && reply.result;
+      if (result === 'not_pending') showNotice(COPY.notPending);
+      else if (result === 'peer_gone') showNotice(COPY.peerGone);
+    }, function (error) {
+      fail('answer')(error);
+      showNotice(COPY.notSent);
+    });
+    return true;
+  }
+
+  /** Carries out a router command (a key or a click). True when it did something. */
+  function perform(cmd) {
+    if (!cmd) return false;
+    switch (cmd.cmd) {
+      case 'move': {
+        var v = view();
+        if (!v || mode() !== 'list') return false;
+        var next = C.moveSelection(state.selected, cmd.delta, listLayout(v).visible);
+        if (next === null) return false;
+        state.selected = next;
+        state.scrollTo = next;
+        render();
+        return true;
+      }
+      case 'openChat':
+        navigate('session:' + cmd.sessionId);
+        return true;
+      case 'allow':
+      case 'alwaysAllow':
+      case 'deny':
+      case 'approvePlan':
+      case 'keepPlanning':
+      case 'chooseOption':
+        return sendAnswer(cmd.sessionId, cmd.toolUseId, answerFor(cmd));
+      case 'markReviewed':
+        ACTIONS['mark-reviewed'](cmd.sessionId);
+        return true;
+      case 'dismissFailure':
+        ACTIONS['dismiss-failure'](cmd.sessionId);
+        return true;
+      case 'markAllReviewed':
+        markAllReviewed();
+        return true;
+      case 'jump':
+        ACTIONS.jump(cmd.sessionId);
+        return true;
+      case 'back':
+        navigate('sessions');
+        return true;
+      case 'close':
+        closePanel();
+        return true;
+      default:
+        return false;
+    }
   }
 
   function emptyHtml(v) {
@@ -477,8 +925,8 @@
     });
   }
 
-  /** Where a row's action bar goes: sub-task 6 sets `agentnotchPanel.slots.actions(row, ctx) -> html`. */
-  var SLOTS = { actions: null };
+  /** Where a row's action bar goes (`agentnotchPanelList` calls it per row). */
+  var SLOTS = { actions: actionBarHtml };
 
   /** The list region: the sections and rows, or an empty state. Nothing before the first snapshot. */
   function listHtml(v) {
@@ -500,6 +948,9 @@
   function render() {
     if (!started) return;
     var v = view();
+    settleSetup(v);
+    dropSelection(v);
+    noteRequests(v);
     C.morph(els.header, headerHtml(v));
     C.morph(els.banners, bannersHtml(v));
     var before = C.flipFirst(els.rows);
@@ -511,6 +962,21 @@
     applyMode();
     makeRoomForMenu();
     reportSize();
+    scheduleArming();
+  }
+
+  /** Once the engine no longer asks (or lists no new folder), a later ask shows its card again. */
+  function settleSetup(v) {
+    if (!v || state.scene) return;
+    var setup = setupOf(v);
+    if (!setup.needs_hook_consent) state.consentAnswered = false;
+    if (!strings(setup.new_install_folders, PATH_CHARS).length) state.scopeAnswered = false;
+  }
+
+  /** A selection folded away, filtered out or ended is dropped: the arrows start from the top again. */
+  function dropSelection(v) {
+    if (!v || mode() !== 'list' || state.selected === null) return;
+    if (listLayout(v).visible.indexOf(state.selected) < 0) state.selected = null;
   }
 
   /** A highlighted row (a banner click, an auto-open) is brought into view once it is drawn. */
@@ -698,6 +1164,75 @@
     C.call('open_settings', { tab: 'claude' }).catch(fail('open_settings'));
   };
 
+  // -- answers: a click on a bar's button is the same command the keyboard sends --
+
+  var ANSWER_ARGS = { allow: 'allow', always: 'alwaysAllow', deny: 'deny', approve: 'approvePlan', keep: 'keepPlanning' };
+
+  ACTIONS.answer = function (arg, el) {
+    if (!el || typeof el.getAttribute !== 'function') return;
+    var cmd = { sessionId: el.getAttribute('data-an-session'), toolUseId: el.getAttribute('data-an-tool') };
+    var option = /^option:(\d{1,2})$/.exec(String(arg));
+    if (option) {
+      cmd.cmd = 'chooseOption';
+      cmd.index = Number(option[1]);
+    } else if (Object.prototype.hasOwnProperty.call(ANSWER_ARGS, arg)) {
+      cmd.cmd = ANSWER_ARGS[arg];
+    } else {
+      return;
+    }
+    perform(cmd);
+  };
+
+  // -- setup: each of these writes settings.json (or stops writing it), so each runs only from a
+  //    click on its own button inside the banners, once --
+
+  function ownButton(el, action) {
+    return !!el && typeof el.getAttribute === 'function' && els.banners.contains(el) &&
+      el.getAttribute('data-an-action') === action && !el.hasAttribute('disabled');
+  }
+
+  function answerConsent(grant) {
+    state.consentAnswered = true;
+    render();
+    C.call('hook_consent', { grant: grant }).catch(function (error) {
+      // Refused (sealed, or the engine is gone): nothing was decided, so the card comes back.
+      fail('hook_consent')(error);
+      state.consentAnswered = false;
+      render();
+    });
+  }
+
+  ACTIONS['consent-on'] = function (arg, el, event) {
+    if (!ownButton(el, 'consent-on') || !event || event.type !== 'click') return;
+    var v = view();
+    if (state.scene || !consentShown(v) || setupOf(v).install_disabled) return;
+    answerConsent(true);
+  };
+  ACTIONS['consent-later'] = function (arg, el, event) {
+    if (!ownButton(el, 'consent-later') || !event || event.type !== 'click') return;
+    if (state.scene || !consentShown(view())) return;
+    answerConsent(false);
+  };
+
+  function answerScope(method, args) {
+    state.scopeAnswered = true;
+    render();
+    C.call(method, args).catch(function (error) {
+      fail(method)(error);
+      state.scopeAnswered = false;
+      render();
+    });
+  }
+
+  ACTIONS['scope-ok'] = function (arg, el, event) {
+    if (!ownButton(el, 'scope-ok') || !event || event.type !== 'click' || state.scene || state.scopeAnswered) return;
+    answerScope('acknowledge_scope');
+  };
+  ACTIONS['scope-off'] = function (arg, el, event) {
+    if (!ownButton(el, 'scope-off') || !event || event.type !== 'click' || state.scene || state.scopeAnswered) return;
+    answerScope('hooks_enabled', { on: false });
+  };
+
   function onCardClick(event) {
     var target = event.target && event.target.closest ? event.target.closest('[data-an-action]') : null;
     if (!target || !els.card.contains(target)) return;
@@ -731,10 +1266,79 @@
       var next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
         : event.key === 'ArrowDown' ? (at + 1) % items.length : (at <= 0 ? items.length - 1 : at - 1);
       items[next].focus();
+      return;
     }
+    if (state.menuOpen) return;
+    guardButtonKey(event);
+    // THE KEYBOARD GATE. Until the glue confirms this window is the foreground one, keys here
+    // may be keys the user is typing into a terminal: nothing acts on them and no field takes
+    // them. They are dropped, not remembered.
+    if (!state.focused) {
+      if (isTextField(event.target)) event.preventDefault();
+      return;
+    }
+    // The Windows key is never part of a panel shortcut.
+    if (event.metaKey) return;
+    var key = C.routerKey(event);
+    if (key === null) return;
+    var typing = isTextField(event.target);
+    var mods = { ctrl: !!event.ctrlKey, alt: !!event.altKey, shift: !!event.shiftKey };
+    // Ctrl+Z takes back a mark-all-reviewed while its toast shows (in a field it is the field's undo).
+    if (!typing && mods.ctrl && !mods.alt && !mods.shift && String(key).toLowerCase() === 'z') {
+      if (!state.pending) return;
+      event.preventDefault();
+      undoReview();
+      return;
+    }
+    // A field owns plain keys, digits and Enter included; Ctrl combinations still route.
+    if (typing && !mods.ctrl) return;
+    var cmd = C.commandFor(key, mods, keyContext(typing));
+    if (!cmd) return;
+    event.preventDefault();
+    // A held key repeats: it must never answer the request that takes the place of the one it answered.
+    if (event.repeat && ANSWER_COMMANDS.indexOf(cmd.cmd) >= 0) return;
+    perform(cmd);
+  }
+
+  var ANSWER_COMMANDS = ['allow', 'alwaysAllow', 'deny', 'approvePlan', 'keepPlanning', 'chooseOption'];
+
+  /** What the keyboard acts on: the selected row of the list, or the open chat's session. */
+  function keyContext(typing) {
+    if (mode() === 'chat') {
+      var chatRow = rowOf(C.parseRoute(state.route).id);
+      // A chat whose session ended has nothing to answer; Esc (handled before) still goes back.
+      return chatRow ? { kind: 'chat', target: C.keyTarget(chatRow), typing: typing } : { kind: 'setup' };
+    }
+    var v = view();
+    var row = v && state.selected !== null && listLayout(v).visible.indexOf(state.selected) >= 0 ? rowOf(state.selected) : null;
+    return { kind: 'list', target: row ? C.keyTarget(row) : null };
+  }
+
+  /**
+   * Enter and Space on a focused button are clicks the browser makes up. While the gate is shut
+   * no key may click anything; and Enter never clicks a button that answers a request or turns
+   * the hooks on (`data-an-noenter`): "a bare Enter never approves anything".
+   */
+  function guardButtonKey(event) {
+    if (event.key !== 'Enter' && event.key !== ' ' && event.key !== 'Spacebar') return;
+    var button = event.target && event.target.closest ? event.target.closest('button, [role="button"]') : null;
+    if (!button) return;
+    if (!state.focused || (event.key === 'Enter' && button.hasAttribute('data-an-noenter'))) event.preventDefault();
+  }
+
+  function onKeyUp(event) {
+    if (!state.menuOpen) guardButtonKey(event);
+  }
+
+  /** While the gate is shut a field takes no text, however it arrives (a key, a paste, an IME). */
+  function onBeforeInput(event) {
+    if (!state.focused && isTextField(event.target)) event.preventDefault();
   }
 
   function onPointerDown(event) {
+    // A click on a field while the gate is shut asks for the keyboard; the gate opens only when
+    // the glue answers with an:panel_focus.
+    if (!state.focused && isTextField(event.target)) C.call('panel_take_focus').catch(fail('panel_take_focus'));
     if (!state.menuOpen) return;
     var t = event.target;
     if (t && t.closest && (t.closest('.an-menu') || t.closest('[data-an-action="gear"]'))) return;
@@ -791,6 +1395,7 @@
     state.reason = typeof req.reason === 'string' ? req.reason : null;
     state.placement = normalizePlacement(req.placement);
     state.menuOpen = false;
+    state.rearm = true;
     applyPlacement();
     render();
   }
@@ -805,6 +1410,8 @@
   function applyFocus(payload) {
     state.focused = !!(payload && payload.focused);
     document.body.classList.toggle('an-focused', state.focused);
+    // A field that had the DOM focus while the gate was shut keeps no caret it cannot use.
+    if (!state.focused && isTextField(document.activeElement) && typeof document.activeElement.blur === 'function') document.activeElement.blur();
   }
 
   function applyTheme(name) {
@@ -889,8 +1496,73 @@
     };
   }
 
+  /** A copy of the row `id` with a new id and `patch` laid over it (and over its `pending`). */
+  function variant(s, id, newId, patch, pending) {
+    var base = s.sessions.filter(function (r) { return r.session_id === id; })[0];
+    if (!base) return null;
+    var row = clone(base);
+    row.session_id = newId;
+    Object.keys(patch || {}).forEach(function (k) { row[k] = patch[k]; });
+    if (pending && row.pending) Object.keys(pending).forEach(function (k) { row.pending[k] = pending[k]; });
+    return row;
+  }
+
+  /**
+   * Every kind of action bar at once (the Mac's panel-needs-you): the fixture's rows that need
+   * you, plus the variants the fixture has no row for: several questions (Answer…), a request
+   * too long to judge from the row (Review…), and a permission only the terminal can answer.
+   */
+  function needsYou(s) {
+    var long = 'git push origin --delete release/2025.1 && \\\n  git push origin --delete release/2025.2 && \\\n  git push origin --delete release/2025.3 && \\\n  git push origin --delete release/2025.4 && \\\n  git push origin --delete release/2025.5';
+    var extra = [
+      variant(s, 'needs-question', 'needs-questions', { title: 'Plan the onboarding flow', project: 'mobile-app', since_ms: s.generated_at_ms - 70000,
+        detail: { kind: 'question', text: 'Which screens should onboarding include?' } },
+      { tool_use_id: 'toolu_scene_questions', single_tap: false, questions: [
+        { text: 'Which screens should onboarding include?', header: 'Screens', multi_select: true, options: [{ label: 'Welcome', description: null }, { label: 'Permissions', description: null }] },
+        { text: 'Should it be skippable?', header: 'Skip', multi_select: false, options: [{ label: 'Yes', description: null }, { label: 'No', description: null }] },
+      ] }),
+      variant(s, 'needs-permission', 'needs-long', { title: 'Clean up old release branches', tasks: null, since_ms: s.generated_at_ms - 40000,
+        detail: { kind: 'permission', tool: 'Bash', request: long, waiting_in_terminal: false } },
+      { tool_use_id: 'toolu_scene_long', request: long, needs_review: true }),
+      variant(s, 'needs-elicitation', 'needs-terminal', { title: 'Clean up old branches', project: 'infra', since_ms: s.generated_at_ms - 65000,
+        detail: { kind: 'permission', tool: 'Bash', request: null, waiting_in_terminal: true } }),
+    ].filter(Boolean);
+    s.sessions = s.sessions.filter(function (r) { return r.bucket === 'needs_you'; }).concat(extra);
+    return retally(s);
+  }
+
+  /** The consent card over an empty list: nothing is tracked before the hooks are on. */
+  function consent(s) {
+    emptied(s);
+    s.setup = s.setup || {};
+    s.setup.hook_consent = null;
+    s.setup.needs_hook_consent = true;
+    s.setup.codenotch_hooks_folders = ['~\\.claude'];
+    return s;
+  }
+
+  function banners(s) {
+    s.setup = s.setup || {};
+    s.setup.needs_hook_consent = false;
+    s.setup.transport_error = 'The hook pipe couldn’t be opened (access is denied).';
+    s.setup.missing_hooks_accounts = ['Work'];
+    s.setup.codenotch_hooks_folders = ['~\\.claude'];
+    return s;
+  }
+
+  function scopeNotice(s) {
+    s.setup = s.setup || {};
+    s.setup.needs_hook_consent = false;
+    s.setup.new_install_folders = ['~\\.claude-windows\\5d1e0a7b3c21', '~\\.claude-windows\\9b4f2e8d6a10', '~\\.claude-windows\\c07a3f5e1d94'];
+    return s;
+  }
+
   /** Scene name -> how it reads the current snapshot. Later sub-tasks add their scenes here. */
   var SCENES = {
+    'panel-needs-you': needsYou,
+    'panel-banners': banners,
+    'panel-consent': consent,
+    'panel-scope-notice': scopeNotice,
     'panel-empty': emptied,
     'panel-every-state': same,
     'panel-header': same,
@@ -939,6 +1611,10 @@
     state.folds = {};
     if (state.pending && state.pending.timer !== null) window.clearTimeout(state.pending.timer);
     state.pending = null;
+    if (state.notice && state.notice.timer !== null) window.clearTimeout(state.notice.timer);
+    state.notice = null;
+    state.consentAnswered = false;
+    state.scopeAnswered = false;
     state.menuOpen = name === 'panel-menu';
     if (state.menuOpen) loadNotify();
     if (name === 'panel-filtered') {
@@ -1030,6 +1706,7 @@
     };
     if (!els.panel || !els.card || !els.header || !els.rows || !els.overlay) return;
     started = true;
+    gate = C.createAnswerGate();
 
     els.card.addEventListener('click', onCardClick);
     els.card.addEventListener('pointerenter', function () { state.pointer = true; setEngaged(); });
@@ -1049,6 +1726,8 @@
       if (!C.isStatic() && state.snapshot && mode() === 'list') render();
     }, TICK_MS);
     document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('keyup', onKeyUp);
+    document.addEventListener('beforeinput', onBeforeInput);
     document.addEventListener('pointerdown', onPointerDown);
 
     // The glue puts the theme in before the first script; a page opened without it asks.
@@ -1085,10 +1764,34 @@
     /** For the later sub-tasks and the tests: the state and the tables they extend. */
     actions: ACTIONS,
     scenes: SCENES,
-    /** Named places sub-task 6 fills: `slots.actions = function (row, ctx) { return html; }` (the row's action bar). */
     slots: SLOTS,
     undoReview: undoReview,
     markAllReviewed: markAllReviewed,
+    /**
+     * For chat.js, so the whole page answers through one gate: `answer(sessionId, toolUseId,
+     * answer)` sends once when the request is armed (true when sent); `noteShown(ids)` says which
+     * requests the chat's bar shows (call it on every draw of the bar); `isArmed(id)` draws the
+     * buttons; `answers(questions, picks)` builds a question form's map; `keyboardOpen()` is the
+     * keyboard gate (a field is read-only and says "Click to type" until it is true).
+     */
+    answer: function (sessionId, toolUseId, answer) {
+      if (mode() !== 'chat') return false;
+      return sendAnswer(sessionId, toolUseId, answer);
+    },
+    noteShown: function (ids) {
+      if (!gate || mode() !== 'chat') return;
+      var list = (Array.isArray(ids) ? ids : []).filter(function (id) { return typeof id === 'string' && id; });
+      if (state.scene) gate.noteShownArmed(list);
+      gate.noteShown(list, C.now());
+      scheduleArming();
+    },
+    isArmed: function (id) {
+      return !!gate && gate.isArmed(id, C.now());
+    },
+    answers: questionAnswers,
+    keyboardOpen: function () {
+      return state.focused;
+    },
     _: {
       state: state,
       render: render,
@@ -1102,6 +1805,10 @@
       escape: escape,
       listLayout: listLayout,
       commitPending: commitPending,
+      perform: perform,
+      answerFor: answerFor,
+      actionBarHtml: actionBarHtml,
+      bannersHtml: bannersHtml,
     },
   };
 

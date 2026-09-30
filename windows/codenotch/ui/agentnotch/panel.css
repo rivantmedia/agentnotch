@@ -259,6 +259,9 @@ button:focus-visible { outline: 1px solid var(--an-row-sel-stroke); outline-offs
   display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden;
 }
 .an-code.an-code-whole { display: block; -webkit-line-clamp: unset; }
+/* A clamped box clips at its padding edge, so bottom padding would show the top of a fifth line:
+   the space below the last line is a border instead (the fill runs under it). */
+.an-code:not(.an-code-whole) { padding-bottom: 0; border-bottom: 4px solid transparent; }
 .an-d-prompt { color: var(--an-text); }
 .an-lbl { font-weight: 600; color: var(--an-needs-you); }
 
@@ -294,10 +297,19 @@ button:focus-visible { outline: 1px solid var(--an-row-sel-stroke); outline-offs
 /* short of room: the word "context" goes first */
 @container (max-width: 330px) { .an-ctx-word { display: none; } }
 
-/* the action bar's place (a later sub-task fills it); empty, it takes no room */
-.an-row-actions { min-width: 0; }
+/* the action bar (panel.js actionBarHtml; RowActionBar.swift); empty, it takes no room */
+.an-row-actions { min-width: 0; cursor: default; }
 .an-row-actions:empty { display: none; }
-.an-row-actions:not(:empty) { margin-top: 3px; }
+.an-row-actions:not(:empty) { margin-top: 3px; display: flex; flex-direction: column; gap: 4px; }
+.an-act-cap {
+  font-size: var(--an-fs-caption); color: var(--an-text-2); text-align: right; overflow-wrap: anywhere; unicode-bidi: isolate;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+}
+.an-acts { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 5px; min-width: 0; }
+.an-acts-always .an-btn-primary { margin-left: 4px; }
+.an-acts-chips { justify-content: flex-start; }
+.an-acts-term { flex-wrap: nowrap; justify-content: space-between; }
+.an-act-note { flex: 1 1 auto; min-width: 0; font-size: var(--an-fs-caption); color: var(--an-text-2); }
 
 /* the one-line form */
 .an-cmp { display: flex; align-items: baseline; gap: 8px; }
@@ -328,3 +340,64 @@ button:focus-visible { outline: 1px solid var(--an-row-sel-stroke); outline-offs
   color: var(--an-text); font-size: var(--an-fs-caption); font-weight: 600; cursor: pointer;
 }
 .an-toast-undo:hover { background: var(--an-fill-hover); filter: brightness(1.15); }
+
+/* ---- pill buttons (ClaudeButtonStyle): primary, secondary, tinted, quiet; compact beside small text */
+
+.an-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px; flex: none; box-sizing: border-box; max-width: 100%;
+  min-height: calc(var(--an-control-h) + 3px); padding: 0 11px; border: 0; border-radius: 999px;
+  background: var(--an-fill); color: var(--an-text); font-size: var(--an-fs-body); font-weight: 600; white-space: nowrap; cursor: pointer;
+  transition: background var(--an-quick), color var(--an-quick), opacity var(--an-quick);
+}
+.an-btn > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
+.an-btn.an-compact { min-height: var(--an-control-h); padding: 0 8px; font-size: var(--an-fs-caption); }
+.an-btn:hover { background: var(--an-fill-hover); }
+.an-btn-primary { background: var(--an-primary); color: var(--an-on-primary); opacity: .92; }
+.an-btn-primary:hover { background: var(--an-primary); opacity: 1; }
+.an-btn-tinted { background: color-mix(in srgb, var(--an-needs-you) 13%, transparent); color: var(--an-needs-you); }
+.an-btn-tinted:hover { background: color-mix(in srgb, var(--an-needs-you) 22%, transparent); }
+.an-btn-quiet { background: transparent; color: var(--an-text-2); }
+.an-btn-quiet:hover { background: var(--an-fill); color: var(--an-text); }
+.an-chipnum { flex: none; font: 400 var(--an-fs-mono-caption)/1 var(--an-mono); opacity: .7; }
+/* not answerable yet (the 0.35 s after a request appears), already answered, or switched off */
+.an-btn.an-unarmed, .an-btn[disabled] { opacity: .4; cursor: default; }
+.an-btn.an-unarmed:hover { background: var(--an-fill); }
+.an-btn-primary.an-unarmed:hover { background: var(--an-primary); opacity: .4; }
+.an-btn-tinted.an-unarmed:hover { background: color-mix(in srgb, var(--an-needs-you) 13%, transparent); }
+
+/* ---- setup banners (SetupBanners.swift; UI§5.2) -------------------------------------------- */
+
+.an-banner {
+  display: flex; align-items: flex-start; gap: 8px; box-sizing: border-box; padding: 9px; border-radius: var(--an-row-corner);
+  background: var(--an-fill);
+}
+.an-banner-ic { flex: none; width: 14px; display: inline-flex; justify-content: center; padding-top: 2px; }
+.an-banner-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.an-banner-title { font-size: var(--an-fs-body); font-weight: 600; color: var(--an-text); overflow-wrap: anywhere; unicode-bidi: isolate; }
+.an-banner-msg { font-size: var(--an-fs-caption); color: var(--an-text-2); overflow-wrap: anywhere; unicode-bidi: isolate; }
+.an-banner-acts { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+
+.an-consent {
+  display: flex; flex-direction: column; gap: var(--an-block); box-sizing: border-box; padding: 10px; border-radius: var(--an-row-corner);
+  background: var(--an-fill);
+}
+.an-consent-head { display: flex; align-items: center; gap: 7px; }
+.an-consent-ic { flex: none; display: inline-flex; color: var(--an-accent); }
+.an-consent-title { margin: 0; min-width: 0; font-size: var(--an-fs-row-title); font-weight: 600; color: var(--an-text); }
+.an-cap { margin: 0; font-size: var(--an-fs-caption); color: var(--an-text-2); overflow-wrap: anywhere; }
+.an-cap-warn { color: var(--an-needs-you); }
+/* the whole list of files, wrapped rather than cut: it is what the user agrees to; a long one scrolls */
+.an-cfiles {
+  margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; max-height: 132px; overflow-y: auto;
+  scrollbar-width: thin; scrollbar-color: var(--an-fill-hover) transparent; user-select: text;
+}
+.an-cfile { font: 400 var(--an-fs-mono-caption)/1.35 var(--an-mono); color: var(--an-text); overflow-wrap: anywhere; unicode-bidi: isolate; }
+.an-consent-btns { display: flex; justify-content: flex-end; gap: 6px; }
+
+/* a line about an answer that did not arrive, where the undo toast is */
+.an-notice {
+  display: flex; align-items: flex-start; gap: 8px; margin: 0 var(--an-pad) var(--an-pad); padding: 7px 10px;
+  border-radius: var(--an-row-corner); background: var(--an-fill);
+}
+.an-notice-ic { flex: none; display: inline-flex; padding-top: 2px; }
+.an-notice-t { flex: 1 1 auto; min-width: 0; font-size: var(--an-fs-body); color: var(--an-text); overflow-wrap: anywhere; unicode-bidi: isolate; }
