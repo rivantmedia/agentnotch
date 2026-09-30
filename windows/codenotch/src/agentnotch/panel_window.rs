@@ -84,6 +84,28 @@ static WATCH: AtomicU64 = AtomicU64::new(0);
 /// Numbers the notch's moves: only the latest one's timer re-anchors.
 static MOVES: AtomicU64 = AtomicU64::new(0);
 static STATE: Mutex<State> = Mutex::new(State::new());
+/// The scale a sealed self-test draws its pages at, as an `f64`'s bits (0: the monitor's own).
+static SELF_TEST_SCALE: AtomicU64 = AtomicU64::new(0);
+
+/// Sealed self-test only (`AGENTNOTCH_SELF_TEST_SCALE`): the panel is placed as if the monitor
+/// it lands on were at `scale`, the scale its page is then drawn at. A monitor really at that
+/// scale sizes the window by it, so the page has its designed width in CSS px (the list's 400,
+/// the chat's 520); a window left at the monitor's own scale would give the page only 1/`scale`
+/// of that to lay itself out in, a width the app never shows. Ignored unless sealed.
+pub(super) fn place_at_scale(scale: Option<f64>) {
+    let bits = match scale {
+        Some(scale) if super::sealed() && scale.is_finite() && scale > 0.0 => scale.to_bits(),
+        _ => 0,
+    };
+    SELF_TEST_SCALE.store(bits, Ordering::Relaxed);
+}
+
+fn self_test_scale() -> Option<f64> {
+    match SELF_TEST_SCALE.load(Ordering::Relaxed) {
+        0 => None,
+        bits => Some(f64::from_bits(bits)),
+    }
+}
 
 fn atom(cell: &AtomicIsize) -> Option<isize> {
     match cell.load(Ordering::Relaxed) {
@@ -548,7 +570,7 @@ fn find_anchor(
             let anchor = landing(&monitors, live, centre, notch.scale).map(|area| Anchor {
                 edge: Some(notch.edge),
                 ring: Some(ring),
-                area,
+                area: at_scale(area, self_test_scale()),
                 notch: Some(notch.frame),
                 measured: measured.is_some(),
             });
@@ -568,7 +590,7 @@ fn find_anchor(
             let anchor = landing(&monitors, live, point, 1.0).map(|area| Anchor {
                 edge: None,
                 ring: None,
-                area,
+                area: at_scale(area, self_test_scale()),
                 notch: None,
                 measured: false,
             });
@@ -897,6 +919,15 @@ fn landing(
             })
         }
         None => holding.or(monitors.first()).copied(),
+    }
+}
+
+/// `area` with the scale a sealed self-test asked for in place of its own
+/// ([`place_at_scale`]); as it is otherwise. Its rects stay the monitor's.
+fn at_scale(area: Area, asked: Option<f64>) -> Area {
+    match asked {
+        Some(scale) => Area { scale, ..area },
+        None => area,
     }
 }
 
@@ -1383,6 +1414,52 @@ mod tests {
             Some(area(1.0))
         );
         assert_eq!(landing(&[], None, (0, 0), 1.0), None);
+    }
+
+    // A scaled self-test run (AGENTNOTCH_SELF_TEST_SCALE) on a runner at 100 %: the panel is
+    // sized as a monitor at the page's scale sizes it, so the page lays itself out at its
+    // designed width, as it would for a user at that scale.
+    #[test]
+    fn a_scaled_self_test_places_the_panel_for_the_scale_its_page_draws_at() {
+        let runner = Area {
+            monitor: PxRect::new(0, 0, 1024, 768),
+            work: PxRect::new(0, 0, 1024, 720),
+            scale: 1.0,
+        };
+        assert_eq!(at_scale(runner, None), runner);
+        let asked = at_scale(runner, Some(1.25));
+        assert_eq!((asked.monitor, asked.work), (runner.monitor, runner.work));
+        assert_eq!(asked.scale, 1.25);
+
+        // What the page gets, in CSS px: the window's width over the scale it draws at.
+        let page_width = |anchor: &Anchor, mode| {
+            let p = placement(anchor, mode, 560.0);
+            assert!(anchor.area.work.contains(&p.window), "{p:?}");
+            f64::from(p.window.w) / anchor.area.scale
+        };
+        let right = |area: Area| Anchor {
+            edge: Some(PanelEdge::Right),
+            ring: Some(PxRect::new(955, 360, 0, 0)),
+            area,
+            notch: Some(PxRect::new(664, 35, 360, 650)),
+            measured: false,
+        };
+        let top = |area: Area| Anchor {
+            edge: Some(PanelEdge::Top),
+            ring: Some(PxRect::new(512, 69, 0, 0)),
+            area,
+            notch: Some(PxRect::new(187, 0, 650, 360)),
+            measured: false,
+        };
+        for scale in [1.0, 1.25, 1.5] {
+            let area = at_scale(runner, Some(scale));
+            // The list beside a side notch: the 400 px card plus the 32 px tail strip.
+            assert_eq!(page_width(&right(area), PanelMode::List), 432.0, "{scale}");
+            // A chat under a flat notch: 520 px wide (its tail is above it).
+            assert_eq!(page_width(&top(area), PanelMode::Chat), 520.0, "{scale}");
+        }
+        // Left at the runner's own scale, a page drawn at 1.5 would have 288 px for the list.
+        assert_eq!(page_width(&right(runner), PanelMode::List) / 1.5, 288.0);
     }
 
     // The clamp `panel_report_size` is held to: the engine's caps for the route, and the floor.

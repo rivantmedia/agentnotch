@@ -6,7 +6,9 @@
 //!   self-test: the app drives its own panel over every edge, looks at what Windows made of it
 //!   and into its three pages, writes a report and exits 0 (nothing wrong) or 1;
 //!   with `AGENTNOTCH_SELF_TEST_SCALE=1.25` (or `1.5`, …) its three pages are drawn at that
-//!   scale instead of the monitor's, and the run fails unless they then say they are;
+//!   scale instead of the monitor's, the panel is placed as a monitor at that scale places it
+//!   (so its page has the list's 400 and the chat's 520 CSS px, as a user there sees them), and
+//!   the run fails unless the pages then say they draw at it;
 //! - `AGENTNOTCH_SNAPSHOT_CLAUDE=<dir>` is the snapshot run (`snapshots.rs`): PNGs of the
 //!   pages in their states and a manifest. Beside the self-test it runs after it, and the two
 //!   share one exit code.
@@ -247,6 +249,8 @@ fn start_self_test(
         .name("an-selftest".into())
         .spawn(move || {
             let scale = scale.as_deref().map(report::wanted_scale).transpose();
+            // Before the panel is first placed: it is sized for the scale its page draws at.
+            panel_window::place_at_scale(scale.clone().unwrap_or(None));
             let mut run = Run {
                 app: &app,
                 report: Report::new(&version(&app)),
@@ -618,16 +622,29 @@ impl Run<'_> {
         }
         let work = work_area(handle, &placed);
         let fits = report::inside(card, work);
+        // The page lays itself out in the width its placement gave it: at the page's scale,
+        // not at a monitor's the page doesn't draw at (the list's 400 px card, the chat's 520).
+        let inner = self
+            .window(PANEL)
+            .and_then(|page| webview::eval(&page, INNER_WIDTH, QUICK).ok())
+            .and_then(|width| width.as_f64());
+        let as_placed =
+            report::laid_out_as_placed(inner, placed.placement.window.w, placed.anchor.area.scale);
         super::log(&format!(
-            "self-test: {name} on {edge}: card={card:?} work={work:?} width_css={} fits={fits}",
-            placed.placement.width_css
+            "self-test: {name} on {edge}: card={card:?} work={work:?} width_css={} scale={} \
+             inner_width={inner:?} fits={fits} as_placed={as_placed}",
+            placed.placement.width_css, placed.anchor.area.scale
         ));
-        self.report
-            .pages
-            .panel
-            .invariants
-            .insert(format!("{name}_inside_work_area"), fits);
-        self.page_invariants(PANEL, &format!("{name}_no_text_overflow"), edge);
+        let invariants = &mut self.report.pages.panel.invariants;
+        invariants.insert(format!("{name}_inside_work_area"), fits);
+        invariants.insert(format!("{name}_laid_out_as_placed"), as_placed);
+        // The hook is told the card's width (400 or 520), the page's other invariant reads it.
+        self.page_invariants(
+            PANEL,
+            &format!("{name}_no_text_overflow"),
+            edge,
+            Some(placed.placement.width_css),
+        );
         self.close_panel();
     }
 
@@ -654,17 +671,19 @@ impl Run<'_> {
     }
 
     /// The generic invariant (under `name`) and the page's own hook, for the page as it is now.
-    fn page_invariants(&mut self, label: &str, name: &str, edge: &str) {
+    /// The hook is called with `width` (the panel's card width), else the page's own width.
+    fn page_invariants(&mut self, label: &str, name: &str, edge: &str, width: Option<f64>) {
         let Some(page) = self.window(label) else {
             return self.fail(format!("{label}: no window to look into"));
         };
         let cut = webview::eval(&page, TEXT_OVERFLOWS, QUICK);
-        let width = webview::eval(&page, INNER_WIDTH, QUICK)
+        let inner = webview::eval(&page, INNER_WIDTH, QUICK)
             .ok()
             .and_then(|width| width.as_f64())
             .unwrap_or(0.0);
+        let width = width.unwrap_or(inner);
         super::log(&format!(
-            "self-test: {label} {name}: cut_off={cut:?} inner_width={width}"
+            "self-test: {label} {name}: cut_off={cut:?} inner_width={inner} hook_width={width}"
         ));
         let holds = cut.ok().and_then(|cut| cut.as_u64()) == Some(0);
         let global = HOOKS
@@ -744,7 +763,7 @@ impl Run<'_> {
             ));
             // The panel's invariants were read at each of its widths.
             if label != PANEL {
-                self.page_invariants(label, "no_text_overflow", &edge);
+                self.page_invariants(label, "no_text_overflow", &edge, None);
             }
             let kept = webview::collected(&page);
             if let Some(entry) = self.report.pages.named(label) {

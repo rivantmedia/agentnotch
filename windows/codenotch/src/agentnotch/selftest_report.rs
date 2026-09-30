@@ -75,6 +75,19 @@ pub(super) fn scale_is(wanted: f64, drawn: f64) -> bool {
     (wanted - drawn).abs() <= 0.01
 }
 
+/// Whether the panel's page has the width its placement was made for: a window `window_px`
+/// physical pixels wide, placed for a monitor at `scale`, gives the page `window_px / scale`
+/// CSS px, give or take the pixel WebView2 rounds. A page drawn at another scale than its
+/// placement's (or one that couldn't say its width) is laid out at a width the app never shows.
+pub(super) fn laid_out_as_placed(inner_width: Option<f64>, window_px: i32, scale: f64) -> bool {
+    match inner_width {
+        Some(inner) if inner.is_finite() && scale.is_finite() && scale > 0.0 => {
+            (inner - f64::from(window_px) / scale).abs() <= 1.0
+        }
+        _ => false,
+    }
+}
+
 // ---- the steps ----
 
 /// One stretch of the self-test. The watchdog names the one a run was in when it ran out of
@@ -736,6 +749,23 @@ mod tests {
         assert!(!scale_is(1.5, 1.0));
         assert!(!scale_is(1.25, 1.5));
         assert!(!scale_is(1.25, f64::NAN));
+    }
+
+    #[test]
+    fn the_panels_page_is_as_wide_as_its_placement_made_it() {
+        // The list beside a side notch (400 + the 32 px tail) at 100, 125 and 150 %.
+        assert!(laid_out_as_placed(Some(432.0), 432, 1.0));
+        assert!(laid_out_as_placed(Some(432.0), 540, 1.25));
+        assert!(laid_out_as_placed(Some(432.0), 648, 1.5));
+        // WebView2 rounds to a whole pixel.
+        assert!(laid_out_as_placed(Some(433.0), 541, 1.25));
+        // What run 36747148922 had: placed for the runner's 100 %, drawn at 125 and 150 %.
+        assert!(!laid_out_as_placed(Some(346.0), 432, 1.0));
+        assert!(!laid_out_as_placed(Some(288.0), 432, 1.0));
+        // A page that couldn't say, and nonsense, never pass.
+        assert!(!laid_out_as_placed(None, 432, 1.0));
+        assert!(!laid_out_as_placed(Some(f64::NAN), 432, 1.0));
+        assert!(!laid_out_as_placed(Some(432.0), 432, 0.0));
     }
 
     #[test]
