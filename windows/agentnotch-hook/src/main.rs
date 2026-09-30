@@ -15,11 +15,16 @@
 //!   Claude Code has already closed the pipe);
 //! - a watchdog ends the process with exit 0 when talking to the app stalls (§1.4).
 
+mod ancestry;
 mod console;
 mod hook;
 mod io;
+mod pipe;
 mod statusline;
+mod trace;
 mod watchdog;
+#[cfg(windows)]
+mod win;
 
 use agentnotch_proto::Invocation;
 
@@ -33,7 +38,16 @@ fn main() {
 
 fn run() {
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
-    match agentnotch_proto::parse_invocation(&args) {
+    let invocation = agentnotch_proto::parse_invocation(&args);
+    // The role only, never the arguments: they can carry a pid or a path.
+    trace::note(|| match &invocation {
+        Invocation::Hook { exec_form } => format!("invoked hook exec={exec_form}"),
+        Invocation::StatusLine => "invoked statusline".into(),
+        Invocation::Type(_) => "invoked type".into(),
+        Invocation::ConsoleInfo { .. } => "invoked console-info".into(),
+        Invocation::Ignore => "invoked unknown".into(),
+    });
+    match invocation {
         Invocation::Hook { exec_form } => hook::run(exec_form),
         Invocation::StatusLine => statusline::run(),
         Invocation::Type(target) => console::type_reply(&target),

@@ -18,7 +18,7 @@ const NOT_AVAILABLE: &str = "Typing into a terminal isn't available in this buil
 /// there is no `{"phase":"typed"}` line before it.
 pub fn type_reply(_target: &TypeArgs) {
     let outcome = serde_json::json!({ "outcome": "failed", "reason": NOT_AVAILABLE });
-    io::write_stdout(&format!("{outcome}\n"));
+    io::write_stdout(format!("{outcome}\n").as_bytes());
 }
 
 /// `ConsoleInfo` of the engine's platform traits, as JSON.
@@ -32,5 +32,5 @@ pub fn info(_pid: u32) {
         "elevated_target": false,
         "error": NOT_AVAILABLE,
     });
-    io::write_stdout(&format!("{info}\n"));
+    io::write_stdout(format!("{info}\n").as_bytes());
 }
