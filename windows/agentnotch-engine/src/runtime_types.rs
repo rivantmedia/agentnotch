@@ -7,7 +7,7 @@
 
 use crate::hub::{Call, CallError};
 use crate::model::*;
-use crate::persist::hook_install::HookInstallRecord;
+use crate::persist::hook_install::{HookInstallEntry, HookInstallRecord};
 use crate::platform::{
     Chime, CommandSpec, ConnId, ConsoleInfo, ConsoleTarget, FileIdentity, FocusOutcome, FocusStep,
     Foreground, HostApp, NotifyPermission, Toast, TransportEvent, TypeOutcome,
@@ -601,6 +601,15 @@ pub struct InstallOutcome {
     pub settings_path: PathBuf,
     pub result: Result<InstallChange, String>,
     pub backup: Option<PathBuf>,
+    /// What settings.json now holds of ours, for `hook-install.json`: set
+    /// after an install that left our hooks in the file (written or already
+    /// current), `None` after a removal or a failure.
+    #[serde(default)]
+    pub entry: Option<HookInstallEntry>,
+    /// What was decided for the folder's status line, with the reason when
+    /// it was left alone. `None` when the pass never got that far.
+    #[serde(default)]
+    pub status_line: Option<StatusLineIntent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

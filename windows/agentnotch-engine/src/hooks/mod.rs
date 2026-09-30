@@ -2,8 +2,10 @@
 //! copy, command forms, recognisers, settings.json safety, status line
 //! takeover, passes, uninstall.
 //!
-//! Owner: WP2. WP0 stub: the §3.4 signatures; it never writes anything.
+//! Owner: WP2. `apply` carries plans out on disk; `HookManager` is still
+//! WP0's stub (it plans nothing).
 
+pub mod apply;
 pub mod backups;
 pub mod commands;
 pub mod copy;
@@ -15,10 +17,12 @@ pub mod version;
 
 use crate::core::settings::ControlSettings;
 use crate::model::{Account, AccountId, RunFolder};
-use crate::persist::hook_install::HookInstallRecord;
-use crate::platform::{Clock, SecureFiles};
-use crate::runtime_types::{FolderHookStatus, InstallOutcome, InstallPlan, VersionSighting};
+use crate::runtime_types::{FolderHookStatus, InstallPlan, VersionSighting};
 use facts::ClaudeCodeFacts;
+
+pub use apply::{
+    apply_install, apply_installs, read_status, remove_codenotch_hooks, uninstall_everything,
+};
 
 #[derive(Default)]
 pub struct HookManager {
@@ -46,28 +50,4 @@ impl HookManager {
         let _ = folder;
         FolderHookStatus::default()
     }
-}
-
-/// A Job on `an-io`.
-pub fn apply_install(
-    plan: &InstallPlan,
-    files: &dyn SecureFiles,
-    clock: &dyn Clock,
-) -> InstallOutcome {
-    let _ = (files, clock);
-    InstallOutcome {
-        folder: plan.folder.clone(),
-        settings_path: plan.settings_path.clone(),
-        result: Err("Installing hooks isn't in this build yet.".into()),
-        backup: None,
-    }
-}
-
-pub fn uninstall_everything(
-    record: &HookInstallRecord,
-    files: &dyn SecureFiles,
-    clock: &dyn Clock,
-) -> Vec<InstallOutcome> {
-    let _ = (record, files, clock);
-    Vec::new()
 }
