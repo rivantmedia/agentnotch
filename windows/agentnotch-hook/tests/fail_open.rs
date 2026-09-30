@@ -729,3 +729,161 @@ fn a_panic_in_the_status_line_is_exit_zero_with_nothing_printed() {
         ["invoked statusline", "chain: started"]
     );
 }
+
+// The console helper (`type`, `console-info`): what holds on every system. What it does to a
+// console is proven on Windows by `tests/console_type.rs`; its decisions are unit-tested in
+// `src/console/checks.rs`.
+
+/// No process has this pid: Windows hands out multiples of four far below it, and other systems
+/// stay below their own, lower limits.
+const NO_SUCH_PID: &str = "2147483644";
+
+fn type_args(pid: &'static str) -> [&'static str; 9] {
+    [
+        "type",
+        "--pid",
+        pid,
+        "--started",
+        "1790000000000",
+        "--expect-window",
+        "none",
+        "--shells",
+        "",
+    ]
+}
+
+/// The helper's stdout: whole lines, each one the protocol's.
+#[track_caller]
+fn type_phases(run: &Run, what: &str) -> Vec<agentnotch_proto::TypePhase> {
+    assert_eq!(run.output.status.code(), Some(0), "{what}: exit code");
+    assert!(run.output.stderr.is_empty(), "{what}: stderr");
+    let text = String::from_utf8(run.output.stdout.clone()).expect("UTF-8 on stdout");
+    assert!(text.ends_with('\n'), "{what}: {text:?}");
+    text.lines()
+        .map(|line| {
+            agentnotch_proto::TypePhase::from_line(line)
+                .unwrap_or_else(|| panic!("{what}: not a line of the protocol: {line:?}"))
+        })
+        .collect()
+}
+
+#[track_caller]
+fn only_outcome(run: &Run, what: &str) -> (String, Option<String>) {
+    let phases = type_phases(run, what);
+    match phases.as_slice() {
+        [agentnotch_proto::TypePhase::Outcome { outcome, reason }] => {
+            (outcome.clone(), reason.clone())
+        }
+        other => panic!("{what}: expected one outcome line, got {other:?}"),
+    }
+}
+
+#[test]
+fn typing_for_a_process_that_does_not_exist_is_one_outcome_line() {
+    let path = trace_file();
+    let mut command = hook_command(&type_args(NO_SUCH_PID));
+    command
+        .env("AGENTNOTCH_DEV", "1")
+        .env("AGENTNOTCH_HOOK_TRACE", &path);
+    let done = run(command, Stdin::Bytes(b"{\"text\":\"hello\"}\n"));
+    let (outcome, reason) = only_outcome(&done, "type");
+    // Nothing was typed, so there is no `{"phase":"typed"}` line and no "typed" outcome.
+    if cfg!(windows) {
+        assert_eq!(outcome, "refused");
+        assert_eq!(
+            reason.as_deref(),
+            Some("This session has no console to type into")
+        );
+    } else {
+        assert_eq!(outcome, "failed");
+        assert!(reason.is_some());
+    }
+    assert_eq!(
+        traced(&path, done.pid),
+        vec!["invoked type".to_owned(), format!("type: {outcome}")]
+    );
+}
+
+#[test]
+fn typing_without_a_request_fails_without_touching_anything() {
+    let none = "No reply was given to type";
+    let one_line = "A reply is typed as one line";
+    let cases: [(Stdin, &str); 9] = [
+        (Stdin::Closed, none),
+        (Stdin::Bytes(b""), none),
+        (Stdin::Bytes(b"\n"), none),
+        (Stdin::Bytes(b"hello\n"), none),
+        (Stdin::Bytes(b"{\"text\":7}\n"), none),
+        (Stdin::Bytes(b"{\"text\":\"\"}\n"), none),
+        (Stdin::Bytes(b"\xff\xfe\n"), none),
+        // A line break would press Return before the engine looked again.
+        (Stdin::Bytes(b"{\"text\":\"a\\nb\"}\n"), one_line),
+        (
+            Stdin::Bytes(b"{\"text\":\"rm -rf\\r\"}\nsubmit\n"),
+            one_line,
+        ),
+    ];
+    for (index, (stdin, reason)) in cases.into_iter().enumerate() {
+        // This test's own pid: were the request accepted, the helper would go on to attach.
+        let own = std::process::id().to_string();
+        let mut args = type_args(NO_SUCH_PID).map(str::to_owned);
+        args[2] = own;
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let done = run(hook_command(&args), stdin);
+        let (outcome, given) = only_outcome(&done, &format!("case {index}"));
+        assert_eq!(outcome, "failed", "case {index}");
+        assert_eq!(given.as_deref(), Some(reason), "case {index}");
+    }
+}
+
+#[test]
+fn console_info_for_a_process_that_does_not_exist_is_one_json_line() {
+    let path = trace_file();
+    let mut command = hook_command(&["console-info", "--pid", NO_SUCH_PID]);
+    command
+        .env("AGENTNOTCH_DEV", "1")
+        .env("AGENTNOTCH_HOOK_TRACE", &path);
+    let done = run(command, Stdin::Closed);
+    assert_eq!(done.output.status.code(), Some(0));
+    assert!(done.output.stderr.is_empty());
+    let text = String::from_utf8(done.output.stdout.clone()).expect("UTF-8 on stdout");
+    assert!(
+        text.ends_with('\n') && text.lines().count() == 1,
+        "{text:?}"
+    );
+    let info: agentnotch_proto::ConsoleInfo =
+        serde_json::from_str(text.trim_end()).expect("a ConsoleInfo line");
+    assert!(!info.attached);
+    assert!(!info.elevated_target);
+    assert_eq!(info.window, None);
+    assert_eq!(info.title, None);
+    assert!(info.processes.is_empty());
+    assert_eq!(info.line_input, None);
+    assert!(info.error.is_some());
+    if cfg!(windows) {
+        assert_eq!(
+            info.error.as_deref(),
+            Some("This session has no console to type into")
+        );
+    }
+    // Every field is on the line, null or not: the app's side reads them by name.
+    let value: serde_json::Value = serde_json::from_str(text.trim_end()).unwrap();
+    for field in [
+        "attached",
+        "window",
+        "title",
+        "processes",
+        "line_input",
+        "elevated_target",
+        "error",
+    ] {
+        assert!(value.get(field).is_some(), "{field} in {text}");
+    }
+    assert_eq!(
+        traced(&path, done.pid),
+        vec![
+            "invoked console-info".to_owned(),
+            "console-info: attached=false".to_owned()
+        ]
+    );
+}

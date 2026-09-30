@@ -142,7 +142,6 @@ pub fn created(process: HANDLE) -> Option<u64> {
 /// FILETIME (100 ns since 1601-01-01) to milliseconds since the Unix epoch; 0 for times before it.
 // The hook role compares creation times as they are; the console helper's `--started` is in
 // Unix milliseconds and is the caller of this.
-#[allow(dead_code)]
 pub fn filetime_to_unix_ms(filetime: u64) -> u64 {
     /// 1601-01-01 to 1970-01-01, in 100 ns units.
     const EPOCH_DIFFERENCE: u64 = 116_444_736_000_000_000;
