@@ -18,6 +18,12 @@
 //! What can be decided without Windows (which connections exist and what the engine may still do
 //! with each, what to report and when, whose frame is accepted) is plain code at the top of this
 //! file, tested on every system. The Win32 and Tokio part is the `server` module, on Windows only.
+//!
+//! Beside it: [`client`], the checked client the app's own programs use (`control status|quit`,
+//! the doctor), and [`script`], what the test-only `pipe-test-server.exe` does with this server.
+
+pub mod client;
+pub mod script;
 
 use std::collections::BTreeMap;
 
