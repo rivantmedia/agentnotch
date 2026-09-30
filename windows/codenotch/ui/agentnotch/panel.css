@@ -516,6 +516,95 @@ button.an-tool-head { cursor: pointer; }
 .an-ph .an-ring { --an-ring: 12px; }
 .an-earlier { align-self: center; }
 
+/* the chat's bottom bar (ChatBar, ChatApprovalBars, ChatQuestionPanel; UI§6.3): padding 12,
+   blocks 7.5 apart, nothing drawn behind it (the hairline above separates it from the transcript) */
+.an-bbar { box-sizing: border-box; display: flex; flex-direction: column; gap: var(--an-block); padding: var(--an-pad); min-width: 0; }
+/* not answerable yet: the whole bar ignores the pointer for the 0.35 s after it appears */
+.an-bbar-unarmed .an-qopt, .an-bbar-unarmed .an-qother-b { cursor: default; }
+.an-bbar-title { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: var(--an-fs-body); font-weight: 600; color: var(--an-text); }
+.an-bbar-mark { flex: none; width: var(--an-ring); height: var(--an-ring); color: var(--an-needs-you); }
+.an-bbar-title-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; unicode-bidi: isolate; }
+.an-bbar-box {
+  box-sizing: border-box; min-width: 0; border-radius: 8px; background: var(--an-fill); overflow-x: hidden; overflow-y: auto;
+  scrollbar-width: thin; scrollbar-color: var(--an-fill-hover) transparent; user-select: text;
+}
+.an-bbar-box:focus-visible { outline: 1px solid var(--an-row-sel-stroke); outline-offset: -1px; }
+.an-bbar-req { max-height: 132px; padding: 6px 8px; }
+.an-bbar-req-t { font: 400 var(--an-fs-mono)/1.4 var(--an-mono); color: var(--an-text); white-space: pre-wrap; overflow-wrap: anywhere; unicode-bidi: isolate; }
+.an-bbar-diff { max-height: 160px; overflow-y: auto; min-width: 0; scrollbar-width: thin; scrollbar-color: var(--an-fill-hover) transparent; }
+.an-bbar-diff .an-code { margin: 0; }
+.an-bbar-plantext { max-height: 280px; padding: 9px; }
+.an-md-plan { font-size: var(--an-fs-body); }
+.an-bbar-note { font-size: var(--an-fs-caption); color: var(--an-text-2); overflow-wrap: anywhere; unicode-bidi: isolate; }
+.an-bbar-acts { display: flex; justify-content: flex-end; align-items: center; gap: 6px; flex-wrap: wrap; }
+.an-bbar-acts-always .an-btn-primary { margin-left: 4px; }
+.an-bbar-foot { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.an-bbar-foot-t { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.an-bbar-foot .an-btn, .an-bbar-acts .an-btn, .an-bbar-line .an-btn { flex: none; }
+.an-bbar-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.an-bbar-msg { flex: 1 1 auto; min-width: 0; font-size: var(--an-fs-caption); color: var(--an-text-2); overflow-wrap: anywhere; unicode-bidi: isolate; }
+.an-bbar-fail { font-size: var(--an-fs-caption); color: var(--an-critical); overflow-wrap: anywhere; unicode-bidi: isolate; }
+
+/* questions: each with its header chip, options as radios (or checkboxes) and "Other" */
+.an-bbar-qs { display: flex; flex-direction: column; gap: 12px; max-height: 300px; overflow-y: auto; overflow-x: hidden; padding: 1px 0; scrollbar-width: thin; scrollbar-color: var(--an-fill-hover) transparent; }
+.an-q { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.an-q-head { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+.an-q-chip { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--an-fs-caption); font-weight: 600; color: var(--an-needs-you); unicode-bidi: isolate; }
+.an-q-text { flex: 1 1 auto; min-width: 0; font-size: var(--an-fs-body); font-weight: 500; color: var(--an-text); overflow-wrap: anywhere; unicode-bidi: isolate; }
+.an-q-any { flex: none; font-size: var(--an-fs-caption); color: var(--an-text-2); white-space: nowrap; }
+.an-q-opts { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.an-qopt, .an-qother-b {
+  display: flex; align-items: flex-start; gap: 8px; box-sizing: border-box; margin: 0; border: 0; background: transparent; color: var(--an-text);
+  font: inherit; text-align: left; cursor: pointer;
+}
+.an-qopt { width: 100%; padding: 5px 8px; border-radius: 8px; transition: background var(--an-quick); }
+.an-qopt:hover, .an-qother:hover { background: var(--an-row-hover); }
+.an-qopt.an-on, .an-qother.an-on { background: var(--an-row-sel); }
+.an-qopt-t { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.an-qopt-l { font-size: var(--an-fs-body); font-weight: 500; overflow-wrap: anywhere; unicode-bidi: isolate; }
+.an-qopt-d { font-size: var(--an-fs-caption); color: var(--an-text-2); overflow-wrap: anywhere; unicode-bidi: isolate; }
+.an-qmark {
+  flex: none; box-sizing: border-box; width: 11px; height: 11px; margin-top: 2px; display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--an-text-2); color: var(--an-on-primary);
+}
+.an-qmark-radio { border-radius: 50%; }
+.an-qmark-radio.an-on { border: 3.5px solid var(--an-text); }
+.an-qmark-box { border-radius: 3px; }
+.an-qmark-box.an-on { border-color: transparent; background: var(--an-primary); }
+.an-qmark .an-icon { width: 8px; height: 8px; }
+.an-qother { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 5px 8px; border-radius: 8px; transition: background var(--an-quick); }
+.an-qother.an-on { padding-top: 2px; padding-bottom: 2px; }
+.an-qother-b { flex: none; align-items: center; padding: 0; }
+.an-qother-b .an-qmark { margin-top: 0; }
+.an-qother-l { font-size: var(--an-fs-body); font-weight: 500; color: var(--an-text-2); }
+.an-qother.an-on .an-qother-l, .an-qother-b:hover .an-qother-l { color: var(--an-text); }
+
+/* the panel's text field (ClaudeTextField): a soft fill, the outline brightens with the caret.
+   Read-only while the keyboard gate is shut: it then says "Click to type" and shows no caret. */
+.an-field {
+  box-sizing: border-box; min-width: 0; margin: 0; padding: 6px 9px; border: 0; border-radius: 9px; outline: none; background: var(--an-fill);
+  box-shadow: inset 0 0 0 var(--an-hair) transparent; color: var(--an-text); font: 400 var(--an-fs-body)/1.35 var(--an-font); unicode-bidi: plaintext;
+  transition: box-shadow var(--an-quick);
+}
+.an-field::placeholder { color: var(--an-text-2); opacity: 1; }
+.an-field:focus { box-shadow: inset 0 0 0 var(--an-hair) var(--an-row-sel-stroke); }
+.an-field[readonly] { cursor: text; caret-color: transparent; }
+.an-field[readonly]:focus { box-shadow: inset 0 0 0 var(--an-hair) transparent; }
+.an-qother-f { flex: 1 1 auto; width: 0; }
+
+/* the composer: a field of one to five lines and a round send button */
+.an-comp { display: flex; align-items: flex-end; gap: 8px; min-width: 0; }
+.an-comp-f {
+  flex: 1 1 auto; width: 0; resize: none; font-size: var(--an-fs-chat); line-height: 1.35; field-sizing: content;
+  min-height: calc(1.35em + 12px); max-height: calc(5 * 1.35em + 12px); overflow-y: auto; scrollbar-width: thin;
+}
+.an-send {
+  flex: none; width: 26px; height: 26px; margin-bottom: 1px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0;
+  border-radius: 50%; background: var(--an-fill); color: var(--an-text-3); cursor: default; transition: background var(--an-quick), color var(--an-quick);
+}
+.an-send.an-on { background: var(--an-primary); color: var(--an-on-primary); cursor: pointer; }
+.an-send .an-icon { width: 12px; height: 12px; }
+
 /* markdown (markdown.js) in the chat font */
 .an-md { min-width: 0; font-size: var(--an-fs-chat); line-height: 1.4; overflow-wrap: anywhere; unicode-bidi: isolate; }
 .an-md > * { margin: 0; }
@@ -526,6 +615,9 @@ button.an-tool-head { cursor: pointer; }
 .an-md-list > li { display: flex; gap: 6px; min-width: 0; }
 .an-md-marker { flex: none; min-width: 1.1em; color: var(--an-text-2); text-align: right; font-variant-numeric: tabular-nums; }
 .an-md-item { flex: 1 1 auto; min-width: 0; }
+/* a list item's paragraphs sit on the marker's line, as the Mac's MarkdownText draws them */
+.an-md-item > *, .an-md-quote > * { margin: 0; }
+.an-md-item > * + *, .an-md-quote > * + * { margin-top: 6px; }
 .an-md-quote { padding-left: 9px; border-left: 3px solid var(--an-sep); color: var(--an-text-2); }
 .an-md-pre {
   box-sizing: border-box; padding: 7px 9px; border-radius: 8px; background: var(--an-fill); color: var(--an-text);

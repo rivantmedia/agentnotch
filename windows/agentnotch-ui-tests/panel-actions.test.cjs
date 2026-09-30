@@ -768,17 +768,17 @@ test('in a chat the list\'s bars are gone: keys answer only what the chat says i
   const page = await ready();
   page.run("agentnotchPanel.navigate('session:needs-permission')");
   page.hub.clear();
-  page.tick(1000);
+  // The list's armed bar went with the list; the chat reports its own bar (chat-bars.test.cjs
+  // has the bar itself), whose 350 ms start now.
+  assert.equal(plain(page.run("agentnotchPanel.isArmed('toolu_sample_bash')")), false);
   page.key(CTRL_ENTER);
   page.key(CTRL_BACKSPACE);
   page.key({ key: '1' });
-  silent(page, 'the chat has not drawn a bar');
-  // chat.js reports its bar, waits its 350 ms, and the same gate answers once
-  page.run("agentnotchPanel.noteShown(['toolu_sample_bash'])");
-  assert.equal(plain(page.run("agentnotchPanel.isArmed('toolu_sample_bash')")), false);
+  silent(page, 'the chat\'s bar has not armed yet');
+  page.tick(349);
   page.key(CTRL_ENTER);
   silent(page);
-  page.tick(350);
+  page.tick(1);
   assert.equal(plain(page.run("agentnotchPanel.isArmed('toolu_sample_bash')")), true);
   page.key(CTRL_ENTER);
   assert.equal(plain(page.run("agentnotchPanel.answer('needs-permission', 'toolu_sample_bash', {deny: {reason: null}})")), false);

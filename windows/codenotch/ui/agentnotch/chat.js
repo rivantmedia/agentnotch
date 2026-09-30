@@ -1,7 +1,8 @@
 // The chat screen of the sessions panel (DESIGN-WIN §5.3, UI§6; ChatView.swift, ChatSessionHeader.swift):
 // the header (back, title, account, task summary and its board, context, show terminal), the
 // transcript (user and assistant text, thinking, tool calls with their results, images, the
-// working indicator) and a named slot for the bottom bar, which sub-task 8 fills.
+// working indicator) and the one bottom bar (a request's answers, a terminal-only note, or the
+// composer with its per-session drafts).
 //
 // The contract with panel.js: on a `session:<id>` route it calls `mount(host, ctx)` once with the
 // chat's own region (`#an-chat`, already shown) and `ctx = {sessionId, panel}` (`panel` is
@@ -47,10 +48,18 @@
   var listening = null;
   var observer = null;
 
-  /** What the bottom bar shows (sub-task 8): `(row, chat) => html`. Empty: no bar, no hairline. */
+  /** What the bottom bar shows: `(row, chat) => html` (barHtml below). Empty: no bar, no hairline. */
   var SLOTS = {
     bottom: function () { return ''; },
   };
+
+  /** Replies not sent yet, per session: kept in memory, and in localStorage when it works. */
+  var DRAFT_KEY = 'agentnotch.chat.drafts';
+  var DRAFT_MAX = 20000;
+  var DRAFT_SESSIONS = 40;
+  var drafts = Object.create(null);
+  var draftsLoaded = false;
+  var focusListening = null;
 
   // ---- small helpers ---------------------------------------------------------------------
 
@@ -128,6 +137,17 @@
       lastRow: null,
       stick: true,
       firstId: null,
+      // the bottom bar
+      route: { state: 'asking', reason: '' },
+      routeSeq: 0,
+      canMessage: null,
+      sending: false,
+      failure: null,
+      forms: Object.create(null),
+      wantFocus: null,
+      composerEl: null,
+      sceneDraft: null,
+      scene: false,
     };
   }
 
@@ -441,6 +461,578 @@
       (S.boardOpen && tasks ? boardHtml(tasks, !!(row && row.pending)) : '');
   }
 
+  // ---- the bottom bar (ChatView.bottomBar, ChatApprovalBars, ChatQuestionPanel; UI§6.3) -----
+  //
+  // Exactly one bar, by precedence: a pending request (permission, question, plan), a dialog
+  // only the terminal can answer, no way to type a reply, the composer. A request's bar answers
+  // only through agentnotchPanel's AnswerGate (inert for 0.35 s after it appears, one answer
+  // per tool_use_id). Every field obeys the keyboard gate: read-only and "Click to type" until
+  // the glue confirms the panel has the keyboard, so a key meant for a terminal never lands
+  // here and nothing typed here answers anything while the gate is shut.
+
+  var COPY = {
+    routeSentence: 'Replies can be typed from here for sessions in Windows Terminal, VS Code’s terminal and console windows.',
+    dialog: 'Answer it in the terminal. Anything typed here would go straight into that dialog.',
+    unshownQuestion: 'It can’t be shown here. Answer it in the terminal.',
+    clickToType: 'Click to type',
+    reply: 'Reply to Claude',
+    other: 'Type your answer',
+    planNote: 'Approving lets Claude start on it.',
+    sent: 'Sent to Claude',
+    showTerminalTip: 'Bring the session’s terminal to the front (Ctrl+J)',
+  };
+  var LIMITS_BAR = { request: 4000, reason: 300, question: 1000, option: 300, header: 60, plan: 40000, always: 400, failure: 600 };
+
+  function panelCall(name) {
+    var args = Array.prototype.slice.call(arguments, 1);
+    return panel && typeof panel[name] === 'function' ? panel[name].apply(panel, args) : undefined;
+  }
+
+  /** The keyboard gate: true only after the glue's `an:panel_focus {focused:true}`. */
+  function keyboardOpen() {
+    return !!panelCall('keyboardOpen');
+  }
+
+  function isArmed(id) {
+    return !!panelCall('isArmed', id);
+  }
+
+  /** "reason." or "reason" → "reason": the copy puts its own full stop after it. */
+  function sentence(text, max) {
+    return clip(C.oneLine(text), max).replace(/[.\s]+$/, '');
+  }
+
+  // -- drafts: memory first, then localStorage (which may be missing or throw: sealed, private) --
+
+  function storageOf() {
+    try {
+      return window.localStorage || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function loadDrafts() {
+    if (draftsLoaded) return;
+    draftsLoaded = true;
+    try {
+      var store = storageOf();
+      var raw = store ? store.getItem(DRAFT_KEY) : null;
+      var saved = raw ? JSON.parse(raw) : null;
+      if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return;
+      Object.keys(saved).forEach(function (id) {
+        if (typeof saved[id] === 'string' && saved[id] && !(id in drafts)) drafts[id] = saved[id].slice(0, DRAFT_MAX);
+      });
+    } catch (e) {
+      // Unreadable or not ours: the drafts in memory are all there is.
+    }
+  }
+
+  function saveDrafts() {
+    try {
+      var store = storageOf();
+      if (!store) return;
+      var ids = Object.keys(drafts).filter(function (id) { return drafts[id]; });
+      var out = {};
+      ids.slice(-DRAFT_SESSIONS).forEach(function (id) {
+        Object.defineProperty(out, id, { value: drafts[id], enumerable: true, writable: true, configurable: true });
+      });
+      if (ids.length) store.setItem(DRAFT_KEY, JSON.stringify(out));
+      else store.removeItem(DRAFT_KEY);
+    } catch (e) {
+      // Full, blocked or gone: the draft stays in memory for this run.
+    }
+  }
+
+  function draftOf(id) {
+    if (S && S.sceneDraft !== null && S.sessionId === id) return S.sceneDraft;
+    loadDrafts();
+    return typeof drafts[id] === 'string' ? drafts[id] : '';
+  }
+
+  function setDraft(id, text) {
+    if (S && S.sceneDraft !== null) return;
+    loadDrafts();
+    // Re-added last, so the newest drafts are the ones storage keeps.
+    delete drafts[id];
+    var value = String(text == null ? '' : text).slice(0, DRAFT_MAX);
+    if (value) drafts[id] = value;
+    saveDrafts();
+  }
+
+  // -- the route: whether a reply typed here can reach the session's terminal --
+
+  function askRoute() {
+    if (!S) return;
+    var mine = S;
+    var seq = ++S.routeSeq;
+    C.call('message_route', { session_id: S.sessionId }).then(function (reply) {
+      if (S !== mine || seq !== S.routeSeq) return;
+      S.route = reply && reply.available === true
+        ? { state: 'available', reason: '' }
+        : { state: 'unavailable', reason: reply && typeof reply.reason === 'string' ? sentence(reply.reason, LIMITS_BAR.reason) : '' };
+      drawBar();
+      reportSize();
+    }, function (error) {
+      fail('message_route')(error);
+      if (S !== mine || seq !== S.routeSeq) return;
+      S.route = { state: 'unavailable', reason: '' };
+      drawBar();
+      reportSize();
+    });
+  }
+
+  // -- pieces --------------------------------------------------------------------------------
+
+  function barTitle(text) {
+    return '<div class="an-bbar-title" data-key="title" role="heading" aria-level="3">' + C.statusRing('needs', { cls: 'an-bbar-mark' }) +
+      '<span class="an-bbar-title-t" data-an-text data-an-clip>' + C.esc(text) + '</span></div>';
+  }
+
+  function jumpButton(row, primary) {
+    var label = row && str(row.focus_label) ? clip(C.oneLine(row.focus_label), 40) : '';
+    if (!label) return '';
+    return '<button type="button" class="an-btn an-btn-' + (primary ? 'primary' : 'secondary') + ' an-bbar-jump" data-key="jump" data-an-action="jump" data-an-arg="' +
+      attr(row.session_id) + '" title="' + attr(COPY.showTerminalTip) + '"><span data-an-text>' + C.esc(label) + '</span></button>';
+  }
+
+  /** An answering button: it names the request it was drawn for, and is inert until that request is armed. */
+  function answerButton(kind, label, title, sessionId, toolUseId, arg, armed) {
+    return '<button type="button" class="an-btn an-btn-' + kind + (armed ? '' : ' an-unarmed') + '" data-key="ans-' + attr(arg) +
+      '" data-an-action="answer" data-an-arg="' + attr(arg) + '" data-an-session="' + attr(sessionId) + '" data-an-tool="' + attr(toolUseId) +
+      '" data-an-noenter title="' + attr(title) + '"' + (armed ? '' : ' aria-disabled="true"') + '><span data-an-text>' + C.esc(label) + '</span></button>';
+  }
+
+  function bar(kind, key, armed, inner) {
+    return '<div class="an-bbar an-bbar-' + kind + (armed === false ? ' an-bbar-unarmed' : '') + '" data-key="' + attr(key) + '"' +
+      (armed === false ? ' aria-busy="true"' : '') + '>' + inner + '</div>';
+  }
+
+  function terminalOnlyBar(row, title, message) {
+    return bar('term', 'bar-term', null,
+      (title ? barTitle(title) : '') +
+      '<div class="an-bbar-line"><span class="an-bbar-msg" data-an-text>' + C.esc(message) + '</span>' + jumpButton(row, !!title) + '</div>');
+  }
+
+  // -- a permission ---------------------------------------------------------------------------
+
+  function approvalBar(row, p, armed) {
+    var results = window.agentnotchToolResults;
+    var tool = toolNameOf(p.tool_name);
+    var request = clip(str(p.request), LIMITS_BAR.request);
+    var always = p.always != null && str(p.always) ? sentence(p.always, LIMITS_BAR.always) : '';
+    var diff = Array.isArray(p.diff) && p.diff.length && results && typeof results.diffView === 'function' ? results.diffView(p.diff, null) : '';
+    var sid = row.session_id;
+    var id = p.tool_use_id;
+    return bar('perm', 'bar-perm-' + id, armed,
+      barTitle((tool || 'A tool') + ' needs your permission') +
+      (request.trim() ? '<div class="an-bbar-box an-bbar-req" data-key="req" tabindex="0" aria-label="The request"><div class="an-bbar-req-t">' + C.esc(request) + '</div></div>' : '') +
+      (diff ? '<div class="an-bbar-diff" data-key="diff">' + diff + '</div>' : '') +
+      (always ? '<div class="an-bbar-note an-bbar-always" data-key="always" data-an-text>' + C.esc('Always allow: ' + always + '.') + '</div>' : '') +
+      '<div class="an-bbar-acts' + (always ? ' an-bbar-acts-always' : '') + '" data-key="acts">' +
+      answerButton('secondary', 'Deny', 'Deny (Ctrl+Backspace)', sid, id, 'deny', armed) +
+      (always ? answerButton('secondary', 'Always allow', always + ' (Ctrl+Alt+Enter)', sid, id, 'always', armed) : '') +
+      answerButton('primary', 'Allow', 'Allow (Ctrl+Enter)', sid, id, 'allow', armed) +
+      '</div>');
+  }
+
+  // -- a plan -----------------------------------------------------------------------------------
+
+  function planBar(row, p, armed) {
+    var plan = clip(str(p.plan_markdown), LIMITS_BAR.plan);
+    var md = window.agentnotchMarkdown;
+    var body = plan.trim() ? (md ? md.render(plan, { cls: 'an-md-plan' }) : '<div class="an-md an-md-plan">' + C.esc(plan) + '</div>') : '';
+    var sid = row.session_id;
+    var id = p.tool_use_id;
+    return bar('plan', 'bar-plan-' + id, armed,
+      barTitle('Plan ready for approval') +
+      (body ? '<div class="an-bbar-box an-bbar-plantext" data-key="plan" tabindex="0" aria-label="The plan">' + body + '</div>' : '') +
+      '<div class="an-bbar-foot" data-key="foot"><span class="an-bbar-note an-bbar-foot-t" data-an-text data-an-clip>' + C.esc(COPY.planNote) + '</span>' +
+      answerButton('secondary', 'Keep planning', 'Stay in plan mode and say what to change (Ctrl+Backspace)', sid, id, 'keep', armed) +
+      answerButton('primary', 'Approve plan', 'Approve the plan (Ctrl+Enter)', sid, id, 'approve', armed) +
+      '</div>');
+  }
+
+  // -- questions (ChatQuestionPanel, ChatQuestionForm) ------------------------------------------
+
+  /** The engine's parsed questions, each with a text and labelled options; others are left out, as the Mac's parser skips them. */
+  function questionsOf(p) {
+    return (Array.isArray(p.questions) ? p.questions : []).filter(function (q) {
+      return q && typeof q === 'object' && typeof q.text === 'string' && q.text.trim();
+    }).map(function (q) {
+      return {
+        text: q.text,
+        header: str(q.header).trim(),
+        multi: q.multi_select === true,
+        options: (Array.isArray(q.options) ? q.options : []).filter(function (o) {
+          return o && typeof o.label === 'string' && o.label.trim();
+        }).map(function (o) {
+          return { label: o.label, description: str(o.description).trim() };
+        }),
+      };
+    });
+  }
+
+  function formOf(id, count) {
+    var form = S.forms[id];
+    if (!form) {
+      // One request's answers at a time: an answered or withdrawn request's picks go with it.
+      S.forms = Object.create(null);
+      form = S.forms[id] = { picks: [], submitted: false };
+    }
+    while (form.picks.length < count) form.picks.push({ labels: [], other: false, text: '' });
+    return form;
+  }
+
+  /** ChatQuestionSelection.toggle / toggleOther. */
+  function toggleOption(pick, label, multi) {
+    if (multi) {
+      var at = pick.labels.indexOf(label);
+      if (at >= 0) pick.labels.splice(at, 1);
+      else pick.labels.push(label);
+    } else {
+      pick.labels = [label];
+      pick.other = false;
+    }
+  }
+
+  function toggleOther(pick, multi) {
+    if (multi) {
+      pick.other = !pick.other;
+    } else {
+      pick.other = true;
+      pick.labels = [];
+    }
+  }
+
+  function picksFor(form) {
+    return form.picks.map(function (pick) {
+      return { labels: pick.labels.slice(), other: pick.other ? pick.text : null };
+    });
+  }
+
+  function answersFor(questions, form) {
+    var build = panel && typeof panel.answers === 'function' ? panel.answers : null;
+    if (!build) return null;
+    return build(questions.map(function (q) {
+      return { text: q.text, multi_select: q.multi, options: q.options.map(function (o) { return { label: o.label }; }) };
+    }), picksFor(form));
+  }
+
+  function answeredCount(questions, form) {
+    var n = 0;
+    questions.forEach(function (q, i) {
+      if (answersFor([q], { picks: [form.picks[i]] })) n += 1;
+    });
+    return n;
+  }
+
+  function selectionMark(multi, on) {
+    return '<span class="an-qmark ' + (multi ? 'an-qmark-box' : 'an-qmark-radio') + (on ? ' an-on' : '') + '" aria-hidden="true">' +
+      (multi && on ? C.icon('check') : '') + '</span>';
+  }
+
+  function fieldAttrs(name, placeholder, label) {
+    var open = keyboardOpen();
+    return ' data-an-keep data-an-field="' + attr(name) + '" placeholder="' + attr(open ? placeholder : COPY.clickToType) + '" aria-label="' + attr(label) + '"' +
+      (open ? '' : ' readonly title="' + attr(COPY.clickToType) + '"');
+  }
+
+  function questionBlock(q, i, pick) {
+    var multi = q.multi;
+    var options = q.options.map(function (o, j) {
+      var on = pick.labels.indexOf(o.label) >= 0;
+      var label = clip(o.label, LIMITS_BAR.option);
+      var desc = clip(o.description, LIMITS_BAR.option);
+      return '<button type="button" class="an-qopt' + (on ? ' an-on' : '') + '" data-key="o' + j + '" data-an-chat="q-option" data-q="' + i + '" data-o="' + j +
+        '" role="' + (multi ? 'checkbox' : 'radio') + '" aria-checked="' + on + '" aria-label="' + attr(desc ? label + ', ' + desc : label) + '">' +
+        selectionMark(multi, on) + '<span class="an-qopt-t"><span class="an-qopt-l">' + C.esc(label) + '</span>' +
+        (desc ? '<span class="an-qopt-d">' + C.esc(desc) + '</span>' : '') + '</span></button>';
+    }).join('');
+    var other = '<div class="an-qother' + (pick.other ? ' an-on' : '') + '" data-key="other">' +
+      '<button type="button" class="an-qother-b" data-an-chat="q-other" data-q="' + i + '" role="' + (multi ? 'checkbox' : 'radio') + '" aria-checked="' + pick.other + '">' +
+      selectionMark(multi, pick.other) + '<span class="an-qother-l">Other</span></button>' +
+      (pick.other ? '<input type="text" class="an-field an-qother-f" data-key="field" value="' + attr(pick.text) + '" maxlength="2000"' +
+        fieldAttrs('other:' + i, COPY.other, 'Other answer') + '>' : '') +
+      '</div>';
+    return '<div class="an-q" data-key="q' + i + '" role="group" aria-label="' + attr(clip(q.text, LIMITS_BAR.question)) + '">' +
+      '<div class="an-q-head">' + (q.header ? '<span class="an-q-chip" data-an-text>' + C.esc(clip(q.header, LIMITS_BAR.header)) + '</span>' : '') +
+      '<span class="an-q-text">' + C.esc(clip(q.text.trim(), LIMITS_BAR.question)) + '</span>' +
+      (multi ? '<span class="an-q-any">Choose any</span>' : '') + '</div>' +
+      '<div class="an-q-opts">' + options + other + '</div></div>';
+  }
+
+  function questionBar(row, p, questions, armed) {
+    var id = p.tool_use_id;
+    var form = formOf(id, questions.length);
+    var ready = !!answersFor(questions, form);
+    var n = questions.length;
+    var answered = answeredCount(questions, form);
+    var footer = form.submitted ? COPY.sent
+      : n > 1 ? answered + ' of ' + n + ' answered'
+        : answered === 1 ? 'Ready to send' : 'Pick an answer';
+    var canSubmit = ready && !form.submitted;
+    return bar('question', 'bar-q-' + id, armed,
+      barTitle(n === 1 ? 'Claude has a question' : 'Claude has ' + n + ' questions') +
+      '<div class="an-bbar-qs" data-key="qs">' + questions.map(function (q, i) { return questionBlock(q, i, form.picks[i]); }).join('') + '</div>' +
+      '<div class="an-bbar-foot" data-key="foot"><span class="an-bbar-note an-bbar-foot-t" data-an-text data-an-clip role="status">' + C.esc(footer) + '</span>' +
+      jumpButton(row, false) +
+      '<button type="button" class="an-btn an-btn-primary' + (armed ? '' : ' an-unarmed') + '" data-key="submit" data-an-chat="q-submit" data-an-noenter' +
+      (canSubmit ? '' : ' disabled') + (armed ? '' : ' aria-disabled="true"') + '><span data-an-text>' + (n === 1 ? 'Submit' : 'Submit answers') + '</span></button>' +
+      '</div>');
+  }
+
+  // -- no route, and the composer -----------------------------------------------------------------
+
+  function noRouteBar(row) {
+    var reason = S.route.reason;
+    return terminalOnlyBar(row, null, reason ? reason + '. Type in the terminal instead.' : COPY.routeSentence);
+  }
+
+  function composerBar() {
+    var draft = draftOf(S.sessionId);
+    var empty = !draft.trim();
+    var can = !empty && !S.sending;
+    return bar('comp', 'bar-comp', null,
+      (S.failure ? '<div class="an-bbar-fail" data-key="fail" role="alert">' + C.esc(S.failure) + '</div>' : '') +
+      '<div class="an-comp" data-key="comp">' +
+      '<textarea class="an-field an-comp-f" data-key="field" rows="1" maxlength="' + DRAFT_MAX + '"' + fieldAttrs('composer', COPY.reply, COPY.reply) + '>' + C.esc(draft) + '</textarea>' +
+      '<button type="button" class="an-send' + (can ? ' an-on' : '') + '" data-key="send" data-an-chat="send" aria-label="Send" title="Send (Enter). Shift+Enter starts a new line."' +
+      (can ? '' : ' disabled') + '>' + C.icon('arrowUp') + '</button></div>');
+  }
+
+  /** The row's bar, by the Mac's precedence. Tells the page's AnswerGate which request it shows. */
+  function barHtml(row) {
+    if (!S) return '';
+    var p = row && row.pending && typeof row.pending === 'object' ? row.pending : null;
+    var id = p && typeof p.tool_use_id === 'string' && p.tool_use_id ? p.tool_use_id : null;
+    panelCall('noteShown', id ? [id] : []);
+    if (id) {
+      // A still scene has no wait: its bar is drawn answerable (and panel.js sends nothing from it).
+      var armed = S.scene || isArmed(id);
+      if (p.kind === 'question') {
+        var questions = questionsOf(p);
+        if (!questions.length) return terminalOnlyBar(row, 'Claude has a question', COPY.unshownQuestion);
+        return questionBar(row, p, questions, armed);
+      }
+      if (p.kind === 'plan') return planBar(row, p, armed);
+      return approvalBar(row, p, armed);
+    }
+    if (row && C.primaryActions(row).kind === 'answer_in_terminal') {
+      var d = row.detail || {};
+      var title = str(d.text).trim() ? clip(C.oneLine(d.text), LIMITS.title)
+        : d.kind === 'permission' ? (toolNameOf(d.tool) || 'A tool') + ' needs your permission'
+          : d.kind === 'plan' ? 'Plan ready for approval'
+            : d.kind === 'question' ? 'Claude has a question' : 'Claude is waiting in the terminal';
+      return terminalOnlyBar(row, title, COPY.dialog);
+    }
+    // Until the engine has said whether a reply can reach the terminal, nothing is offered.
+    if (S.route.state === 'asking') return '';
+    if (S.route.state !== 'available') return noRouteBar(row);
+    return composerBar();
+  }
+
+  SLOTS.bottom = barHtml;
+
+  // -- what the bar's controls do -------------------------------------------------------------
+
+  function fieldEl(name) {
+    if (!els.bar) return null;
+    var all = els.bar.querySelectorAll('[data-an-field]');
+    for (var i = 0; i < all.length; i++) if (all[i].getAttribute('data-an-field') === name) return all[i];
+    return null;
+  }
+
+  function fieldValue(name) {
+    if (name === 'composer') return draftOf(S.sessionId);
+    var m = /^other:(\d+)$/.exec(name);
+    var form = currentForm();
+    var pick = m && form ? form.form.picks[Number(m[1])] : null;
+    return pick ? pick.text : null;
+  }
+
+  /** The fields show the state the page keeps (a restored draft, a scene) unless the reader is in them. */
+  function syncFields() {
+    if (!els.bar) return;
+    Array.prototype.forEach.call(els.bar.querySelectorAll('[data-an-field]'), function (el) {
+      var want = fieldValue(el.getAttribute('data-an-field'));
+      if (want !== null && document.activeElement !== el && el.value !== want) el.value = want;
+    });
+    var composer = fieldEl('composer');
+    var appeared = !!composer && composer !== S.composerEl;
+    S.composerEl = composer;
+    // The composer takes the keyboard when it appears, as on the Mac, but only when the panel
+    // already has it: never while the gate is shut.
+    if (appeared && keyboardOpen() && !textFieldFocused()) focusField(composer);
+  }
+
+  function textFieldFocused() {
+    var a = document.activeElement;
+    return !!a && typeof a.hasAttribute === 'function' && a.hasAttribute('data-an-field');
+  }
+
+  function focusField(el) {
+    if (!el || !keyboardOpen() || typeof el.focus !== 'function') return;
+    el.focus();
+  }
+
+  /** The request whose question form is on screen: `{row, p, questions, form}` or null. */
+  function currentForm() {
+    var row = rowNow();
+    var p = row && row.pending;
+    if (!p || p.kind !== 'question' || typeof p.tool_use_id !== 'string') return null;
+    var questions = questionsOf(p);
+    if (!questions.length) return null;
+    return { row: row, p: p, questions: questions, form: formOf(p.tool_use_id, questions.length) };
+  }
+
+  function barArmed() {
+    var row = rowNow();
+    var id = row && row.pending ? str(row.pending.tool_use_id) : '';
+    return !!id && isArmed(id);
+  }
+
+  function pickOption(qi, oi) {
+    var f = currentForm();
+    if (!f || f.form.submitted || !barArmed()) return;
+    var q = f.questions[qi];
+    var o = q && q.options[oi];
+    if (!o) return;
+    toggleOption(f.form.picks[qi], o.label, q.multi);
+    drawBar();
+  }
+
+  function pickOther(qi) {
+    var f = currentForm();
+    if (!f || f.form.submitted || !barArmed() || !f.questions[qi]) return;
+    toggleOther(f.form.picks[qi], f.questions[qi].multi);
+    drawBar();
+    if (f.form.picks[qi].other) focusField(fieldEl('other:' + qi));
+  }
+
+  function submitQuestions() {
+    var f = currentForm();
+    if (!f || f.form.submitted) return;
+    var answers = answersFor(f.questions, f.form);
+    if (!answers) return;
+    if (panelCall('answer', f.row.session_id, f.p.tool_use_id, { questions: { answers: answers } }) !== true) return;
+    f.form.submitted = true;
+    drawBar();
+  }
+
+  /** send_message's outcome in the Mac's words (ChatComposerCopy), the engine's reason in them. */
+  function failureCopy(outcome, reason) {
+    var r = sentence(reason, LIMITS_BAR.failure);
+    switch (outcome) {
+      case 'refused':
+        return 'Not sent: ' + (r || 'the session can’t take a reply now') + '. Your message is kept.';
+      case 'typed_not_submitted':
+        return 'Typed but not submitted: ' + (r || 'the terminal wasn’t ready') + '. Press Enter in the terminal when it’s safe.';
+      default:
+        return 'Couldn’t reach the session’s terminal' + (r ? ': ' + r : '') + '. Type in the terminal instead.';
+    }
+  }
+
+  function send() {
+    if (!S || S.sending || S.sceneDraft !== null) return;
+    var id = S.sessionId;
+    var text = draftOf(id).trim();
+    if (!text) return;
+    var mine = S;
+    S.sending = true;
+    S.failure = null;
+    drawBar();
+    reportSize();
+    var done = function (outcome, reason) {
+      // A draft is the reader's words: dropped only once Claude has them. A reply typed but not
+      // submitted is in Claude's prompt already; keeping it here too would send it twice.
+      var sent = (outcome === 'delivered' || outcome === 'typed_not_submitted') && draftOf(id).trim() === text;
+      if (sent) setDraft(id, '');
+      if (S !== mine) return;
+      // The field the reader is in is left alone by a redraw: empty it here, unless more was typed.
+      var field = fieldEl('composer');
+      if (sent && field && String(field.value).trim() === text) field.value = '';
+      S.sending = false;
+      S.failure = outcome === 'delivered' ? null : failureCopy(outcome, reason);
+      drawBar();
+      reportSize();
+    };
+    C.call('send_message', { session_id: id, text: text }).then(function (reply) {
+      var outcome = reply && typeof reply.outcome === 'string' ? reply.outcome : 'failed';
+      done(outcome, reply && typeof reply.reason === 'string' ? reply.reason : '');
+    }, function (error) {
+      fail('send_message')(error);
+      done('failed', '');
+    });
+  }
+
+  function onInput(event) {
+    var t = event.target;
+    var name = t && typeof t.getAttribute === 'function' ? t.getAttribute('data-an-field') : null;
+    if (!S || !name) return;
+    // The gate is shut: whatever reached the field is not the reader's (the page takes no text
+    // before the glue confirms the keyboard). Put back what was there.
+    if (!keyboardOpen()) {
+      var was = fieldValue(name);
+      if (was !== null) t.value = was;
+      return;
+    }
+    if (name === 'composer') {
+      setDraft(S.sessionId, t.value);
+    } else {
+      var m = /^other:(\d+)$/.exec(name);
+      var f = currentForm();
+      var pick = m && f ? f.form.picks[Number(m[1])] : null;
+      if (!pick || f.form.submitted) return;
+      pick.text = String(t.value).slice(0, 2000);
+    }
+    drawBar();
+  }
+
+  /** A press on a field while the gate is shut: panel.js asks for the keyboard; this remembers where the caret goes. */
+  function onPointerDown(event) {
+    var t = event.target;
+    var name = t && typeof t.getAttribute === 'function' ? t.getAttribute('data-an-field') : null;
+    if (S && name && !keyboardOpen()) S.wantFocus = name;
+  }
+
+  function onPanelFocus(payload) {
+    if (!S) return;
+    var focused = !!(payload && payload.focused);
+    drawBar();
+    if (!focused) return;
+    var want = S.wantFocus;
+    S.wantFocus = null;
+    var el = want ? fieldEl(want) : null;
+    if (!el && !textFieldFocused()) el = fieldEl('composer');
+    focusField(el);
+  }
+
+  /** Enter in the composer sends (Ctrl+Enter too, as on the Mac); Shift+Enter and Alt+Enter start a line. */
+  function composerKey(event, field) {
+    if (event.key !== 'Enter' || event.isComposing) return false;
+    // The bar owns Enter here: the panel's own Ctrl+Enter must not act on the session as well.
+    event.stopPropagation();
+    if (!keyboardOpen()) {
+      event.preventDefault();
+      return true;
+    }
+    if (event.shiftKey) return true;
+    event.preventDefault();
+    if (event.altKey) {
+      if (typeof field.setRangeText === 'function' && typeof field.selectionStart === 'number') {
+        field.setRangeText('\n', field.selectionStart, field.selectionEnd, 'end');
+      } else {
+        field.value += '\n';
+      }
+      setDraft(S.sessionId, field.value);
+      drawBar();
+      return true;
+    }
+    if (!event.repeat) send();
+    return true;
+  }
+
   // ---- drawing -----------------------------------------------------------------------------
 
   function atBottom(el) {
@@ -483,12 +1075,18 @@
     }
     C.morph(els.bar, html);
     els.foot.classList.toggle('an-chat-foot-empty', !html);
+    syncFields();
   }
 
   /** What the page reads from the row changed (a snapshot, a request arming): redraw the parts that follow it. */
   function refresh() {
     if (!S) return;
     var row = rowNow();
+    // Whether a reply can be typed is asked again when the engine's view of it changes.
+    if (row && typeof row.can_message === 'boolean') {
+      if (S.canMessage !== null && S.canMessage !== row.can_message) askRoute();
+      S.canMessage = row.can_message;
+    }
     var id = row && row.pending ? str(row.pending.tool_use_id) : null;
     // The board closes when a request appears: a question or plan needs its room.
     if (id && id !== S.requestId) S.boardOpen = false;
@@ -564,6 +1162,10 @@
       case 'toggle-tasks': setBoard(!S.boardOpen); break;
       case 'image': loadImage(id); break;
       case 'earlier': askEarlier(); break;
+      case 'q-option': pickOption(Number(control.getAttribute('data-q')), Number(control.getAttribute('data-o'))); break;
+      case 'q-other': pickOther(Number(control.getAttribute('data-q'))); break;
+      case 'q-submit': submitQuestions(); break;
+      case 'send': send(); break;
       default: break;
     }
   }
@@ -571,7 +1173,9 @@
   /** A link is a span, not a button: Enter opens it, but only once the keyboard gate is open. */
   function onKeyDown(event) {
     var t = event.target;
-    if (event.key !== 'Enter' || !t || typeof t.closest !== 'function') return;
+    if (!t || typeof t.closest !== 'function') return;
+    if (S && typeof t.getAttribute === 'function' && t.getAttribute('data-an-field') === 'composer' && composerKey(event, t)) return;
+    if (event.key !== 'Enter') return;
     var link = t.closest('[data-an-url]');
     if (!link) return;
     event.stopPropagation();
@@ -607,13 +1211,18 @@
     };
     host.addEventListener('click', onClick);
     host.addEventListener('keydown', onKeyDown);
+    host.addEventListener('input', onInput);
+    host.addEventListener('pointerdown', onPointerDown);
     els.scroll.addEventListener('scroll', onScroll);
+    if (!focusListening) focusListening = C.listen('an:panel_focus', onPanelFocus);
     if (typeof window.ResizeObserver === 'function') {
       observer = new window.ResizeObserver(reportSize);
       observer.observe(els.list);
       observer.observe(els.head);
       observer.observe(els.foot);
     }
+    var first = rowNow();
+    if (first && typeof first.can_message === 'boolean') S.canMessage = first.can_message;
     drawHeader();
     draw(false);
     var mine = S;
@@ -621,6 +1230,7 @@
     if (!listening) listening = C.listen('an:chat', apply);
     Promise.resolve(listening).then(function () {
       if (S !== mine) return;
+      askRoute();
       C.call('chat_open', { session_id: id }).catch(function (error) {
         fail('chat_open')(error);
         if (S !== mine) return;
@@ -637,6 +1247,8 @@
     if (host) {
       host.removeEventListener('click', onClick);
       host.removeEventListener('keydown', onKeyDown);
+      host.removeEventListener('input', onInput);
+      host.removeEventListener('pointerdown', onPointerDown);
       host.innerHTML = '';
     }
     if (observer) observer.disconnect();
@@ -668,6 +1280,27 @@
     return problems;
   }
 
+  /** The sealed chat scenes' own state, set after the route has drawn the chat (panel.showScene). */
+  var SCENE_STATE = {
+    'chat-question-other': function () {
+      var f = currentForm();
+      if (!f) return;
+      f.form.picks[0] = { labels: [], other: true, text: 'Victory, it matches our design system' };
+    },
+    'chat-composer': function () {
+      S.sceneDraft = 'Great, do the same for the e2e suite';
+    },
+  };
+
+  function scene(name) {
+    if (!S) return false;
+    S.scene = true;
+    if (Object.prototype.hasOwnProperty.call(SCENE_STATE, name)) SCENE_STATE[name]();
+    drawBar();
+    reportSize();
+    return true;
+  }
+
   var api = {
     mount: mount,
     unmount: unmount,
@@ -677,8 +1310,14 @@
     layoutProblems: layoutProblems,
     /** Snapshots: the task board open or shut. */
     openBoard: setBoard,
-    /** The bottom bar is sub-task 8's: assign `slots.bottom = (row, chat) => html`. */
+    /** The bottom bar's renderer (`(row, chat) => html`); tests may replace it. */
     slots: SLOTS,
+    /** Snapshots: a chat scene's own state (an "Other" answer typed, a draft). */
+    scene: scene,
+    /** The draft kept for a session (memory, else localStorage). */
+    draft: function (sessionId) {
+      return draftOf(String(sessionId));
+    },
     /** The open chat's state for the bar and the tests (a copy; `null` when no chat is open). */
     current: function () {
       return S ? {
@@ -690,6 +1329,9 @@
         ended: S.ended,
         loading: S.loading,
         boardOpen: S.boardOpen,
+        route: { state: S.route.state, reason: S.route.reason },
+        sending: S.sending,
+        failure: S.failure,
       } : null;
     },
     PAGE_SIZE: PAGE_SIZE,

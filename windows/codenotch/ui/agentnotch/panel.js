@@ -1596,6 +1596,11 @@
     // The chat scenes show the same snapshot; the route (SCENE_ROUTES) and the chat's own state do the rest.
     'chat-approval': same,
     'chat-tasks': same,
+    'chat-plan': same,
+    'chat-question-other': same,
+    'chat-composer': same,
+    'chat-terminal-only': same,
+    'chat-no-route': same,
     'panel-single-account': function (s) {
       var first = ringsOf(s)[0];
       s.accounts_multi = false;
@@ -1608,6 +1613,11 @@
   var SCENE_ROUTES = {
     'chat-approval': 'session:needs-permission',
     'chat-tasks': 'session:work-migration',
+    'chat-plan': 'session:needs-plan',
+    'chat-question-other': 'session:needs-question',
+    'chat-composer': 'session:review-just-finished',
+    'chat-terminal-only': 'session:needs-elicitation',
+    'chat-no-route': 'session:work-ci',
   };
 
   /** View state a scene needs besides the snapshot: the selection, folds, a pending review. */
@@ -1650,6 +1660,7 @@
     // The chat exists only once the route has drawn it: its own scene state comes after.
     var chat = window.agentnotchChat;
     if (name === 'chat-tasks' && chat && typeof chat.openBoard === 'function') chat.openBoard(true);
+    if (SCENE_ROUTES[name] && chat && typeof chat.scene === 'function') chat.scene(name);
     return true;
   }
 

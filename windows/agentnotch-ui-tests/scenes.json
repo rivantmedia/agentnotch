@@ -488,6 +488,292 @@
           }
         }
       ]
+    },
+    {
+      "name": "chat-plan",
+      "page": "agentnotch/panel.html",
+      "global": "agentnotchPanel",
+      "scene": "chat-plan",
+      "widths": true,
+      "height": 672,
+      "panel": {
+        "route": "session:needs-plan",
+        "ring_id": null,
+        "highlight": null,
+        "reason": "hover_row"
+      },
+      "events": [
+        {
+          "event": "an:chat",
+          "payload": {
+            "session_id": "needs-plan",
+            "revision": 1,
+            "reset": true,
+            "items": [
+              {
+                "id": "u-1",
+                "kind": "user",
+                "text": "Move our settings from the JSON file to SQLite, without losing anyone’s settings."
+              },
+              {
+                "id": "toolu_p1",
+                "kind": "tool",
+                "name": "Read",
+                "summary": "src/settings-store.ts",
+                "status": "success",
+                "input": {
+                  "file_path": "src/settings-store.ts"
+                },
+                "result": null,
+                "subagent": null
+              },
+              {
+                "id": "a-1",
+                "kind": "assistant",
+                "text": "Here’s the plan. The migration runs once and is safe to interrupt."
+              }
+            ],
+            "removed": [],
+            "order": [
+              "u-1",
+              "toolu_p1",
+              "a-1"
+            ],
+            "has_earlier": 0,
+            "working": null,
+            "ended": false,
+            "loading": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "chat-question-other",
+      "page": "agentnotch/panel.html",
+      "global": "agentnotchPanel",
+      "scene": "chat-question-other",
+      "widths": true,
+      "height": 672,
+      "panel": {
+        "route": "session:needs-question",
+        "ring_id": null,
+        "highlight": null,
+        "reason": "hover_row"
+      },
+      "events": [
+        {
+          "event": "an:chat",
+          "payload": {
+            "session_id": "needs-question",
+            "revision": 1,
+            "reset": true,
+            "items": [
+              {
+                "id": "u-1",
+                "kind": "user",
+                "text": "Add a usage chart to the dashboard’s overview page."
+              },
+              {
+                "id": "a-1",
+                "kind": "assistant",
+                "text": "There’s no charting library in the project yet. Three fit the stack; which should it be?"
+              }
+            ],
+            "removed": [],
+            "order": [
+              "u-1",
+              "a-1"
+            ],
+            "has_earlier": 0,
+            "working": null,
+            "ended": false,
+            "loading": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "chat-composer",
+      "page": "agentnotch/panel.html",
+      "global": "agentnotchPanel",
+      "scene": "chat-composer",
+      "widths": true,
+      "height": 672,
+      "panel": {
+        "route": "session:review-just-finished",
+        "ring_id": null,
+        "highlight": null,
+        "reason": "hover_row"
+      },
+      "events": [
+        {
+          "event": "an:chat",
+          "payload": {
+            "session_id": "review-just-finished",
+            "revision": 1,
+            "reset": true,
+            "items": [
+              {
+                "id": "u-1",
+                "kind": "user",
+                "text": "The date test fails about once a week. Can you find out why?"
+              },
+              {
+                "id": "t-1",
+                "kind": "thinking",
+                "text": "It only fails near midnight UTC, so the test must read the local date somewhere while the fixture is built in UTC."
+              },
+              {
+                "id": "toolu_c1",
+                "kind": "tool",
+                "name": "Bash",
+                "summary": "npm test -- dates --runs=50",
+                "status": "success",
+                "input": {
+                  "command": "npm test -- dates --runs=50",
+                  "description": "npm test -- dates --runs=50"
+                },
+                "result": {
+                  "tool": "bash",
+                  "stdout": "PASS dates.spec.ts (50 runs)",
+                  "stderr": "",
+                  "interrupted": false,
+                  "return_code_interpretation": null,
+                  "background_task_id": null
+                },
+                "subagent": null
+              },
+              {
+                "id": "a-1",
+                "kind": "assistant",
+                "text": "The test pinned the time zone to UTC; it now uses a fixed calendar and passes 50 runs in a row."
+              }
+            ],
+            "removed": [],
+            "order": [
+              "u-1",
+              "t-1",
+              "toolu_c1",
+              "a-1"
+            ],
+            "has_earlier": 0,
+            "working": null,
+            "ended": false,
+            "loading": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "chat-terminal-only",
+      "page": "agentnotch/panel.html",
+      "global": "agentnotchPanel",
+      "scene": "chat-terminal-only",
+      "widths": true,
+      "height": 672,
+      "panel": {
+        "route": "session:needs-elicitation",
+        "ring_id": null,
+        "highlight": null,
+        "reason": "hover_row"
+      },
+      "events": [
+        {
+          "event": "an:chat",
+          "payload": {
+            "session_id": "needs-elicitation",
+            "revision": 1,
+            "reset": true,
+            "items": [
+              {
+                "id": "u-1",
+                "kind": "user",
+                "text": "Pull the new colour tokens from Figma into the design system."
+              },
+              {
+                "id": "a-1",
+                "kind": "assistant",
+                "text": "Fetching the tokens through the Figma server first; it needs to know which file to read."
+              }
+            ],
+            "removed": [],
+            "order": [
+              "u-1",
+              "a-1"
+            ],
+            "has_earlier": 0,
+            "working": null,
+            "ended": false,
+            "loading": false
+          }
+        }
+      ]
+    },
+    {
+      "name": "chat-no-route",
+      "page": "agentnotch/panel.html",
+      "global": "agentnotchPanel",
+      "scene": "chat-no-route",
+      "widths": true,
+      "height": 672,
+      "panel": {
+        "route": "session:work-ci",
+        "ring_id": null,
+        "highlight": null,
+        "reason": "hover_row"
+      },
+      "events": [
+        {
+          "event": "an:chat",
+          "payload": {
+            "session_id": "work-ci",
+            "revision": 1,
+            "reset": true,
+            "items": [
+              {
+                "id": "u-1",
+                "kind": "user",
+                "text": "The CI job fails about one run in five with ETIMEDOUT. Find out why."
+              },
+              {
+                "id": "toolu_n1",
+                "kind": "tool",
+                "name": "Bash",
+                "summary": "npm run test:ci -- --grep network",
+                "status": "success",
+                "input": {
+                  "command": "npm run test:ci -- --grep network",
+                  "description": "npm run test:ci -- --grep network"
+                },
+                "result": {
+                  "tool": "bash",
+                  "stdout": "FAIL api/upload.spec.ts: ETIMEDOUT",
+                  "stderr": "",
+                  "interrupted": false,
+                  "return_code_interpretation": null,
+                  "background_task_id": null
+                },
+                "subagent": null
+              },
+              {
+                "id": "a-1",
+                "kind": "assistant",
+                "text": "The upload test talks to the real storage service and times out when it is slow. Checking where the timeout is set."
+              }
+            ],
+            "removed": [],
+            "order": [
+              "u-1",
+              "toolu_n1",
+              "a-1"
+            ],
+            "has_earlier": 0,
+            "working": null,
+            "ended": false,
+            "loading": false
+          }
+        }
+      ]
     }
   ]
 }
