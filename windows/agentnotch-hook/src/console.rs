@@ -140,7 +140,9 @@ mod platform {
 
     use agentnotch_proto::limits::{TYPE_SETTLE_MS, TYPE_SUBMIT_WAIT_MS};
     use agentnotch_proto::{ConsoleInfo, TypeArgs, TypePhase};
-    use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, HANDLE};
+    use windows_sys::Win32::Foundation::{
+        ERROR_INVALID_PARAMETER, GENERIC_READ, GENERIC_WRITE, HANDLE,
+    };
     use windows_sys::Win32::Security::{
         GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
     };
@@ -159,7 +161,7 @@ mod platform {
         TH32CS_SNAPPROCESS,
     };
     use windows_sys::Win32::System::Threading::{
-        GetCurrentProcess, GetCurrentProcessId, OpenProcessToken,
+        GetCurrentProcess, GetCurrentProcessId, GetExitCodeProcess, OpenProcessToken,
     };
 
     use super::checks::{self, Console, Facts, KeyRecord, Proc, Second};
@@ -170,6 +172,8 @@ mod platform {
     const RECORDS_PER_WRITE: usize = 256;
     /// A parent chain is followed this far (`checks::descendants` stops there too).
     const MAX_HOPS: usize = 32;
+    /// `STILL_ACTIVE`: the exit code of a process that has not ended.
+    const STILL_ACTIVE: u32 = 259;
 
     /// The three standard handles as the app gave them to the helper: pipes.
     ///
@@ -352,7 +356,23 @@ mod platform {
         win::open_process(pid).and_then(|process| elevated(process.raw())) == Some(true)
     }
 
+    /// Has the process with this pid ended? Only when that is certain: it has an exit code, or
+    /// no process has the pid. One that can't be opened for another reason counts as running.
+    fn ended(pid: u32) -> bool {
+        let Some(process) = win::open_process(pid) else {
+            return win::last_error() == ERROR_INVALID_PARAMETER;
+        };
+        let mut code = 0u32;
+        // SAFETY: a live process handle and a valid out pointer.
+        let read = unsafe { GetExitCodeProcess(process.raw(), &mut code) } != 0;
+        read && code != STILL_ACTIVE
+    }
+
     /// The pids attached to this process's console, `own_pid` left out; empty when unreadable.
+    ///
+    /// A process that has ended is left out too. The console host takes a process off its list
+    /// a moment after it ended, so the helper of a moment ago (`console-info`, then `type`) can
+    /// still be on it; what has ended reads nothing.
     fn console_processes(own_pid: u32) -> Vec<u32> {
         let mut pids = vec![0u32; 64];
         // The list may grow between two calls; a few rounds settle it.
@@ -365,7 +385,7 @@ mod platform {
             }
             if count <= pids.len() {
                 pids.truncate(count);
-                pids.retain(|pid| *pid != own_pid);
+                pids.retain(|pid| *pid != own_pid && !ended(*pid));
                 return pids;
             }
             pids = vec![0u32; count + 16];

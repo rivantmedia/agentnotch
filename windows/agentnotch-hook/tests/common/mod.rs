@@ -9,7 +9,8 @@
 //! - the string commands the installer writes and the two shells that run them, and temporary
 //!   folders for copies of the exes;
 //! - raw ends of a pipe for what neither of those does: a client that says nothing, a server that
-//!   never reads, the security descriptor as a client sees it.
+//!   never reads, the security descriptor as a client sees it;
+//! - consoles of a test's own for the programs it starts: a hidden one, and a pseudo console.
 //!
 //! No test touches this user's real pipe, a real terminal or a real Claude Code folder.
 
@@ -28,7 +29,7 @@ use std::os::windows::io::AsRawHandle;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::ptr::{addr_of_mut, null_mut};
+use std::ptr::{addr_of_mut, null, null_mut};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -44,6 +45,7 @@ use agentnotch_win::pipe_server::PipeServer;
 use agentnotch_win::sid::SecurityDescriptor;
 use windows_sys::Win32::Foundation::{
     CloseHandle, LocalFree, ERROR_PIPE_BUSY, ERROR_SUCCESS, HANDLE, INVALID_HANDLE_VALUE,
+    WAIT_OBJECT_0,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, GetSecurityInfo, SE_KERNEL_OBJECT,
@@ -54,14 +56,20 @@ use windows_sys::Win32::Security::{
     OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, SE_DACL_PROTECTED,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    GetShortPathNameW, FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX, SECURITY_IDENTIFICATION,
+    GetShortPathNameW, ReadFile, FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX,
+    SECURITY_IDENTIFICATION,
 };
+use windows_sys::Win32::System::Console::{ClosePseudoConsole, CreatePseudoConsole, COORD, HPCON};
 use windows_sys::Win32::System::Pipes::{
-    CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
+    CreateNamedPipeW, CreatePipe, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
     PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
 use windows_sys::Win32::System::Threading::{
-    OpenProcess, TerminateProcess, CREATE_NO_WINDOW, PROCESS_TERMINATE,
+    CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess,
+    InitializeProcThreadAttributeList, OpenProcess, TerminateProcess, UpdateProcThreadAttribute,
+    WaitForSingleObject, CREATE_NEW_CONSOLE, CREATE_NO_WINDOW, EXTENDED_STARTUPINFO_PRESENT,
+    LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION, PROCESS_TERMINATE,
+    PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, STARTF_USESHOWWINDOW, STARTUPINFOEXW, STARTUPINFOW,
 };
 
 pub const EXE: &str = env!("CARGO_BIN_EXE_agentnotch-hook");
@@ -832,5 +840,300 @@ impl Drop for SilentServer {
     fn drop(&mut self) {
         // SAFETY: the handle is ours and is not used after this.
         unsafe { CloseHandle(self.0) };
+    }
+}
+
+// ---- consoles of a test's own ----
+
+/// The test-only console reader (`tests/bin/console-reader.rs`).
+pub const READER: &str = env!("CARGO_BIN_EXE_console-reader");
+
+/// `SW_HIDE`: the window a new console gets is never shown.
+const SW_HIDE: u16 = 0;
+
+/// Where a console program of a test runs. Never the console of the test run itself: nothing a
+/// test types may land in the terminal (or the CI log) it was started from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConsoleHost {
+    /// A console of its own, its window hidden: what a program started from Explorer or
+    /// `cmd /c start` gets (conhost).
+    Hidden,
+    /// A pseudo console: what Windows Terminal and VS Code's terminal host their shells in.
+    Pseudo,
+}
+
+/// One argument as `CommandLineToArgvW` and the C runtime take it apart again.
+fn quoted(argument: &str) -> String {
+    if !argument.is_empty() && !argument.contains([' ', '\t', '"']) {
+        return argument.to_owned();
+    }
+    let mut quoted = String::from('"');
+    let mut backslashes = 0usize;
+    for c in argument.chars() {
+        if c == '\\' {
+            backslashes += 1;
+            continue;
+        }
+        // Backslashes count as themselves, except before a quote, where each is doubled and
+        // one more escapes the quote.
+        let written = if c == '"' {
+            backslashes * 2 + 1
+        } else {
+            backslashes
+        };
+        quoted.extend(std::iter::repeat_n('\\', written));
+        quoted.push(c);
+        backslashes = 0;
+    }
+    quoted.extend(std::iter::repeat_n('\\', backslashes * 2));
+    quoted.push('"');
+    quoted
+}
+
+/// A process the test started in a console of its own. Ended when dropped.
+pub struct Hosted {
+    pid: u32,
+    process: HANDLE,
+    /// Closed after the process was ended.
+    _pseudo: Option<PseudoConsole>,
+}
+
+/// `program` with `arguments` in a console of its own. Its standard handles are that console's
+/// (or nothing usable, in a pseudo console): a program started here opens `CONIN$` itself.
+pub fn spawn_in_console(host: ConsoleHost, program: &str, arguments: &[&str]) -> Hosted {
+    let line = std::iter::once(program)
+        .chain(arguments.iter().copied())
+        .map(quoted)
+        .collect::<Vec<_>>()
+        .join(" ");
+    // CreateProcessW may write into the command line it is given.
+    let mut line = wide(&line);
+    let mut created = PROCESS_INFORMATION {
+        hProcess: null_mut(),
+        hThread: null_mut(),
+        dwProcessId: 0,
+        dwThreadId: 0,
+    };
+    let (started, pseudo) = match host {
+        ConsoleHost::Hidden => {
+            let startup = STARTUPINFOW {
+                cb: size_of::<STARTUPINFOW>() as u32,
+                dwFlags: STARTF_USESHOWWINDOW,
+                wShowWindow: SW_HIDE,
+                ..STARTUPINFOW::default()
+            };
+            // SAFETY: `line` is NUL-terminated and writable; `startup` and `created` are valid
+            // for the call; no handle is inherited.
+            let started = unsafe {
+                CreateProcessW(
+                    null(),
+                    line.as_mut_ptr(),
+                    null(),
+                    null(),
+                    0,
+                    CREATE_NEW_CONSOLE,
+                    null(),
+                    null(),
+                    &startup,
+                    &mut created,
+                )
+            };
+            (started, None)
+        }
+        ConsoleHost::Pseudo => {
+            let pseudo = PseudoConsole::new();
+            let mut attributes = AttributeList::for_pseudo_console(pseudo.console);
+            let startup = STARTUPINFOEXW {
+                StartupInfo: STARTUPINFOW {
+                    cb: size_of::<STARTUPINFOEXW>() as u32,
+                    ..STARTUPINFOW::default()
+                },
+                lpAttributeList: attributes.pointer(),
+            };
+            // SAFETY: as above; with EXTENDED_STARTUPINFO_PRESENT the startup info is the
+            // extended one, whose attribute list lives until the call returns.
+            let started = unsafe {
+                CreateProcessW(
+                    null(),
+                    line.as_mut_ptr(),
+                    null(),
+                    null(),
+                    0,
+                    EXTENDED_STARTUPINFO_PRESENT,
+                    null(),
+                    null(),
+                    &startup.StartupInfo,
+                    &mut created,
+                )
+            };
+            (started, Some(pseudo))
+        }
+    };
+    assert!(
+        started != 0,
+        "{program} did not start in a {host:?} console: {}",
+        std::io::Error::last_os_error()
+    );
+    // SAFETY: the thread handle is ours and is not needed.
+    unsafe { CloseHandle(created.hThread) };
+    Hosted {
+        pid: created.dwProcessId,
+        process: created.hProcess,
+        _pseudo: pseudo,
+    }
+}
+
+impl Hosted {
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    /// The exit code, once the process has ended `within` this long. While this value lives the
+    /// pid is not given to another process, ended or not.
+    pub fn wait(&self, within: Duration) -> Option<u32> {
+        let milliseconds = u32::try_from(within.as_millis()).unwrap_or(u32::MAX - 1);
+        let mut code = 0u32;
+        // SAFETY: the process handle is ours and open; `code` is a valid out pointer.
+        unsafe {
+            (WaitForSingleObject(self.process, milliseconds) == WAIT_OBJECT_0
+                && GetExitCodeProcess(self.process, &mut code) != 0)
+                .then_some(code)
+        }
+    }
+}
+
+impl Drop for Hosted {
+    fn drop(&mut self) {
+        // SAFETY: the handle is ours; ending a process that has ended already fails harmlessly.
+        unsafe {
+            TerminateProcess(self.process, 1);
+            CloseHandle(self.process);
+        }
+    }
+}
+
+/// A pseudo console nobody looks at: what it would show is read and dropped, and nothing is
+/// written to its input from outside.
+struct PseudoConsole {
+    console: HPCON,
+    /// The write end of its input pipe, kept open for as long as the console lives.
+    input: HANDLE,
+}
+
+impl PseudoConsole {
+    fn new() -> PseudoConsole {
+        let (mut input_read, mut input_write): (HANDLE, HANDLE) = (null_mut(), null_mut());
+        let (mut output_read, mut output_write): (HANDLE, HANDLE) = (null_mut(), null_mut());
+        let mut console: HPCON = 0;
+        // SAFETY: the out pointers are valid; the handles the calls return are closed below or
+        // owned by the value returned.
+        unsafe {
+            assert!(
+                CreatePipe(&mut input_read, &mut input_write, null(), 0) != 0
+                    && CreatePipe(&mut output_read, &mut output_write, null(), 0) != 0,
+                "CreatePipe: {}",
+                std::io::Error::last_os_error()
+            );
+            let result = CreatePseudoConsole(
+                COORD { X: 120, Y: 30 },
+                input_read,
+                output_write,
+                0,
+                &mut console,
+            );
+            assert!(result >= 0, "CreatePseudoConsole: {result:#x}");
+            // The pseudo console holds its own copies of the two ends it was given.
+            CloseHandle(input_read);
+            CloseHandle(output_write);
+        }
+        // Whatever the console host writes must be taken, or it blocks and its client with it.
+        let output = output_read as usize;
+        std::thread::spawn(move || {
+            let output = output as HANDLE;
+            let mut buffer = [0u8; 4096];
+            loop {
+                let mut read = 0u32;
+                // SAFETY: `buffer` holds the number of bytes passed; the handle is this
+                // thread's own. The read fails once the pseudo console is closed.
+                let ok = unsafe {
+                    ReadFile(
+                        output,
+                        buffer.as_mut_ptr(),
+                        buffer.len() as u32,
+                        &mut read,
+                        null_mut(),
+                    )
+                };
+                if ok == 0 || read == 0 {
+                    break;
+                }
+            }
+            // SAFETY: the handle is this thread's own and is not used after this.
+            unsafe { CloseHandle(output) };
+        });
+        PseudoConsole {
+            console,
+            input: input_write,
+        }
+    }
+}
+
+impl Drop for PseudoConsole {
+    fn drop(&mut self) {
+        // SAFETY: both are ours and are not used after this. Closing the console ends its
+        // host, which ends the reading thread above.
+        unsafe {
+            ClosePseudoConsole(self.console);
+            CloseHandle(self.input);
+        }
+    }
+}
+
+/// A process attribute list with one entry: "start in this pseudo console".
+struct AttributeList {
+    /// Pointer-aligned storage of the size Windows asked for.
+    storage: Vec<usize>,
+}
+
+impl AttributeList {
+    fn for_pseudo_console(console: HPCON) -> AttributeList {
+        let mut size = 0usize;
+        // SAFETY: the sizing call: no list, only the size is written.
+        unsafe { InitializeProcThreadAttributeList(null_mut(), 1, 0, &mut size) };
+        assert!(size > 0, "no size for a process attribute list");
+        let mut list = AttributeList {
+            storage: vec![0usize; size.div_ceil(size_of::<usize>())],
+        };
+        // SAFETY: the storage is at least `size` bytes and lives as long as the list. For this
+        // attribute the value is the console handle itself, not a pointer to it.
+        let ready = unsafe {
+            InitializeProcThreadAttributeList(list.pointer(), 1, 0, &mut size) != 0
+                && UpdateProcThreadAttribute(
+                    list.pointer(),
+                    0,
+                    PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE as usize,
+                    console as *const c_void,
+                    size_of::<HPCON>(),
+                    null_mut(),
+                    null(),
+                ) != 0
+        };
+        assert!(
+            ready,
+            "the process attribute list: {}",
+            std::io::Error::last_os_error()
+        );
+        list
+    }
+
+    fn pointer(&mut self) -> LPPROC_THREAD_ATTRIBUTE_LIST {
+        self.storage.as_mut_ptr().cast::<c_void>()
+    }
+}
+
+impl Drop for AttributeList {
+    fn drop(&mut self) {
+        // SAFETY: the list was initialised in `for_pseudo_console`.
+        unsafe { DeleteProcThreadAttributeList(self.pointer()) };
     }
 }

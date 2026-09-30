@@ -15,8 +15,18 @@
 //! 4. writes `<out>`: `{"text":"…","return":true|false}`, the UTF-16 units it received as UTF-8
 //!    and whether Return arrived; with `"error"` when there was no console to read.
 //!
+//! A test that has seen enough creates `<out>.stop`: the reader then takes what is still in the
+//! input buffer and writes `<out>` at once, instead of waiting out its timeout for a Return that
+//! is not meant to come.
+//!
 //! Both files appear by rename, so a test never reads half of one. Written like the exe it shares
 //! a crate with: nothing printed, nothing unwrapped, exit 0.
+//!
+//! `console-reader attach <pid> <hold ms>`
+//!
+//! A second program on the reader's console, for the helper's "another program is reading this
+//! console" refusal: leaves whatever console it has, attaches to the console of `<pid>` (a
+//! reader), reads nothing, and exits after `<hold ms>` or when the test ends it.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -25,9 +35,20 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn main() {
     let mut args = std::env::args_os().skip(1);
-    let Some(out) = args.next().map(PathBuf::from) else {
+    let Some(first) = args.next() else {
         return;
     };
+    if first == "attach" {
+        let mut number = || {
+            args.next()
+                .and_then(|text| text.to_str().and_then(|text| text.parse::<u64>().ok()))
+        };
+        if let (Some(pid), Some(hold)) = (number(), number()) {
+            reader::attach(u32::try_from(pid).unwrap_or(0), Duration::from_millis(hold));
+        }
+        return;
+    }
+    let out = PathBuf::from(first);
     let cooked = args.next().is_some_and(|mode| mode == "cooked");
     let timeout = args
         .next()
@@ -55,6 +76,8 @@ mod reader {
     pub fn run(_out: &Path, _cooked: bool, _timeout: Duration) -> serde_json::Value {
         serde_json::json!({"text": "", "return": false, "error": "not available on this system"})
     }
+
+    pub fn attach(_pid: u32, _hold: Duration) {}
 }
 
 #[cfg(windows)]
@@ -72,19 +95,36 @@ mod reader {
         CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
     };
     use windows_sys::Win32::System::Console::{
-        FlushConsoleInputBuffer, GetConsoleMode, GetConsoleWindow, ReadConsoleInputW,
-        SetConsoleMode, ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT,
-        ENABLE_WINDOW_INPUT, INPUT_RECORD, KEY_EVENT,
+        AttachConsole, FlushConsoleInputBuffer, FreeConsole, GetConsoleMode, GetConsoleWindow,
+        ReadConsoleInputW, SetConsoleCtrlHandler, SetConsoleMode, ENABLE_ECHO_INPUT,
+        ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT, ENABLE_WINDOW_INPUT, INPUT_RECORD, KEY_EVENT,
     };
     use windows_sys::Win32::System::Threading::{
         GetCurrentProcess, GetCurrentProcessId, GetProcessTimes, WaitForSingleObject,
     };
 
-    /// `<out>.ready`
-    fn ready_path(out: &Path) -> PathBuf {
+    /// `<out>.ready`, `<out>.stop`
+    fn beside(out: &Path, suffix: &str) -> PathBuf {
         let mut name = out.as_os_str().to_owned();
-        name.push(".ready");
+        name.push(suffix);
         PathBuf::from(name)
+    }
+
+    /// How often the reader looks for `<out>.stop` while no input arrives.
+    const STOP_POLL_MS: u32 = 50;
+
+    /// On `pid`'s console for `hold`, reading nothing.
+    pub fn attach(pid: u32, hold: Duration) {
+        // SAFETY: plain calls without pointers. Ctrl+C is ignored: it would be delivered to
+        // every process on the console this joins.
+        let attached = unsafe {
+            SetConsoleCtrlHandler(None, 1);
+            FreeConsole();
+            AttachConsole(pid) != 0
+        };
+        if attached {
+            std::thread::sleep(hold);
+        }
     }
 
     /// 1601-01-01 to 1970-01-01, in 100 ns units.
@@ -134,7 +174,7 @@ mod reader {
         // SAFETY: return values about the calling process and its console; no arguments.
         let (pid, window) = unsafe { (GetCurrentProcessId(), GetConsoleWindow() as usize) };
         super::write_by_rename(
-            &ready_path(out),
+            &beside(out, ".ready"),
             &serde_json::json!({
                 "pid": pid,
                 "started_ms": started_ms(),
@@ -142,7 +182,8 @@ mod reader {
             }),
         );
 
-        let (units, got_return) = read_until_return(input, Instant::now() + timeout);
+        let (units, got_return) =
+            read_until_return(input, Instant::now() + timeout, &beside(out, ".stop"));
 
         // SAFETY: the handle is ours; it is closed last and not used afterwards.
         unsafe {
@@ -154,8 +195,9 @@ mod reader {
         serde_json::json!({"text": String::from_utf16_lossy(&units), "return": got_return})
     }
 
-    /// The characters of the key-down records that arrive before `deadline`, up to a `'\r'`.
-    fn read_until_return(input: HANDLE, deadline: Instant) -> (Vec<u16>, bool) {
+    /// The characters of the key-down records that arrive before `deadline`, up to a `'\r'`; or
+    /// up to the moment the buffer is empty and `stop` exists.
+    fn read_until_return(input: HANDLE, deadline: Instant, stop: &Path) -> (Vec<u16>, bool) {
         let mut units: Vec<u16> = Vec::new();
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
@@ -163,10 +205,15 @@ mod reader {
                 return (units, false);
             }
             let wait = u32::try_from(left.as_millis())
-                .unwrap_or(u32::MAX - 1)
-                .max(1);
+                .unwrap_or(STOP_POLL_MS)
+                .clamp(1, STOP_POLL_MS);
             // SAFETY: a console input handle is signalled while its buffer holds records.
             if unsafe { WaitForSingleObject(input, wait) } != WAIT_OBJECT_0 {
+                // Only looked at with nothing left to read: what was typed before the test
+                // asked is always in the result.
+                if stop.exists() {
+                    return (units, false);
+                }
                 continue;
             }
             // SAFETY: INPUT_RECORD is plain data; all-zero is a valid value.
