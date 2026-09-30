@@ -36,6 +36,54 @@ pub struct HookInstallEntry {
     pub installed_at: SystemTime,
 }
 
+impl HookInstallEntry {
+    /// The same install, whenever it was made.
+    fn same_install(&self, other: &HookInstallEntry) -> bool {
+        self.settings_path == other.settings_path
+            && self.folder == other.folder
+            && self.form == other.form
+            && self.command == other.command
+            && self.hook_copy == other.hook_copy
+            && self.status_line == other.status_line
+    }
+}
+
+impl HookInstallRecord {
+    /// Notes what a settings.json now holds of ours, one entry per physical
+    /// file. An entry saying what the record already says keeps its date, so
+    /// a pass that wrote nothing leaves the record as it was. Says whether
+    /// the record changed.
+    pub fn upsert(&mut self, entry: HookInstallEntry) -> bool {
+        match self
+            .files
+            .iter_mut()
+            .find(|held| held.settings_path == entry.settings_path)
+        {
+            Some(held) if held.same_install(&entry) => false,
+            Some(held) => {
+                *held = entry;
+                true
+            }
+            None => {
+                self.files.push(entry);
+                true
+            }
+        }
+    }
+
+    /// Drops the entries `gone` picks. Says whether any went.
+    pub fn remove_where(&mut self, gone: impl Fn(&HookInstallEntry) -> bool) -> bool {
+        let before = self.files.len();
+        self.files.retain(|entry| !gone(entry));
+        self.files.len() != before
+    }
+
+    /// The entry for a folder, if one of its files holds ours.
+    pub fn entry_for(&self, folder: &AccountId) -> Option<&HookInstallEntry> {
+        self.files.iter().find(|entry| &entry.folder == folder)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HookInstallFile {
     #[serde(default = "version")]
