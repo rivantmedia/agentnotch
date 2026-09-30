@@ -4,7 +4,10 @@
 //!
 //! Owner: WP2. WP0 stub: the §3.4 signatures; it never writes anything.
 
+pub mod commands;
+pub mod events;
 pub mod facts;
+pub mod shell_words;
 pub mod version;
 
 use crate::core::settings::ControlSettings;
