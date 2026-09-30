@@ -4,7 +4,9 @@
 //!
 //! Owner: WP2. WP0 stub: the §3.4 signatures; it never writes anything.
 
+pub mod backups;
 pub mod commands;
+pub mod copy;
 pub mod events;
 pub mod facts;
 pub mod plan;
