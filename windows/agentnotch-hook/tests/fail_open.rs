@@ -624,16 +624,21 @@ fn without_git_bash_the_status_line_prints_nothing() {
     let wrapper = Wrapper::new();
     wrapper.previous("echo chained");
     let trace = trace_file();
+    // Git uninstalled, the Program Files folders still there: every place Claude Code looks
+    // exists and holds no Git. (Only removing the two variables from the child's environment
+    // did not keep the runner's child from finding the real Git Bash.)
+    let no_git = wrapper.folder.join("Program Files without Git");
+    std::fs::create_dir_all(&no_git).expect("an empty Program Files");
     let mut command = wrapper.command(&trace);
     command
         .env(
             "CLAUDE_CODE_GIT_BASH_PATH",
             wrapper.folder.join("no-such-bash.exe"),
         )
-        .env_remove("ProgramFiles")
-        .env_remove("ProgramFiles(x86)");
+        .env("ProgramFiles", &no_git)
+        .env("ProgramFiles(x86)", &no_git);
     let done = run(command, Stdin::Bytes(STATUS));
-    assert_silent_success(&done, "no Git Bash");
+    // The trace first: when the output is wrong, it says which way the wrapper went.
     assert_eq!(
         traced(&trace, done.pid),
         [
@@ -643,6 +648,7 @@ fn without_git_bash_the_status_line_prints_nothing() {
             "no app"
         ]
     );
+    assert_silent_success(&done, "no Git Bash");
 }
 
 /// The app never wraps a command written for another shell (the engine's rule). One forced into
