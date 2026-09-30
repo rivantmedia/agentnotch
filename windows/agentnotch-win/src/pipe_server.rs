@@ -20,10 +20,12 @@
 //! file, tested on every system. The Win32 and Tokio part is the `server` module, on Windows only.
 //!
 //! Beside it: [`client`], the checked client the app's own programs use (`control status|quit`,
-//! the doctor), and [`script`], what the test-only `pipe-test-server.exe` does with this server.
+//! the doctor), [`script`], what the test-only `pipe-test-server.exe` does with this server, and
+//! [`squatter`], the command line and record of the test-only `pipe-squatter.exe`.
 
 pub mod client;
 pub mod script;
+pub mod squatter;
 
 use std::collections::BTreeMap;
 
