@@ -2,13 +2,37 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; frame-ancestors 'none'">
 <title>Agent Notch sessions</title>
 <link rel="stylesheet" href="theme.css">
 <link rel="stylesheet" href="panel.css">
 </head>
 <body>
-<!-- The sessions panel (DESIGN-WIN §5.3). Blank in the scaffold: the list, the chat and their
-     scripts arrive with the fork's UI package (WP10). -->
+<!-- The sessions panel (DESIGN-WIN §5.3). The window is transparent; #an-frame is the card and
+     #an-tail its tail, drawn as one silhouette. panel.js fills the regions below and never
+     replaces one (a morph keeps focus, an open menu and a half-typed answer). No inline script
+     and no handler attribute: the page's CSP allows neither. -->
+<div id="an-panel" class="an-panel" data-tail="none" data-an-fit>
+  <div id="an-frame" class="an-frame">
+    <div id="an-tail" class="an-tail" aria-hidden="true"></div>
+    <main id="an-card" class="an-card" data-mode="list" aria-label="Claude sessions">
+      <div id="an-top" class="an-top">
+        <div id="an-header" class="an-header"></div>
+        <div id="an-banners" class="an-banners"></div>
+      </div>
+      <div id="an-hair" class="an-hair"></div>
+      <div id="an-list" class="an-list"><div id="an-rows" class="an-rows"></div></div>
+      <div id="an-toast" class="an-toast-host" aria-live="polite"></div>
+      <div id="an-chat" class="an-chat" hidden></div>
+      <div id="an-overlay" class="an-overlay"></div>
+    </main>
+  </div>
+</div>
+<script src="common.js"></script>
+<script src="markdown.js"></script>
+<script src="toolresults.js"></script>
+<script src="chat.js"></script>
+<script src="panel.js"></script>
 </body>
 </html>

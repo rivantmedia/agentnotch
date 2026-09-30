@@ -1,3 +1,169 @@
-/* The sessions panel's page (DESIGN-WIN §5.3). The window is transparent: the page draws the
-   card and its tail as one silhouette. Scaffold: an empty, transparent page. */
-html, body { margin: 0; background: transparent; color: var(--an-text); font-family: var(--an-font); }
+/* The sessions panel's page (DESIGN-WIN §5.3, UI§4-5). The window is transparent: the page draws
+   the card and its tail as one silhouette in the solid --an-card (Mica and Acrylic would fill the
+   whole rectangle and ignore the tail). Everything reads its colour, type and metrics from
+   theme.css. Later sub-tasks add their own sections to this file below the marked ones. */
+
+html, body { margin: 0; background: transparent; overflow: hidden; }
+body {
+  color: var(--an-text); font: 400 var(--an-fs-body)/1.35 var(--an-font);
+  -webkit-font-smoothing: antialiased; cursor: default; user-select: none;
+}
+[hidden] { display: none !important; }
+button { font: inherit; color: inherit; margin: 0; }
+button:focus-visible { outline: 1px solid var(--an-row-sel-stroke); outline-offset: 1px; }
+
+/* ---- the card and its tail ---------------------------------------------------------------- */
+
+/* The window is the card plus the strip the tail takes (placement.kind): the page pads that strip
+   and draws the tail in it. --an-strip-v is what the tail takes off the height. */
+.an-panel { box-sizing: border-box; --an-strip-v: 0px; }
+.an-panel[data-tail="left"] { padding-left: var(--an-tail-len); }
+.an-panel[data-tail="right"] { padding-right: var(--an-tail-len); }
+.an-panel[data-tail="top"] { padding-top: var(--an-tail-len); --an-strip-v: var(--an-tail-len); }
+.an-panel[data-tail="bottom"] { padding-bottom: var(--an-tail-len); --an-strip-v: var(--an-tail-len); }
+
+.an-frame { position: relative; --an-tail-offset: 0px; }
+.an-card {
+  position: relative; box-sizing: border-box; display: flex; flex-direction: column;
+  max-height: calc(100vh - var(--an-strip-v)); overflow: hidden;
+  background: var(--an-card); border-radius: var(--an-corner);
+}
+
+/* The Mac's curved wedge (TooltipTail, as notch.html's #tail): its shoulders leave the card
+   tangent to its edge. Each path runs 1 px into the card so no seam shows where they meet; the
+   offset from the card's centre is clamped so the tail never runs into a rounded corner. */
+.an-tail { position: absolute; display: none; background: var(--an-card); }
+.an-panel:not([data-tail="none"]) .an-tail { display: block; }
+.an-panel[data-tail="left"] .an-tail, .an-panel[data-tail="right"] .an-tail {
+  width: calc(var(--an-tail-len) + 1px); height: var(--an-tail-w);
+  top: calc(50% + clamp(calc(-50% + var(--an-corner) + var(--an-tail-w) / 2), var(--an-tail-offset), calc(50% - var(--an-corner) - var(--an-tail-w) / 2)) - var(--an-tail-w) / 2);
+}
+.an-panel[data-tail="top"] .an-tail, .an-panel[data-tail="bottom"] .an-tail {
+  width: var(--an-tail-w); height: calc(var(--an-tail-len) + 1px);
+  left: calc(50% + clamp(calc(-50% + var(--an-corner) + var(--an-tail-w) / 2), var(--an-tail-offset), calc(50% - var(--an-corner) - var(--an-tail-w) / 2)) - var(--an-tail-w) / 2);
+}
+.an-panel[data-tail="left"] .an-tail {
+  left: calc(-1 * var(--an-tail-len));
+  clip-path: path('M33 0H32C32 9 13.44 13.68 0 18C13.44 22.32 32 27 32 36H33Z');
+}
+.an-panel[data-tail="right"] .an-tail {
+  right: calc(-1 * var(--an-tail-len));
+  clip-path: path('M0 0H1C1 9 19.56 13.68 33 18C19.56 22.32 1 27 1 36H0Z');
+}
+.an-panel[data-tail="top"] .an-tail {
+  top: calc(-1 * var(--an-tail-len));
+  clip-path: path('M0 33V32C9 32 13.68 13.44 18 0C22.32 13.44 27 32 36 32V33Z');
+}
+.an-panel[data-tail="bottom"] .an-tail {
+  bottom: calc(-1 * var(--an-tail-len));
+  clip-path: path('M0 0V1C9 1 13.68 19.56 18 33C22.32 19.56 27 1 36 1V0Z');
+}
+
+/* ---- the list screen's frame -------------------------------------------------------------- */
+
+.an-top { flex: none; display: flex; flex-direction: column; gap: var(--an-block); padding: var(--an-pad) var(--an-pad) var(--an-block); }
+.an-header { display: flex; flex-direction: column; gap: var(--an-block); }
+.an-banners { display: flex; flex-direction: column; gap: var(--an-block); }
+.an-banners:empty { display: none; }
+.an-hair { flex: none; height: var(--an-hair); margin: 0 var(--an-pad); background: var(--an-sep); }
+/* Rows align their text at the 12 px gutter with their own 8 px padding (UI§5). */
+.an-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 5.5px 4px 8px; }
+.an-toast-host { flex: none; }
+.an-toast-host:empty { display: none; }
+.an-chat { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.an-card[data-mode="chat"] > .an-top, .an-card[data-mode="chat"] > .an-hair,
+.an-card[data-mode="chat"] > .an-list, .an-card[data-mode="chat"] > .an-toast-host { display: none; }
+.an-overlay { position: absolute; inset: 0; pointer-events: none; }
+.an-overlay:empty { display: none; }
+
+/* thin scrollbars that stay out of the way */
+.an-list { scrollbar-width: thin; scrollbar-color: var(--an-fill-hover) transparent; }
+.an-list::-webkit-scrollbar { width: 8px; }
+.an-list::-webkit-scrollbar-thumb { background: var(--an-fill-hover); border-radius: 4px; }
+
+/* ---- the header --------------------------------------------------------------------------- */
+
+.an-title-row { display: flex; align-items: center; gap: 6px; min-height: var(--an-control-h); }
+.an-title {
+  margin: 0; min-width: 0; flex: 0 1 auto; font-size: var(--an-fs-title); font-weight: var(--an-fw-title);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate;
+}
+.an-sealed {
+  flex: none; padding: 1.5px 6px; border-radius: 999px; background: var(--an-accent-fill); color: var(--an-accent);
+  font-size: var(--an-fs-caption); font-weight: 600; white-space: nowrap;
+}
+.an-spacer { flex: 1 1 8px; min-width: 8px; }
+.an-icons { flex: none; display: flex; align-items: center; gap: 2px; }
+.an-icbtn {
+  display: inline-flex; align-items: center; justify-content: center; width: 22px; height: var(--an-control-h);
+  padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--an-text-2); cursor: pointer;
+  transition: background var(--an-quick), color var(--an-quick);
+}
+.an-icbtn:hover, .an-icbtn.an-on, .an-icbtn[aria-expanded="true"] { background: var(--an-fill); color: var(--an-text); }
+.an-icon { width: 12px; height: 12px; flex: none; display: block; }
+
+/* status marks (agentnotchCommon.statusRing) */
+.an-ring { width: var(--an-ring); height: var(--an-ring); flex: none; display: block; color: var(--an-text-2); }
+.an-ring-needs { color: var(--an-needs-you); }
+.an-ring-error { color: var(--an-critical); }
+.an-ring-review { color: var(--an-review); }
+.an-ring-working { color: var(--an-working); }
+.an-ring-idle { color: var(--an-text-2); }
+.an-dot { display: inline-block; flex: none; border-radius: 50%; }
+
+/* the attention strip */
+.an-strip {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px;
+  font-size: var(--an-fs-caption); font-weight: 500; font-variant-numeric: tabular-nums;
+}
+.an-strip-item { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.an-strip-item .an-ring { transform: scale(.85); }
+.an-tone-needs { color: var(--an-needs-you); }
+.an-tone-error { color: var(--an-critical); }
+.an-tone-review { color: var(--an-review); }
+.an-tone-working { color: var(--an-working); }
+.an-tone-idle { color: var(--an-text-2); }
+
+/* the account chips */
+.an-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.an-chip {
+  display: inline-flex; align-items: center; gap: 4px; box-sizing: border-box; height: var(--an-chip-h); padding: 0 8px;
+  border: var(--an-hair) solid var(--an-sep); border-radius: 999px; background: transparent; color: var(--an-text-2);
+  font-size: var(--an-fs-caption); font-weight: 500; white-space: nowrap; cursor: pointer;
+  transition: background var(--an-quick);
+}
+.an-chip:hover { background: var(--an-fill); }
+.an-chip.an-sel { background: var(--an-fill-hover); border-color: transparent; color: var(--an-text); }
+.an-chip-l { max-width: 150px; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
+.an-chip-n { color: var(--an-text-2); font-variant-numeric: tabular-nums; }
+.an-chip-need { display: inline-flex; align-items: center; gap: 2px; color: var(--an-needs-you); font-variant-numeric: tabular-nums; }
+.an-need-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+
+/* ---- the gear menu (in the page: the window is exactly the card) -------------------------- */
+
+.an-menu {
+  position: absolute; top: 40px; right: var(--an-pad); z-index: 5; box-sizing: border-box; min-width: 248px; max-width: calc(100% - 24px);
+  padding: 4px; border-radius: var(--an-row-corner); background: var(--an-menu); pointer-events: auto;
+  box-shadow: 0 0 0 var(--an-hair) var(--an-sep), 0 10px 28px var(--an-shadow);
+}
+.an-mh { padding: 6px 8px 2px; color: var(--an-text-2); font-size: var(--an-fs-caption); font-weight: 600; }
+.an-mi {
+  display: flex; align-items: center; gap: 6px; width: 100%; box-sizing: border-box; height: 26px; padding: 0 8px;
+  border: 0; border-radius: 6px; background: transparent; color: var(--an-text); font-size: var(--an-fs-body);
+  text-align: left; white-space: nowrap; cursor: pointer;
+}
+.an-mi:hover, .an-mi:focus-visible { background: var(--an-fill-hover); outline: none; }
+.an-mi[disabled] { opacity: .4; cursor: default; background: transparent; }
+.an-mc { width: 14px; height: 12px; flex: none; color: var(--an-text); }
+.an-mc .an-icon { visibility: hidden; }
+.an-mi[aria-checked="true"] .an-mc .an-icon { visibility: visible; }
+.an-mk { margin-left: auto; padding-left: 16px; color: var(--an-text-2); font-size: var(--an-fs-caption); }
+.an-msep { height: var(--an-hair); margin: 4px 6px; background: var(--an-sep); }
+
+/* ---- empty and error states --------------------------------------------------------------- */
+
+.an-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 28px 12px; text-align: center; }
+.an-empty .an-ring { --an-ring: 16px; margin-bottom: 6px; }
+.an-empty-title { font-size: var(--an-fs-body); font-weight: 500; color: var(--an-text); unicode-bidi: isolate; }
+.an-empty-text { font-size: var(--an-fs-caption); color: var(--an-text-2); }
+.an-rows-pending { min-height: 1px; }

@@ -385,7 +385,9 @@ async function renderVariant(env, scene, variant) {
       problems.push(`console.error: ${m.params.args.map((a) => a.value !== undefined ? a.value : a.description).join(' ')}`);
     } else if (m.method === 'Log.entryAdded' && m.params.entry.level === 'error') {
       const e = m.params.entry;
-      if (!/favicon/.test(e.url || '')) problems.push(`${e.source} error: ${e.text}${e.url ? ` (${e.url})` : ''}`);
+      // A page that carries its CSP as a <meta> (panel.html) gets this notice for frame-ancestors,
+      // which only a header can set; the app's own header (tauri.conf.json) has it.
+      if (!/favicon/.test(e.url || '') && !/'frame-ancestors' is ignored when delivered via a <meta>/.test(e.text || '')) problems.push(`${e.source} error: ${e.text}${e.url ? ` (${e.url})` : ''}`);
     }
   });
   try {
@@ -430,7 +432,13 @@ async function renderVariant(env, scene, variant) {
 
     let size = { width, height };
     if (scene.height === 'fit') {
-      const fitted = await evaluate(cdp, sessionId, 'Math.ceil(Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0))');
+      // A page whose window follows its content marks that element `data-an-fit` (the panel:
+      // its card and tail); otherwise the page's scroll height.
+      const fitted = await evaluate(cdp, sessionId, `(function () {
+        var fit = document.querySelector('[data-an-fit]');
+        if (fit) return Math.ceil(fit.getBoundingClientRect().bottom);
+        return Math.ceil(Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0));
+      })()`);
       size = { width, height: Math.min(Math.max(fitted, 40), Number(scene.maxHeight) || 800) };
       await s('Emulation.setDeviceMetricsOverride', { width, height: size.height, deviceScaleFactor: Number(args.dpr) || 2, mobile: false });
       await evaluate(cdp, sessionId, FRAMES, true);

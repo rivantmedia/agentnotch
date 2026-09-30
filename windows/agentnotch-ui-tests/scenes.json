@@ -108,6 +108,170 @@
       "edge": "bottom",
       "width": 650,
       "height": 650
+    },
+    {
+      "name": "panel-empty",
+      "page": "agentnotch/panel.html",
+      "global": "agentnotchPanel",
+      "scene": "panel-empty",
+      "widths": true,
+      "height": "fit",
+      "panel": {
+        "route": "sessions",
+        "ring_id": null,
+        "highlight": null,
+        "reason": "ring_click"
+      }
+    },
+    {
+      "name": "panel-every-state",
+      "page": "agentnotch/panel.html",
+      "global": "agentnotchPanel",
+      "scene": "panel-every-state",
+      "widths": true,
+      "height": "fit",
+      "panel": {
+        "route": "sessions",
+        "ring_id": null,
+        "highlight": null,
+        "reason": "ring_click"
+      }
+    },
+    {
+      "name": "panel-menu",
+      "page": "agentnotch/panel.html",
+      "global": "agentnotchPanel",
+      "scene": "panel-menu",
+      "widths": true,
+      "height": "fit",
+      "panel": {
+        "route": "sessions",
+        "ring_id": null,
+        "highlight": null,
+        "reason": "ring_click"
+      }
+    },
+    {
+      "name": "panel-filtered",
+      "page": "agentnotch/panel.html",
+      "global": "agentnotchPanel",
+      "scene": "panel-filtered",
+      "widths": true,
+      "height": "fit",
+      "panel": {
+        "route": "sessions",
+        "ring_id": null,
+        "highlight": null,
+        "reason": "ring_click"
+      }
+    },
+    {
+      "name": "panel-single-account",
+      "page": "agentnotch/panel.html",
+      "global": "agentnotchPanel",
+      "scene": "panel-single-account",
+      "widths": true,
+      "height": "fit",
+      "panel": {
+        "route": "sessions",
+        "ring_id": null,
+        "highlight": null,
+        "reason": "ring_click"
+      }
+    },
+    {
+      "name": "panel-pinned",
+      "page": "agentnotch/panel.html",
+      "global": "agentnotchPanel",
+      "scene": "panel-pinned",
+      "widths": true,
+      "height": "fit",
+      "panel": {
+        "route": "sessions",
+        "ring_id": null,
+        "highlight": null,
+        "reason": "ring_click"
+      }
+    },
+    {
+      "name": "panel-tail-left",
+      "page": "agentnotch/panel.html",
+      "global": "agentnotchPanel",
+      "scene": "panel-every-state",
+      "width": 432,
+      "panel": {
+        "route": "sessions",
+        "ring_id": null,
+        "highlight": null,
+        "reason": "ring_click",
+        "placement": {
+          "kind": "beside",
+          "tail_edge": "left",
+          "tail_offset": 40,
+          "width": 400
+        }
+      },
+      "height": "fit"
+    },
+    {
+      "name": "panel-tail-right",
+      "page": "agentnotch/panel.html",
+      "global": "agentnotchPanel",
+      "scene": "panel-every-state",
+      "width": 432,
+      "panel": {
+        "route": "sessions",
+        "ring_id": null,
+        "highlight": null,
+        "reason": "ring_click",
+        "placement": {
+          "kind": "beside",
+          "tail_edge": "right",
+          "tail_offset": -30,
+          "width": 400
+        }
+      },
+      "height": "fit"
+    },
+    {
+      "name": "panel-tail-top",
+      "page": "agentnotch/panel.html",
+      "global": "agentnotchPanel",
+      "scene": "panel-every-state",
+      "width": 440,
+      "panel": {
+        "route": "sessions",
+        "ring_id": null,
+        "highlight": null,
+        "reason": "ring_click",
+        "placement": {
+          "kind": "above_or_below",
+          "tail_edge": "top",
+          "tail_offset": 0,
+          "width": 440
+        }
+      },
+      "height": "fit"
+    },
+    {
+      "name": "panel-tail-bottom",
+      "page": "agentnotch/panel.html",
+      "global": "agentnotchPanel",
+      "scene": "panel-every-state",
+      "width": 440,
+      "panel": {
+        "route": "sessions",
+        "ring_id": null,
+        "highlight": null,
+        "reason": "ring_click",
+        "placement": {
+          "kind": "above_or_below",
+          "tail_edge": "bottom",
+          "tail_offset": 60,
+          "width": 440
+        }
+      },
+      "height": "fit"
     }
   ]
 }
