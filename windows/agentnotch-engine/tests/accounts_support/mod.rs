@@ -143,6 +143,12 @@ impl Home {
         make_dir_link(&link, "", target);
     }
 
+    /// Removes a directory link made with `link_dir` or `link_to`, leaving
+    /// what it pointed to alone.
+    pub fn remove_link(&self, link: &str) {
+        remove_dir_link(Path::new(&self.path(link)));
+    }
+
     /// The registry's file in the (temporary) support folder.
     pub fn accounts_file(&self) -> PathBuf {
         self.roots.support_file("accounts.json")
@@ -395,6 +401,17 @@ fn make_dir_link(link: &Path, target_as_written: &str, target_absolute: &str) {
         .status()
         .expect("run mklink");
     assert!(status.success(), "mklink /J {link:?} {target:?}");
+}
+
+#[cfg(unix)]
+fn remove_dir_link(link: &Path) {
+    std::fs::remove_file(link).expect("remove a symbolic link");
+}
+
+#[cfg(not(unix))]
+fn remove_dir_link(link: &Path) {
+    // A junction is removed as the (empty) directory it is, never followed.
+    std::fs::remove_dir(link).expect("remove a junction");
 }
 
 // ---- folders written out by hand ----

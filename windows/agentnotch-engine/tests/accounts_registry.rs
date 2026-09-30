@@ -8,11 +8,13 @@ mod accounts_support;
 
 use accounts_support::{after, Home};
 use agentnotch_engine::accounts::classify::{self, Discovery, FolderSuggestion, SuggestionReason};
-use agentnotch_engine::accounts::snapshot::has_live_session;
+use agentnotch_engine::accounts::snapshot::{has_live_session, SESSION_FILE_SLACK};
 use agentnotch_engine::accounts::{AccountError, FolderMarkers};
 use agentnotch_engine::core::claude_json::has_login;
 use agentnotch_engine::model::{FolderKind, FolderSource};
+use agentnotch_engine::platform::Liveness;
 use std::collections::HashMap;
+use std::time::Duration;
 
 const T0: u64 = 0;
 
@@ -57,6 +59,9 @@ fn discovery_rules() {
     home.sign_in(".claude-backup/.claude.json", "me@work.com", "u-work", None);
     home.mkdir(".claude-old-2025/sessions"); // a dated copy: suggest
     home.write(".claude-old-2025/sessions/1.json", "{}");
+    // Its session file names a process that runs (pid 1 always does on the
+    // Mac): a backup's name still wins.
+    home.processes.add(1, 0, "launchd", after(T0));
     home.mkdir(".claude-server-commander"); // an MCP server's folder: nothing
     home.write(".claude-server-commander/config.json", "{}");
     home.mkdir(".claude-mem"); // a look-alike with a config but no login: suggest at most
@@ -423,6 +428,68 @@ fn a_link_to_home_is_home() {
     assert!(registry.check_folder(&home.path("homelink")).is_err());
 }
 
+/// A `~\.claude-x` that is a link to the home folder looks signed in (it
+/// shows `~\.claude.json` as its own), but it is the home folder: discovery
+/// never adds or suggests it. A session can name it before any read of the
+/// disk has looked; the read then drops it, and later sightings leave it out.
+#[test]
+fn a_link_to_home_is_never_discovered_and_a_sighted_one_is_dropped_for_good() {
+    let home = Home::new();
+    home.mkdir(".claude/projects");
+    home.sign_in(".claude.json", "me@x.com", "u-def", None);
+    home.link_dir(".claude-loop", "");
+    let looped = home.path(".claude-loop");
+    let dirs = |registry: &agentnotch_engine::accounts::AccountRegistry| -> Vec<String> {
+        registry
+            .known_folders()
+            .iter()
+            .map(|f| f.dir().to_owned())
+            .collect()
+    };
+
+    let mut registry = home.registry();
+    assert_eq!(dirs(&registry), home.paths_of(&[".claude"]));
+    assert!(registry.suggestions().is_empty());
+    // Known to be the home folder already: a session naming it adds nothing.
+    let changed = registry.record(
+        home.sighting(".claude-loop", Some(&looped), after(1)),
+        after(1),
+    );
+    assert!(!changed.any(), "{changed:?}");
+    assert_eq!(dirs(&registry), home.paths_of(&[".claude"]));
+
+    // A registry that hears of it from a session first takes it at its word,
+    // asks for a read, and drops it when the read shows what it is.
+    let mut fresh = home.bare_registry(&[]);
+    let heard = fresh.record(
+        home.sighting(".claude-loop", Some(&looped), after(1)),
+        after(1),
+    );
+    assert_eq!(heard.new_run_folders, vec![home.id(".claude-loop")]);
+    assert!(fresh.needs_discovery());
+    let read = home.discover_at(&mut fresh, after(2));
+    assert_eq!(read.removed_folders, vec![home.id(".claude-loop")]);
+    assert_eq!(dirs(&fresh), home.paths_of(&[".claude"]));
+    assert!(!fresh.needs_discovery());
+    let again = fresh.record(
+        home.sighting(".claude-loop", Some(&looped), after(100)),
+        after(100),
+    );
+    assert!(!again.any(), "{again:?}");
+    assert_eq!(dirs(&fresh), home.paths_of(&[".claude"]));
+    // It is not remembered as something the user forgot.
+    assert!(!fresh.is_forgotten(&looped));
+    assert!(fresh.suggestions().is_empty());
+
+    // Once the link points at a folder of its own, it is a folder like any other.
+    home.remove_link(".claude-loop");
+    home.mkdir(".claude-loop/projects");
+    home.sign_in(".claude-loop/.claude.json", "me@loop.io", "u-loop", None);
+    home.discover_at(&mut fresh, after(200));
+    assert_eq!(dirs(&fresh).len(), 2);
+    assert!(fresh.folder(&looped).is_some());
+}
+
 /// A link to a folder that contains home holds every account too.
 #[test]
 fn a_link_to_a_folder_containing_home_is_refused() {
@@ -566,6 +633,65 @@ fn a_live_session_needs_a_positive_pid_the_table_lists() {
     assert!(has_live_session(paths, &dir, home.processes.as_ref()));
     home.processes.remove(500);
     assert!(!has_live_session(paths, &dir, home.processes.as_ref()));
+}
+
+/// Windows hands a pid out again soon after its process ends. A process
+/// writes its own session file, so a file last written before the pid's
+/// process started was left by an earlier process: no live session.
+#[test]
+fn a_session_file_older_than_its_pids_process_is_a_leftover() {
+    let home = Home::new();
+    let paths = &home.paths;
+    let dir = home.path(".claude-work");
+    home.write(".claude-work/sessions/700.json", "{}");
+    let written = std::fs::metadata(home.path(".claude-work/sessions/700.json"))
+        .and_then(|meta| meta.modified())
+        .expect("the session file's time");
+    let second = Duration::from_secs(1);
+
+    // Started before the file was written (every real session), or no later
+    // than the two clocks can differ: its own file.
+    for started in [
+        written - Duration::from_secs(3600),
+        written,
+        written + SESSION_FILE_SLACK,
+    ] {
+        home.processes.add(700, 1, "claude.exe", started);
+        assert!(
+            has_live_session(paths, &dir, home.processes.as_ref()),
+            "{started:?} against {written:?}"
+        );
+    }
+    // Started after the file's last write: the pid is another process's now.
+    home.processes
+        .add(700, 1, "notepad.exe", written + SESSION_FILE_SLACK + second);
+    assert!(!has_live_session(paths, &dir, home.processes.as_ref()));
+    // So discovery only suggests the folder (history, nobody signed in).
+    let discovery = found(&home, &[]);
+    assert!(discovery.accounts.is_empty(), "{:?}", discovery.accounts);
+    assert_eq!(
+        discovery.suggestions,
+        vec![FolderSuggestion {
+            config_dir: dir.clone(),
+            reason: SuggestionReason::Found,
+        }]
+    );
+
+    // A process whose start time can't be read (another user's, say) is
+    // taken at its word, as before.
+    home.processes.remove(700);
+    assert!(!has_live_session(paths, &dir, home.processes.as_ref()));
+    home.processes.set_liveness(700, Liveness::Alive);
+    assert!(has_live_session(paths, &dir, home.processes.as_ref()));
+    home.processes.clear_liveness(700);
+
+    // One leftover beside a session that does run: the folder has a live one.
+    home.processes
+        .add(700, 1, "notepad.exe", written + Duration::from_secs(60));
+    home.write(".claude-work/sessions/701.json", "{}");
+    home.processes.add(701, 1, "claude.exe", after(T0));
+    assert!(has_live_session(paths, &dir, home.processes.as_ref()));
+    assert_eq!(found(&home, &[]).accounts, home.paths_of(&[".claude-work"]));
 }
 
 #[test]

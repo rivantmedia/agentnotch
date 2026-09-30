@@ -16,6 +16,7 @@ use crate::model::{ConfigRead, FolderFacts, FolderSnapshot};
 use crate::platform::{Liveness, Processes, Roots, SecureFiles};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 /// One read of the home folder for discovery (a job on `an-io`): `~\.claude`,
 /// every `~\.claude-*` / `~\.claude_*` folder, every VS Code window's working
@@ -191,15 +192,44 @@ pub fn folder_facts(
     }
 }
 
+/// How much later than its session file's last write a process may have
+/// started and still be the one that wrote it: the two times come from
+/// clocks of different resolution (a FAT volume keeps two-second stamps).
+pub const SESSION_FILE_SLACK: Duration = Duration::from_secs(5);
+
 /// `sessions\` holds a `<pid>.json` whose process runs. The file is never
 /// opened, and the `.key` files beside it are never touched.
 pub fn has_live_session(paths: &Paths, config_dir: &str, procs: &dyn Processes) -> bool {
-    child_names(&paths.join(config_dir, "sessions"))
-        .iter()
-        .filter_map(|name| name.strip_suffix(".json"))
-        .filter_map(|stem| stem.parse::<i32>().ok())
-        .filter(|pid| *pid > 0)
-        .any(|pid| procs.liveness(pid as u32) == Liveness::Alive)
+    let sessions = paths.join(config_dir, "sessions");
+    child_names(&sessions).iter().any(|name| {
+        let pid = name
+            .strip_suffix(".json")
+            .and_then(|stem| stem.parse::<i32>().ok())
+            .filter(|pid| *pid > 0);
+        pid.is_some_and(|pid| {
+            procs.liveness(pid as u32) == Liveness::Alive
+                && !is_left_behind(&paths.join(&sessions, name), pid as u32, procs)
+        })
+    })
+}
+
+/// The session file was left by a process that ended, and its pid is another
+/// process's now: Windows hands a pid out again soon after its process ends
+/// (§4.2: every pid is paired with a start time). A process writes its own
+/// session file, so the file is never older than the process; one last
+/// written before the pid's process started names an earlier process. Said
+/// only when both times are known; the file is asked for its times, not
+/// opened.
+fn is_left_behind(session_file: &str, pid: u32, procs: &dyn Processes) -> bool {
+    let written = std::fs::metadata(session_file)
+        .ok()
+        .and_then(|meta| meta.modified().ok());
+    match (procs.start_time(pid), written) {
+        (Some(started), Some(written)) => started
+            .duration_since(written)
+            .is_ok_and(|later| later > SESSION_FILE_SLACK),
+        _ => false,
+    }
 }
 
 /// Who a `.claude.json` names, when the file exists and has ever parsed.

@@ -276,6 +276,11 @@ pub struct AccountRegistry {
     seen_again_ids: BTreeMap<String, String>,
     /// What the last discovery found but did not add.
     discovered_suggestions: Vec<FolderSuggestion>,
+    /// Folders a read of the disk showed to be the home folder, or to hold
+    /// it, through a link (by `Paths::key`). A sighting can't tell, so one
+    /// for such a folder would add it again after every read that dropped
+    /// it. Kept for this run only, until a read shows otherwise.
+    links_to_home: BTreeSet<String>,
 
     /// Folders no read of the disk has covered yet (by `Paths::key`): seen in
     /// a session or added by hand since the last read was planned.
@@ -315,6 +320,7 @@ impl AccountRegistry {
             removed_ids: BTreeMap::new(),
             seen_again_ids: BTreeMap::new(),
             discovered_suggestions: Vec::new(),
+            links_to_home: BTreeSet::new(),
             pending_facts: BTreeSet::new(),
             dirty: false,
             rings: FolderRings::default(),
@@ -789,6 +795,19 @@ impl AccountRegistry {
         );
         self.layout = found.layout.clone();
         self.has_classified = true;
+        for facts in &snap.folders {
+            let key = paths.key(&facts.path);
+            let resolved = (facts.canonical.as_deref(), snap.home_canonical.as_deref());
+            // As written it may well be an account; only the resolved form
+            // says it is the home folder.
+            if can_be_account(&paths, &facts.path, None, None)
+                && !can_be_account(&paths, &facts.path, resolved.0, resolved.1)
+            {
+                self.links_to_home.insert(key);
+            } else {
+                self.links_to_home.remove(&key);
+            }
+        }
 
         let mut folders = std::mem::take(&mut self.folders);
         let count = folders.len();
@@ -1032,6 +1051,14 @@ impl AccountRegistry {
     }
 
     /// A hook or status line event came from this config folder.
+    ///
+    /// A folder first heard of here has not been looked at (the registry
+    /// never reads the disk): it is taken for a run folder until the next
+    /// read says what it is, and that read drops it again if it turns out
+    /// to be the home folder through a link (later sightings then leave it
+    /// alone). `needs_discovery` asks for that read at once; whoever acts on
+    /// `new_run_folders` from a sighting acts on a folder nothing has
+    /// checked yet.
     pub fn record(&mut self, sighting: AccountSighting, now: SystemTime) -> AccountsChanged {
         if self.holds_fixtures {
             return AccountsChanged::default();
@@ -1051,10 +1078,10 @@ impl AccountRegistry {
         let before = self.summary();
 
         let Some(index) = self.index_of(&id) else {
-            if !can_be_account(&paths, &id, None, None) {
+            let key = paths.key(&id);
+            if !can_be_account(&paths, &id, None, None) || self.links_to_home.contains(&key) {
                 return AccountsChanged::default();
             }
-            let key = paths.key(&id);
             if self.removed_ids.contains_key(&key) {
                 // Forgotten on purpose: ask, don't re-add.
                 if self.seen_again_ids.insert(key, id).is_none() {
