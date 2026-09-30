@@ -146,8 +146,6 @@ pub(super) struct Anchor {
 }
 
 /// Where the panel is, and what it was placed by.
-// Read by the self-test, which comes with `selftest.rs`.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct Placed {
     pub(super) anchor: Anchor,
@@ -155,8 +153,6 @@ pub(super) struct Placed {
 }
 
 /// Where the open panel was last put; `None` while it is closed.
-// Read by the self-test, which comes with `selftest.rs`.
-#[allow(dead_code)]
 pub(super) fn placed() -> Option<Placed> {
     state().placed
 }

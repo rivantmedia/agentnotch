@@ -286,8 +286,6 @@ impl<S: WindowService> Core<S> {
     /// path a real confirmation takes (a hosted runner may refuse the panel the foreground, so
     /// the test can't wait for a real one). Answers whether it was taken: never outside a sealed
     /// run, never for a closed panel. The next real look at the foreground overrules it.
-    // Reached from the self-test, which comes with `selftest.rs`.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn confirm_for_self_test(&self) -> bool {
         if !self.sealed {
             return false;
@@ -570,8 +568,6 @@ pub(super) fn timer(timer: Timer) {
 }
 
 /// See [`Core::confirm_for_self_test`].
-// Reached from the self-test, which comes with `selftest.rs`.
-#[allow(dead_code)]
 pub(super) fn confirm_for_self_test() -> bool {
     CORE.get().is_some_and(Core::confirm_for_self_test)
 }

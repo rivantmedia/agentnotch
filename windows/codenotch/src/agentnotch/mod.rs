@@ -25,6 +25,7 @@ mod menu;
 mod panel;
 mod panel_window;
 mod selftest;
+mod selftest_report;
 mod setup;
 mod tray;
 mod update;
