@@ -430,7 +430,7 @@ fn a_link_to_a_folder_containing_home_is_refused() {
     let parent = home.paths.parent(&home.home()).expect("home has a parent");
     let link = home.path("upwards");
     std::fs::create_dir_all(home.path("")).expect("home");
-    make_link(&home, "upwards", &parent);
+    home.link_to("upwards", &parent);
     let mut registry = home.registry();
     assert_eq!(
         registry.add_folder(&link),
@@ -589,20 +589,4 @@ fn a_linked_sessions_folder_says_nothing_about_the_folder() {
     assert!(shared_link.has_sessions);
     assert!(!shared_link.has_live_session);
     assert!(facts(".claude-b").has_live_session);
-}
-
-/// A directory link to an absolute `target` (the parent of home, which the
-/// fixture's own `link_dir` can't name relative to the home folder).
-fn make_link(home: &Home, link: &str, target: &str) {
-    let link = home.path(link);
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(target, &link).expect("a link");
-    #[cfg(windows)]
-    {
-        let status = std::process::Command::new("cmd")
-            .args(["/c", "mklink", "/J", &link, target])
-            .output()
-            .expect("mklink");
-        assert!(status.status.success(), "mklink /J failed");
-    }
 }

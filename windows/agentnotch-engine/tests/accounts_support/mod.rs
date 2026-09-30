@@ -136,6 +136,13 @@ impl Home {
         make_dir_link(&link, target, &self.path(target));
     }
 
+    /// A directory link at `link` (inside the home folder) to the absolute
+    /// folder `target`, wherever it is.
+    pub fn link_to(&self, link: &str, target: &str) {
+        let link = PathBuf::from(self.path(link));
+        make_dir_link(&link, "", target);
+    }
+
     /// The registry's file in the (temporary) support folder.
     pub fn accounts_file(&self) -> PathBuf {
         self.roots.support_file("accounts.json")
