@@ -231,8 +231,22 @@ fn git_bash_candidates(get: impl Fn(&str) -> Option<String>) -> Vec<String> {
     candidates
 }
 
+/// A variable the Git Bash lookup reads. Windows sets `ProgramFiles` itself in every 64-bit
+/// process it starts, whatever environment the parent passed (Claude Code reads that same
+/// value), so a test cannot hide an installed Git that way. Debug builds (never the shipped
+/// exe) take both Program Files folders from a test switch instead.
+fn lookup_variable(name: &str) -> Option<String> {
+    #[cfg(debug_assertions)]
+    if name.starts_with("ProgramFiles") {
+        if let Some(root) = io::env_text("AGENTNOTCH_HOOK_TEST_PROGRAM_FILES") {
+            return Some(root);
+        }
+    }
+    io::env_text(name)
+}
+
 fn find_git_bash() -> Option<PathBuf> {
-    git_bash_candidates(io::env_text)
+    git_bash_candidates(lookup_variable)
         .into_iter()
         .map(PathBuf::from)
         .find(|candidate| candidate.is_file())

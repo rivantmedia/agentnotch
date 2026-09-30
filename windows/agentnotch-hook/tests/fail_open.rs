@@ -68,6 +68,7 @@ fn exe_command(exe: &Path, args: &[&str]) -> Command {
         "AGENTNOTCH_HOOK_TRACE",
         "AGENTNOTCH_HOOK_TEST_PANIC",
         "AGENTNOTCH_HOOK_TEST_PREVIOUS_TIMEOUT_MS",
+        "AGENTNOTCH_HOOK_TEST_PROGRAM_FILES",
         "AGENTNOTCH_STATUSLINE_DEPTH",
     ] {
         command.env_remove(name);
@@ -628,8 +629,9 @@ fn without_git_bash_the_status_line_prints_nothing() {
     wrapper.previous("echo chained");
     let trace = trace_file();
     // Git uninstalled, the Program Files folders still there: every place Claude Code looks
-    // exists and holds no Git. (Only removing the two variables from the child's environment
-    // did not keep the runner's child from finding the real Git Bash.)
+    // exists and holds no Git. Windows sets `ProgramFiles` itself in every 64-bit process,
+    // whatever its parent passed, so the folders are handed over through the debug build's
+    // test switch (the CI runner has Git in the real one).
     let no_git = wrapper.folder.join("Program Files without Git");
     std::fs::create_dir_all(&no_git).expect("an empty Program Files");
     let mut command = wrapper.command(&trace);
@@ -638,12 +640,9 @@ fn without_git_bash_the_status_line_prints_nothing() {
             "CLAUDE_CODE_GIT_BASH_PATH",
             wrapper.folder.join("no-such-bash.exe"),
         )
-        .env("ProgramFiles", &no_git)
-        .env("ProgramFiles(x86)", &no_git);
-    let seen = lookup_environment_seen(&command);
+        .env("AGENTNOTCH_HOOK_TEST_PROGRAM_FILES", &no_git);
     let done = run(command, Stdin::Bytes(STATUS));
-    // The trace first: when the output is wrong, it says which way the wrapper went, and what a
-    // program started with the same environment sees says why.
+    // The trace first: when the output is wrong, it says which way the wrapper went.
     assert_eq!(
         traced(&trace, done.pid),
         [
@@ -651,40 +650,9 @@ fn without_git_bash_the_status_line_prints_nothing() {
             "chain: no git bash",
             "env claude_pid=unset config_dir=unset",
             "no app"
-        ],
-        "a child started this way sees: {seen}"
+        ]
     );
     assert_silent_success(&done, "no Git Bash");
-}
-
-/// The Git Bash lookup's variables as a program started with `command`'s environment sees them.
-fn lookup_environment_seen(command: &Command) -> String {
-    let mut probe = if cfg!(windows) {
-        let mut probe = Command::new("cmd.exe");
-        probe.args([
-            "/d",
-            "/c",
-            "set ProgramFiles & set CLAUDE_CODE_GIT_BASH_PATH",
-        ]);
-        probe
-    } else {
-        let mut probe = Command::new("/bin/sh");
-        probe.args([
-            "-c",
-            "env | grep -E '^(ProgramFiles|CLAUDE_CODE_GIT_BASH_PATH)'",
-        ]);
-        probe
-    };
-    for (name, value) in command.get_envs() {
-        match value {
-            Some(value) => probe.env(name, value),
-            None => probe.env_remove(name),
-        };
-    }
-    match probe.output() {
-        Ok(output) => String::from_utf8_lossy(&output.stdout).into_owned(),
-        Err(error) => format!("(no probe: {error})"),
-    }
 }
 
 /// The app never wraps a command written for another shell (the engine's rule). One forced into
