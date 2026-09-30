@@ -91,7 +91,9 @@ fn glue_method(
         }
         "panel_toggle" => {
             let reason = text("reason").unwrap_or_else(|| "ring_click".into());
-            panel::toggle(app, text("ring_id"), reason);
+            // A rect that doesn't parse is no rect: the panel then hangs off the middle of the
+            // notch instead of off a ring that isn't where the page said.
+            panel::toggle(app, text("ring_id"), reason, ring_rect(args.get("rect")));
             Ok(json!({}))
         }
         "panel_close" => {
@@ -118,6 +120,9 @@ fn glue_method(
             Ok(json!({}))
         }
         "open_settings" => {
+            // `{tab}` is accepted and ignored: upstream's `settings_window::open` takes no page
+            // to land on (its window opens on the page it was last left on), and the fork adds
+            // no seam for one.
             crate::settings_window::open(app);
             Ok(json!({}))
         }
@@ -131,6 +136,17 @@ fn glue_method(
     Some(reply)
 }
 
+/// `panel_toggle`'s `rect`: `[x, y, w, h]`, the clicked ring in physical pixels from the top-left
+/// of the calling window's client area. Exactly four finite numbers, no negative size.
+fn ring_rect(value: Option<&Value>) -> Option<panel::RingRect> {
+    let numbers = value?.as_array()?;
+    let [x, y, w, h] = numbers.as_slice() else {
+        return None;
+    };
+    let rect = [x.as_f64()?, y.as_f64()?, w.as_f64()?, h.as_f64()?];
+    (rect.iter().all(|n| n.is_finite()) && rect[2] >= 0.0 && rect[3] >= 0.0).then_some(rect)
+}
+
 pub(super) fn error(code: &str, message: impl Into<String>) -> CallError {
     CallError {
         code: code.to_string(),
@@ -140,7 +156,44 @@ pub(super) fn error(code: &str, message: impl Into<String>) -> CallError {
 
 #[cfg(test)]
 mod tests {
-    use super::allowed;
+    use serde_json::{json, Value};
+
+    use super::{allowed, ring_rect};
+
+    #[test]
+    fn panel_toggles_rect_is_four_finite_numbers_with_a_size_that_isnt_negative() {
+        let parse = |value: Value| ring_rect(Some(&value));
+        assert_eq!(
+            parse(json!([12, 300.5, 44, 44])),
+            Some([12.0, 300.5, 44.0, 44.0])
+        );
+        // A point, and a ring left of or above the window's corner, are rects too.
+        assert_eq!(parse(json!([0, 0, 0, 0])), Some([0.0; 4]));
+        assert_eq!(
+            parse(json!([-8, -4.5, 44, 44])),
+            Some([-8.0, -4.5, 44.0, 44.0])
+        );
+
+        assert_eq!(ring_rect(None), None);
+        for wrong in [
+            json!(null),
+            json!([]),
+            json!([1, 2, 3]),
+            json!([1, 2, 3, 4, 5]),
+            json!([1, 2, -3, 4]),
+            json!([1, 2, 3, -0.5]),
+            json!([1, 2, "3", 4]),
+            json!([1, 2, null, 4]),
+            json!([[1, 2, 3, 4]]),
+            json!({ "x": 1, "y": 2, "w": 3, "h": 4 }),
+            json!("1,2,3,4"),
+            // Too large for a float: JSON has no NaN or infinity of its own, and a number that
+            // can't be read as one is refused rather than rounded to infinity.
+            serde_json::from_str::<Value>("[1, 2, 1e999, 4]").unwrap_or(json!([1, 2, "inf", 4])),
+        ] {
+            assert_eq!(parse(wrong.clone()), None, "{wrong}");
+        }
+    }
 
     #[test]
     fn glue_only_calls_are_refused_to_every_page() {

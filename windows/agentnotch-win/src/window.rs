@@ -35,9 +35,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowW, FlashWindowEx, GetCursorPos, GetForegroundWindow, GetWindow, GetWindowLongPtrW,
     GetWindowRect, GetWindowThreadProcessId, IsWindow, IsWindowVisible, SendMessageW,
-    SetForegroundWindow, SetWindowPos, FLASHWINFO, FLASHW_ALL, FLASHW_TIMERNOFG, GWL_EXSTYLE,
-    GW_HWNDPREV, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WM_COPYDATA,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    SetForegroundWindow, SetWindowPos, ShowWindow, FLASHWINFO, FLASHW_ALL, FLASHW_TIMERNOFG,
+    GWL_EXSTYLE, GW_HWNDPREV, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SW_SHOWNOACTIVATE, WM_COPYDATA, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
 };
 
 /// A rectangle in physical screen pixels: `right` and `bottom` are exclusive, as Win32 has them.
@@ -142,6 +142,19 @@ pub fn raise_topmost(window: isize) -> bool {
         )
     }
     .is_ok()
+}
+
+/// Shows a hidden window without activating it (`SW_SHOWNOACTIVATE`): how a panel that opened
+/// by itself appears. tao shows with `SW_SHOW` after a window's first show, and that activates
+/// even a `WS_EX_NOACTIVATE` window. `false` when the window is gone.
+pub fn show_no_activate(window: isize) -> bool {
+    if !exists(window) {
+        return false;
+    }
+    // SAFETY: changes only the window's visibility; its answer is the previous visibility, which
+    // nobody needs.
+    let _ = unsafe { ShowWindow(hwnd(window), SW_SHOWNOACTIVATE) };
+    true
 }
 
 /// The foreground window, if any.

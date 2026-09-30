@@ -276,6 +276,9 @@ pub mod window {
     pub fn raise_topmost(_window: isize) -> bool {
         false
     }
+    pub fn show_no_activate(_window: isize) -> bool {
+        false
+    }
     pub fn foreground() -> Option<isize> {
         None
     }

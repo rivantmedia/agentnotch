@@ -15,6 +15,9 @@
 //!   shown while keys still reach the terminal could answer a prompt there (§9, R6).
 //! - **Closing.** The panel is hidden and the gate shut. The saved window gets the foreground
 //!   back only if the panel held it (otherwise the user has moved on) and the window still exists.
+//! - **Where it goes.** The rules only hand on what they were told (the ring, the rect the notch's
+//!   page measured, list or chat, the content's height); the window service asks the engine's
+//!   `geometry::panel` for the frame.
 //! - **Reports.** Every change goes to the hub as `panel_state`, in order, through one thread.
 //!
 //! When an auto-opened panel closes by itself is the engine's rule (`control`, on the state
@@ -23,7 +26,7 @@
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use agentnotch_engine::geometry::panel::{height_cap_css, PanelMode, MINIMUM_HEIGHT_CSS};
+use agentnotch_engine::geometry::panel::PanelMode;
 use agentnotch_engine::model::ui::PanelRequest;
 use serde_json::{json, Value};
 use tauri::AppHandle;
@@ -31,8 +34,6 @@ use tauri::AppHandle;
 use super::panel_window::PanelWindow;
 
 pub(super) const LABEL: &str = "agentnotch-panel";
-/// The panel's width until it is placed beside its ring (the list's width on a flat edge).
-pub(super) const WIDTH: f64 = 440.0;
 /// The list, every account or one ring's.
 const LIST: &str = "sessions";
 /// A chat's route is this followed by the session's id.
@@ -50,15 +51,31 @@ pub(super) enum Timer {
     Confirm,
 }
 
+/// A ring as the notch's page measured it: `[x, y, w, h]` in physical pixels, from the top-left
+/// of the notch window's client area.
+pub(super) type RingRect = [f64; 4];
+
+/// What the panel is placed by, as far as the rules know it.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct Place {
+    /// The ring the panel hangs off; `None` for every account's list (the hot key, a menu).
+    pub(super) ring_id: Option<String>,
+    /// Where the page says that ring is; `None` when nothing measured it.
+    pub(super) ring: Option<RingRect>,
+    pub(super) mode: PanelMode,
+}
+
 /// What the OS does for the panel. Handles are `HWND`s as `isize`.
 ///
 /// Everything that changes a window is carried out in the order it was asked for, some time
 /// after the call returns (window work belongs to the main thread); the two reads answer at
 /// once. Nothing here may call back into the panel's rules before it returns.
 pub(super) trait WindowService {
-    /// Shows the panel, building it first when it doesn't exist yet (`request` is what the page
-    /// reads before its first script runs). `activate: false` must not take the foreground.
-    fn show(&self, request: &Value, activate: bool);
+    /// Shows the panel where `place` puts it, building it first when it doesn't exist yet, and
+    /// sends the page `an:panel`: `request` plus where it was put (`edge`, `floating`, `width`,
+    /// `tail_offset`). A page that isn't loaded yet reads the same value before its first script
+    /// runs. `activate: false` must not take the foreground.
+    fn show(&self, request: &Value, place: Place, activate: bool);
     fn hide(&self);
     /// Whether a click on the panel may make it the foreground window (`WS_EX_NOACTIVATE` off).
     fn set_focusable(&self, focusable: bool);
@@ -69,13 +86,18 @@ pub(super) trait WindowService {
     fn restore_foreground(&self, window: isize);
     /// The foreground window right now.
     fn foreground(&self) -> Option<isize>;
+    /// The window to give the keyboard back to: the foreground window, or, when that is one of
+    /// this app's own (the notch, after a click on a ring), the last window of another app that
+    /// had it.
+    fn keyboard_owner(&self) -> Option<isize>;
     /// The panel's own window, once it has been built.
     fn panel(&self) -> Option<isize>;
     fn exists(&self, window: isize) -> bool;
     /// Puts the panel above the other topmost windows (the notch) without activating it.
     fn raise_topmost(&self);
-    /// The card's size in CSS px.
-    fn set_size(&self, width: f64, height: f64);
+    /// The open panel shows the list or a chat, and its content is `height` CSS px tall (`None`:
+    /// as tall as before). The window follows, within what its placement allows.
+    fn set_content(&self, mode: PanelMode, height: Option<f64>);
     /// An event for the panel's page.
     fn emit(&self, event: &str, payload: Value);
     /// Hands `timer` to the panel's rules after `ms` milliseconds.
@@ -129,11 +151,12 @@ impl<S: WindowService> Core<S> {
     /// The hub, a page or a menu asked for the panel.
     pub(super) fn open(&self, request: PanelRequest) {
         let mut s = self.lock();
-        self.open_locked(&mut s, request);
+        self.open_locked(&mut s, request, None);
     }
 
     /// A ring clicked: the same ring again closes the panel, another ring moves it there.
-    pub(super) fn toggle(&self, ring_id: Option<String>, reason: String) {
+    /// `ring` is where the notch's page measured that ring.
+    pub(super) fn toggle(&self, ring_id: Option<String>, reason: String, ring: Option<RingRect>) {
         let mut s = self.lock();
         if s.open && s.ring_id == ring_id {
             self.close_locked(&mut s);
@@ -144,7 +167,7 @@ impl<S: WindowService> Core<S> {
                 highlight: None,
                 reason,
             };
-            self.open_locked(&mut s, request);
+            self.open_locked(&mut s, request, ring);
         }
     }
 
@@ -163,9 +186,8 @@ impl<S: WindowService> Core<S> {
         self.close_locked(&mut s);
     }
 
-    /// A mouse button went down outside the panel and the notch.
-    // Reached from the outside-click watch, which comes with the panel's placement.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// A mouse button went down outside the panel and the notch, or the panel lost the keyboard
+    /// to another window.
     pub(super) fn outside_click(&self) {
         let mut s = self.lock();
         if !s.pinned {
@@ -186,7 +208,7 @@ impl<S: WindowService> Core<S> {
                 highlight: None,
                 reason: "hotkey".into(),
             };
-            self.open_locked(&mut s, request);
+            self.open_locked(&mut s, request, None);
         } else if s.focused {
             self.close_locked(&mut s);
         } else {
@@ -198,7 +220,7 @@ impl<S: WindowService> Core<S> {
     pub(super) fn set_route(&self, route: String) {
         let mut s = self.lock();
         s.route = Some(route);
-        // The two have different height caps: the height the page last reported is fitted again.
+        // The two differ in width and in how tall they may get: the window is fitted again.
         if s.open {
             self.resize(&s);
         }
@@ -220,8 +242,9 @@ impl<S: WindowService> Core<S> {
         }
     }
 
-    /// The page's natural content size (CSS px): the window follows the height, within bounds.
-    /// The width is the placement's, not the page's.
+    /// The page's natural content size (CSS px): the window follows the height, within what its
+    /// placement allows (the engine's caps and the work area; the window service asks). The
+    /// width is the placement's, not the page's.
     pub(super) fn report_size(&self, _width: f64, height: f64) {
         if !height.is_finite() || height <= 0.0 {
             return;
@@ -280,13 +303,11 @@ impl<S: WindowService> Core<S> {
     }
 
     /// What the panel shows now.
-    // Read by the self-test.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn status(&self) -> Status {
         self.lock().clone()
     }
 
-    fn open_locked(&self, s: &mut Status, request: PanelRequest) {
+    fn open_locked(&self, s: &mut Status, request: PanelRequest, ring: Option<RingRect>) {
         let auto = request.reason == "auto";
         // Something opening by itself never takes over a panel in use.
         if auto && s.open {
@@ -309,6 +330,11 @@ impl<S: WindowService> Core<S> {
             "reason": request.reason,
         });
         let activate = takes_keyboard(&request.reason);
+        let place = Place {
+            ring_id: request.ring_id.clone(),
+            ring,
+            mode: mode_of(Some(&route)),
+        };
         s.open = true;
         s.route = Some(route);
         s.ring_id = request.ring_id;
@@ -316,16 +342,15 @@ impl<S: WindowService> Core<S> {
         if activate {
             self.save_foreground(s);
             self.service.set_focusable(true);
-            self.service.show(&payload, true);
+            self.service.show(&payload, place, true);
             self.service.request_foreground();
         } else {
             if !was_open {
                 self.service.set_focusable(false);
             }
-            self.service.show(&payload, false);
+            self.service.show(&payload, place, false);
         }
         self.service.raise_topmost();
-        self.service.emit("an:panel", payload);
         if activate {
             self.confirm_later();
         }
@@ -371,7 +396,7 @@ impl<S: WindowService> Core<S> {
     /// the panel wins: a user who went to another window while the panel was open gets that one
     /// back.
     fn save_foreground(&self, s: &mut Status) {
-        match self.service.foreground() {
+        match self.service.keyboard_owner() {
             Some(window) if Some(window) != self.service.panel() => {
                 s.saved_foreground = Some(window);
             }
@@ -406,12 +431,8 @@ impl<S: WindowService> Core<S> {
     }
 
     fn resize(&self, s: &Status) {
-        let Some(height) = s.content_height else {
-            return;
-        };
-        let cap = height_cap_css(mode_of(s.route.as_deref()));
         self.service
-            .set_size(WIDTH, height.clamp(MINIMUM_HEIGHT_CSS, cap));
+            .set_content(mode_of(s.route.as_deref()), s.content_height);
     }
 
     fn report(&self, s: &Status) {
@@ -472,8 +493,13 @@ pub(super) fn open_route(app: &AppHandle, route: String, ring_id: Option<String>
     });
 }
 
-pub(super) fn toggle(app: &AppHandle, ring_id: Option<String>, reason: String) {
-    core(app).toggle(ring_id, reason);
+pub(super) fn toggle(
+    app: &AppHandle,
+    ring_id: Option<String>,
+    reason: String,
+    ring: Option<RingRect>,
+) {
+    core(app).toggle(ring_id, reason, ring);
 }
 
 pub(super) fn close(app: &AppHandle) {
@@ -496,8 +522,22 @@ pub(super) fn take_focus(app: &AppHandle) {
     core(app).take_focus();
 }
 
-// The three below come from places that hold no app handle. Before the first call that has one
+// The ones below come from places that hold no app handle. Before the first call that has one
 // there is no panel, so there is nothing to tell.
+
+/// The window service found nothing left to hang the panel off (its display was unplugged).
+pub(super) fn close_unanchored() {
+    if let Some(core) = CORE.get() {
+        core.close();
+    }
+}
+
+/// See [`Core::outside_click`].
+pub(super) fn outside_click() {
+    if let Some(core) = CORE.get() {
+        core.outside_click();
+    }
+}
 
 pub(super) fn set_route(route: String) {
     if let Some(core) = CORE.get() {
@@ -511,7 +551,8 @@ pub(super) fn set_engaged(on: bool) {
     }
 }
 
-/// The panel's window gained or lost focus (`WindowEvent::Focused`, from `panel_window`).
+/// The panel's window gained or lost focus (`WindowEvent::Focused`), or another window came to
+/// the front while it was open (both from `panel_window`).
 pub(super) fn foreground_changed() {
     if let Some(core) = CORE.get() {
         core.foreground_changed();
@@ -533,8 +574,6 @@ pub(super) fn confirm_for_self_test() -> bool {
 }
 
 /// What the panel shows now; `None` before it was ever asked for.
-// Read by the self-test.
-#[allow(dead_code)]
 pub(super) fn status() -> Option<Status> {
     CORE.get().map(Core::status)
 }
@@ -580,6 +619,8 @@ mod tests {
     const PANEL: isize = 0x700;
     const TERMINAL: isize = 0x100;
     const EDITOR: isize = 0x200;
+    /// The app's own notch window.
+    const NOTCH: isize = 0x600;
     const RING_A: &str = "claude-acct-5f3e1d2c0b9a";
     const RING_B: &str = "claude-acct-8a7b6c5d4e3f";
 
@@ -591,7 +632,7 @@ mod tests {
         RequestForeground,
         RestoreForeground(isize),
         RaiseTopmost,
-        Size(f64, f64),
+        Content(PanelMode, Option<f64>),
         Emit(String, Value),
     }
 
@@ -599,7 +640,11 @@ mod tests {
     struct Desktop {
         ops: Vec<Op>,
         foreground: Option<isize>,
+        /// The last window of another app that had the keyboard, as the service tracks it.
+        other: Option<isize>,
         panel: Option<isize>,
+        /// What each show was placed by, in order.
+        places: Vec<Place>,
         visible: bool,
         windows: HashSet<isize>,
         /// Whether a foreground request is granted (Windows decides, not the asker).
@@ -616,9 +661,11 @@ mod tests {
             Fake(Arc::new(Mutex::new(Desktop {
                 ops: Vec::new(),
                 foreground: Some(TERMINAL),
+                other: None,
                 panel: None,
+                places: Vec::new(),
                 visible: false,
-                windows: HashSet::from([TERMINAL, EDITOR]),
+                windows: HashSet::from([TERMINAL, EDITOR, NOTCH]),
                 grants: false,
                 now: 0,
                 timers: Vec::new(),
@@ -657,12 +704,15 @@ mod tests {
     }
 
     impl WindowService for Fake {
-        fn show(&self, _request: &Value, activate: bool) {
+        fn show(&self, request: &Value, place: Place, activate: bool) {
             let mut d = self.desk();
             d.panel = Some(PANEL);
             d.windows.insert(PANEL);
             d.visible = true;
+            d.places.push(place);
             d.ops.push(Op::Show { activate });
+            // The real service adds where it put the panel; the request itself goes as it came.
+            d.ops.push(Op::Emit("an:panel".into(), request.clone()));
         }
         fn hide(&self) {
             let mut d = self.desk();
@@ -692,6 +742,10 @@ mod tests {
         fn foreground(&self) -> Option<isize> {
             self.desk().foreground
         }
+        fn keyboard_owner(&self) -> Option<isize> {
+            let d = self.desk();
+            d.foreground.filter(|window| *window != NOTCH).or(d.other)
+        }
         fn panel(&self) -> Option<isize> {
             self.desk().panel
         }
@@ -701,8 +755,8 @@ mod tests {
         fn raise_topmost(&self) {
             self.desk().ops.push(Op::RaiseTopmost);
         }
-        fn set_size(&self, width: f64, height: f64) {
-            self.desk().ops.push(Op::Size(width, height));
+        fn set_content(&self, mode: PanelMode, height: Option<f64>) {
+            self.desk().ops.push(Op::Content(mode, height));
         }
         fn emit(&self, event: &str, payload: Value) {
             self.desk().ops.push(Op::Emit(event.to_string(), payload));
@@ -969,23 +1023,27 @@ mod tests {
     #[test]
     fn the_same_ring_closes_and_another_ring_retargets() {
         let rig = Rig::new();
-        rig.core.toggle(Some(RING_A.into()), "ring_click".into());
+        rig.core
+            .toggle(Some(RING_A.into()), "ring_click".into(), None);
         assert!(rig.status().open);
         assert_eq!(rig.status().ring_id.as_deref(), Some(RING_A));
         assert_eq!(rig.status().route.as_deref(), Some(LIST));
 
-        rig.core.toggle(Some(RING_B.into()), "ring_click".into());
+        rig.core
+            .toggle(Some(RING_B.into()), "ring_click".into(), None);
         assert!(rig.status().open);
         assert_eq!(rig.status().ring_id.as_deref(), Some(RING_B));
         assert_eq!(rig.fake.count(&Op::Hide), 0);
         assert_eq!(rig.fake.count(&Op::Show { activate: true }), 2);
 
-        rig.core.toggle(Some(RING_B.into()), "ring_click".into());
+        rig.core
+            .toggle(Some(RING_B.into()), "ring_click".into(), None);
         assert!(!rig.status().open);
         assert_eq!(rig.fake.count(&Op::Hide), 1);
 
         // Closed, the same ring opens it again.
-        rig.core.toggle(Some(RING_B.into()), "ring_click".into());
+        rig.core
+            .toggle(Some(RING_B.into()), "ring_click".into(), None);
         assert!(rig.status().open);
     }
 
@@ -994,7 +1052,8 @@ mod tests {
         let rig = Rig::new();
         rig.open(LIST, Some(RING_A), "auto");
         rig.fake.clear();
-        rig.core.toggle(Some(RING_B.into()), "ring_click".into());
+        rig.core
+            .toggle(Some(RING_B.into()), "ring_click".into(), None);
         let ops = rig.fake.ops();
         assert!(ops.contains(&Op::Focusable(true)));
         assert!(ops.contains(&Op::RequestForeground));
@@ -1257,8 +1316,10 @@ mod tests {
         assert_eq!(rig.fake.count(&Op::Hide), 2);
     }
 
+    // How tall the window gets is the placement's answer (the engine's caps and the work area;
+    // `panel_window`'s tests pin it): the rules hand on what the page said, and only that.
     #[test]
-    fn size_reports_are_clamped_to_the_routes_cap() {
+    fn size_reports_reach_the_window_with_the_routes_mode() {
         let rig = Rig::new();
         rig.open(LIST, Some(RING_A), "ring_click");
         rig.fake.clear();
@@ -1274,21 +1335,23 @@ mod tests {
         assert_eq!(
             rig.fake.ops(),
             vec![
-                Op::Size(WIDTH, 220.0),
-                Op::Size(WIDTH, 431.5),
-                Op::Size(WIDTH, 680.0)
+                Op::Content(PanelMode::List, Some(10.0)),
+                Op::Content(PanelMode::List, Some(431.5)),
+                Op::Content(PanelMode::List, Some(5_000.0)),
             ]
         );
 
-        // A chat may be taller: the height already reported is fitted to the new cap.
+        // A chat is wider and may be taller: the height already reported is fitted again.
         rig.fake.clear();
         rig.core.set_route("session:abc".into());
-        assert_eq!(rig.fake.ops(), vec![Op::Size(WIDTH, 780.0)]);
-        rig.core.report_size(520.0, 10.0);
+        assert_eq!(
+            rig.fake.ops(),
+            vec![Op::Content(PanelMode::Chat, Some(5_000.0))]
+        );
         rig.core.report_size(520.0, 900.0);
         assert_eq!(
             rig.fake.ops()[1..],
-            [Op::Size(WIDTH, 220.0), Op::Size(WIDTH, 780.0)]
+            [Op::Content(PanelMode::Chat, Some(900.0))]
         );
 
         // A closed panel has no size to follow.
@@ -1297,6 +1360,70 @@ mod tests {
         rig.core.report_size(440.0, 300.0);
         rig.core.set_route(LIST.into());
         assert!(rig.fake.ops().is_empty());
+
+        // Opened again, nothing of the old height is left: the route alone is handed on.
+        rig.open(LIST, Some(RING_A), "ring_click");
+        rig.fake.clear();
+        rig.core.set_route("session:abc".into());
+        assert_eq!(rig.fake.ops(), vec![Op::Content(PanelMode::Chat, None)]);
+    }
+
+    #[test]
+    fn the_window_is_placed_by_the_ring_its_rect_and_the_route() {
+        let rig = Rig::new();
+        let rect = [12.0, 300.5, 44.0, 44.0];
+        rig.core
+            .toggle(Some(RING_A.into()), "ring_click".into(), Some(rect));
+        // A chat opened by the hub: no page measured a ring for it.
+        rig.open("session:abc", Some(RING_B), "notification");
+        // One that opens by itself lands on the list, and is placed as the list.
+        rig.core.close();
+        rig.open("session:abc", Some(RING_B), "auto");
+        // The hot key: every account's list.
+        rig.core.close();
+        rig.core.hotkey();
+
+        let place = |ring_id: Option<&str>, ring, mode| Place {
+            ring_id: ring_id.map(str::to_string),
+            ring,
+            mode,
+        };
+        assert_eq!(
+            rig.fake.desk().places,
+            vec![
+                place(Some(RING_A), Some(rect), PanelMode::List),
+                place(Some(RING_B), None, PanelMode::Chat),
+                place(Some(RING_B), None, PanelMode::List),
+                place(None, None, PanelMode::List),
+            ]
+        );
+    }
+
+    // After a click on a ring the notch window may be the foreground window: the keyboard goes
+    // back to the app the user was in, never to the notch.
+    #[test]
+    fn a_ring_click_saves_the_app_the_user_was_in_not_the_notch() {
+        let rig = Rig::new();
+        rig.grants(true);
+        {
+            let mut d = rig.fake.desk();
+            d.foreground = Some(NOTCH);
+            d.other = Some(TERMINAL);
+        }
+        rig.core
+            .toggle(Some(RING_A.into()), "ring_click".into(), None);
+        assert_eq!(rig.status().saved_foreground, Some(TERMINAL));
+        rig.advance(50);
+        rig.core.close();
+        assert_eq!(rig.fake.count(&Op::RestoreForeground(TERMINAL)), 1);
+
+        // No other app's window was ever seen: nothing is saved, nothing restored.
+        let rig = Rig::new();
+        rig.grants(true);
+        rig.fake.desk().foreground = Some(NOTCH);
+        rig.core
+            .toggle(Some(RING_A.into()), "ring_click".into(), None);
+        assert_eq!(rig.status().saved_foreground, None);
     }
 
     #[test]

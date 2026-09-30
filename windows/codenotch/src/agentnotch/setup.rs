@@ -17,7 +17,7 @@ use agentnotch_engine::platform::{Platform, Roots};
 use agentnotch_win::proto;
 use tauri::AppHandle;
 
-use super::{deeplink, emit, selftest, IDENTIFIER};
+use super::{deeplink, emit, panel_window, selftest, IDENTIFIER};
 
 pub fn setup(app: &AppHandle) {
     // Upstream makes its config folder only when it first saves a setting, so on a first launch
@@ -26,6 +26,8 @@ pub fn setup(app: &AppHandle) {
     if let Some(folder) = crate::config::config_path().parent() {
         let _ = std::fs::create_dir_all(folder);
     }
+    // The sessions panel follows the notch from the start, whether or not the hub comes up.
+    panel_window::start(app);
     match panic::catch_unwind(AssertUnwindSafe(|| start(app))) {
         Ok(Ok(())) => {
             let mode = if super::sealed() { "sealed" } else { "live" };
