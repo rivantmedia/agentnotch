@@ -213,7 +213,9 @@ impl IdentityAccount {
             identity_id: self.id.clone(),
             ring_id: self.ring_id.clone(),
             label: self.label(paths),
-            own_label: self.custom_label.clone().filter(|label| !label.is_empty()),
+            // The name the account has without any nickname the hub adds: the
+            // user's own name, else the engine's default (GUX-4, CS-4).
+            own_label: Some(self.label(paths)),
             monogram: self.monogram(paths),
             color_index: palette_slot(self.color_index),
             email: self.email.clone(),

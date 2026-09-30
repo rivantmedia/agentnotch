@@ -392,11 +392,17 @@ impl AccountRegistry {
             }
             folder.config_dir_env = stored.config_dir_env;
             folder.custom_label = stored.custom_label;
+            // Kept as written, so a file another build wrote (the Mac keeps a
+            // spelling per Keychain item) is written back unchanged. Only new
+            // sightings collapse by `Paths::key` (`has_seen`); a spelling that
+            // is already there makes no difference to which login is read.
+            let mut variants: Vec<String> = Vec::new();
             for variant in stored.seen_config_dir_envs.unwrap_or_default() {
-                if !self.has_seen(&folder, &variant) {
-                    folder.seen_config_dir_envs.push(variant);
+                if !variants.contains(&variant) {
+                    variants.push(variant);
                 }
             }
+            folder.seen_config_dir_envs = variants;
             folder.color_index = stored.color_index;
             folder.source = match stored.source.as_str() {
                 "hook" => FolderSource::Hook,

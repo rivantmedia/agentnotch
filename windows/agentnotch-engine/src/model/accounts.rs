@@ -88,7 +88,8 @@ pub struct Account {
     pub ring_id: RingId,
     /// The name shown everywhere.
     pub label: String,
-    /// The user's own name for it, when set.
+    /// The account's own name: the custom one, else the engine's default
+    /// (`label` is this with a nickname applied).
     pub own_label: Option<String>,
     pub monogram: String,
     pub color_index: u8,
