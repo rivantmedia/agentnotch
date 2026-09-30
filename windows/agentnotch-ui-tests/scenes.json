@@ -1,0 +1,113 @@
+{
+  "comment": "Every scene the snapshot tool (tools/render-scenes.cjs) and WP9's self-test render. See README.md for the fields.",
+  "scenes": [
+    {
+      "name": "notch-open-right",
+      "page": "notch.html",
+      "global": "agentnotch",
+      "scene": "notch-open",
+      "edge": "right",
+      "width": 360,
+      "height": 650
+    },
+    {
+      "name": "notch-card-right",
+      "page": "notch.html",
+      "global": "agentnotch",
+      "scene": "notch-card",
+      "edge": "right",
+      "width": 360,
+      "height": 650
+    },
+    {
+      "name": "notch-folded-right",
+      "page": "notch.html",
+      "global": "agentnotch",
+      "scene": "notch-folded",
+      "edge": "right",
+      "width": 360,
+      "height": 650
+    },
+    {
+      "name": "notch-open-left",
+      "page": "notch.html",
+      "global": "agentnotch",
+      "scene": "notch-open",
+      "edge": "left",
+      "width": 360,
+      "height": 650
+    },
+    {
+      "name": "notch-card-left",
+      "page": "notch.html",
+      "global": "agentnotch",
+      "scene": "notch-card",
+      "edge": "left",
+      "width": 360,
+      "height": 650
+    },
+    {
+      "name": "notch-folded-left",
+      "page": "notch.html",
+      "global": "agentnotch",
+      "scene": "notch-folded",
+      "edge": "left",
+      "width": 360,
+      "height": 650
+    },
+    {
+      "name": "notch-open-top",
+      "page": "notch.html",
+      "global": "agentnotch",
+      "scene": "notch-open",
+      "edge": "top",
+      "width": 650,
+      "height": 650
+    },
+    {
+      "name": "notch-card-top",
+      "page": "notch.html",
+      "global": "agentnotch",
+      "scene": "notch-card",
+      "edge": "top",
+      "width": 650,
+      "height": 650
+    },
+    {
+      "name": "notch-folded-top",
+      "page": "notch.html",
+      "global": "agentnotch",
+      "scene": "notch-folded",
+      "edge": "top",
+      "width": 650,
+      "height": 650
+    },
+    {
+      "name": "notch-open-bottom",
+      "page": "notch.html",
+      "global": "agentnotch",
+      "scene": "notch-open",
+      "edge": "bottom",
+      "width": 650,
+      "height": 650
+    },
+    {
+      "name": "notch-card-bottom",
+      "page": "notch.html",
+      "global": "agentnotch",
+      "scene": "notch-card",
+      "edge": "bottom",
+      "width": 650,
+      "height": 650
+    },
+    {
+      "name": "notch-folded-bottom",
+      "page": "notch.html",
+      "global": "agentnotch",
+      "scene": "notch-folded",
+      "edge": "bottom",
+      "width": 650,
+      "height": 650
+    }
+  ]
+}
