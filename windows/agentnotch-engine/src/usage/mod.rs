@@ -4,10 +4,11 @@
 //!
 //! Owner: WP4. In: the parser, window ids, merge rules, schedule, probe
 //! planner, probe, locator, environment scrub, versions and the
-//! `.claude.json` reader (re-exported below under their §3.4 paths). Still
-//! WP0 stubs: [`UsageStore`] and [`read_desktop_cache`].
+//! `.claude.json` reader and Claude Desktop's cache reader (re-exported below
+//! under their §3.4 paths). Still a WP0 stub: [`UsageStore`].
 
 pub mod claude_json;
+pub mod desktop;
 pub mod env;
 pub mod locator;
 pub mod merge;
@@ -18,9 +19,8 @@ pub mod ring_windows;
 pub mod schedule;
 pub mod versions;
 
-use crate::model::{AccountUsage, DesktopReading, IdentityId, StatusLineMessage};
+use crate::model::{AccountUsage, IdentityId, StatusLineMessage};
 use crate::persist::usage::UsageStateFile;
-use crate::platform::Roots;
 use crate::runtime_types::{IngestContext, ProbePlan, ProbeResult, RingReading, UsageObservation};
 use std::time::SystemTime;
 
@@ -81,17 +81,8 @@ impl UsageStore {
     }
 }
 
+pub use desktop::{desktop_cache_format, read_desktop_cache};
 pub use env::scrubbed_env;
 pub use locator::locate_claude;
 pub use planner::probe_folder;
 pub use probe::run_probe;
-
-/// A Job on `an-io`.
-pub fn read_desktop_cache(
-    roots: &Roots,
-    organization_uuid: &str,
-    now: SystemTime,
-) -> DesktopReading {
-    let _ = (roots, organization_uuid, now);
-    DesktopReading::Unavailable("Reading Claude Desktop's cache isn't in this build yet.".into())
-}
