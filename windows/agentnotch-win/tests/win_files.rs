@@ -272,7 +272,7 @@ fn hold_open(path: &Path, hold: Duration) -> (JoinHandle<()>, Arc<AtomicBool>) {
 
 /// As `hold_open`, but the holder saves: after `save_after` it writes `bytes` over the file in
 /// place (an editor or Claude Code saving through a handle that doesn't share delete), then
-/// keeps it open until `hold` is up. The flag turns true once the save is flushed.
+/// keeps it open until `hold` is up. The flag turns true as the save begins.
 fn hold_and_save(
     path: &Path,
     save_after: Duration,
@@ -293,10 +293,11 @@ fn hold_and_save(
                 .unwrap();
             opened.send(()).unwrap();
             thread::sleep(save_after);
+            // Before the first byte changes, so a change seen is never ahead of the flag.
+            saved.store(true, Ordering::SeqCst);
             held.set_len(0).unwrap();
             held.write_all(&bytes).unwrap();
             held.sync_all().unwrap();
-            saved.store(true, Ordering::SeqCst);
             thread::sleep(hold.saturating_sub(save_after));
             drop(held);
         })
