@@ -5,8 +5,9 @@
 //! - `AGENTNOTCH_PANEL_SELF_TEST=1` (+ `AGENTNOTCH_SELF_TEST_OUT=<json>`) is the smoke test's
 //!   self-test: the app drives its own panel over every edge, looks at what Windows made of it
 //!   and into its three pages, writes a report and exits 0 (nothing wrong) or 1;
-//! - `AGENTNOTCH_SNAPSHOT_CLAUDE=<dir>` is the snapshot run. It isn't in this build yet: a run
-//!   that asks for it says so and exits 1, so no check can mistake it for a passing one.
+//! - `AGENTNOTCH_SNAPSHOT_CLAUDE=<dir>` is the snapshot run (`snapshots.rs`): PNGs of the
+//!   pages in their states and a manifest. Beside the self-test it runs after it, and the two
+//!   share one exit code.
 //!
 //! None of them does anything unless the run is sealed.
 //!
@@ -37,7 +38,7 @@ use super::panel_window::{self, Placed};
 use super::selftest_report::{
     self as report, EdgeReport, Rect, Report, Step, FLOATING, NOTCH, PANEL, SETTINGS,
 };
-use super::{panel, webview};
+use super::{panel, snapshots, webview};
 
 /// The whole run. Past it the watchdog writes what there is and ends the process.
 const DEADLINE: Duration = Duration::from_secs(120);
@@ -166,16 +167,40 @@ pub(super) fn start(app: &AppHandle) {
             }
         });
     }
+    if !switches.self_test && switches.snapshots.is_none() {
+        return;
+    }
+    app.listen_any("notch_edge", |_| {
+        NOTCH_EDGE_EVENTS.fetch_add(1, Ordering::Relaxed);
+    });
     if switches.self_test {
-        start_self_test(app, switches.out);
-    } else if switches.snapshots.is_some() {
-        let reason = "the sealed snapshots aren't available in this build";
-        let failing = Report::new(&version(app)).stopped(reason.into());
-        if let Err(e) = report::write(switches.out.as_deref(), &failing) {
-            super::log(&format!("self-test: the report could not be written: {e}"));
-        }
-        super::log(reason);
-        app.exit(1);
+        start_self_test(app, switches.out, switches.snapshots);
+    } else if let Some(dir) = switches.snapshots {
+        start_snapshots(app, dir);
+    }
+}
+
+/// The snapshot run alone: its own thread (page probes never run on the main one), then the
+/// process ends with its verdict.
+fn start_snapshots(app: &AppHandle, dir: PathBuf) {
+    super::log(&format!(
+        "snapshots: start (at most {} s)",
+        snapshots::DEADLINE.as_secs()
+    ));
+    let app = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("an-snapshots".into())
+        .spawn(move || {
+            let code = panic::catch_unwind(AssertUnwindSafe(|| snapshots::run(&app, &dir)))
+                .unwrap_or_else(|_| {
+                    super::log("snapshots: the run panicked");
+                    1
+                });
+            quit(Some(&app), code);
+        });
+    if spawned.is_err() {
+        super::log("snapshots: the thread could not be started");
+        std::process::exit(1);
     }
 }
 
@@ -183,16 +208,13 @@ fn version(app: &AppHandle) -> String {
     app.package_info().version.to_string()
 }
 
-fn start_self_test(app: &AppHandle, out: Option<PathBuf>) {
+fn start_self_test(app: &AppHandle, out: Option<PathBuf>, snapshots: Option<PathBuf>) {
     *progress() = Some((Step::Settle, Report::new(&version(app))));
     super::log(&format!(
         "self-test: starts (report file: {}, at most {} s)",
         if out.is_some() { "given" } else { "none" },
         DEADLINE.as_secs()
     ));
-    app.listen_any("notch_edge", |_| {
-        NOTCH_EDGE_EVENTS.fetch_add(1, Ordering::Relaxed);
-    });
 
     let watchdog_out = out.clone();
     let _ = std::thread::Builder::new()
@@ -207,6 +229,7 @@ fn start_self_test(app: &AppHandle, out: Option<PathBuf>) {
                 None,
                 watchdog_out,
                 so_far.stopped(report::timed_out_at(step)),
+                None,
             );
         });
 
@@ -231,7 +254,7 @@ fn start_self_test(app: &AppHandle, out: Option<PathBuf>) {
             } else {
                 report = report.stopped(format!("the self-test panicked at {}", step.name()));
             }
-            end(Some(&app), out, report);
+            end(Some(&app), out, report, snapshots);
         });
 }
 
@@ -240,8 +263,10 @@ fn progress() -> MutexGuard<'static, Option<(Step, Report)>> {
 }
 
 /// Writes the report, says how it went and ends the process with the verdict. Only the first
-/// caller does; `app` is `None` for the watchdog, which must not wait on the app.
-fn end(app: Option<&AppHandle>, out: Option<PathBuf>, report: Report) {
+/// caller does; `app` is `None` for the watchdog, which must not wait on the app. `snapshots`
+/// is the snapshot run the same launch asked for: it goes after the self-test (so the watchdog,
+/// which has the self-test's 120 s, is already out of the way) and its verdict joins the code.
+fn end(app: Option<&AppHandle>, out: Option<PathBuf>, report: Report, snapshots: Option<PathBuf>) {
     if ENDED.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -252,7 +277,23 @@ fn end(app: Option<&AppHandle>, out: Option<PathBuf>, report: Report) {
         super::log(&format!("self-test: failed: {line}"));
     }
     super::log(&report::summary(&report));
-    let code = report::exit_code(&report);
+    let mut code = report::exit_code(&report);
+    if let (Some(app), Some(dir)) = (app, snapshots) {
+        super::log(&format!(
+            "snapshots: start (at most {} s)",
+            snapshots::DEADLINE.as_secs()
+        ));
+        let taken = panic::catch_unwind(AssertUnwindSafe(|| snapshots::run(app, &dir)));
+        code = code.max(taken.unwrap_or_else(|_| {
+            super::log("snapshots: the run panicked");
+            1
+        }));
+    }
+    quit(app, code);
+}
+
+/// Stops the hub and ends the process with `code`. `app` is `None` for the watchdog.
+fn quit(app: Option<&AppHandle>, code: i32) -> ! {
     // Off this thread: the verdict is out, and the process ends whether or not the hub answers.
     let (stopped, wait) = mpsc::channel();
     std::thread::spawn(move || {
@@ -273,9 +314,9 @@ fn end(app: Option<&AppHandle>, out: Option<PathBuf>, report: Report) {
 
 /// Upstream's settings the self-test changes, as it found them.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Found {
-    edge: String,
-    notch_visible: bool,
+pub(super) struct Found {
+    pub(super) edge: String,
+    pub(super) notch_visible: bool,
     tray_visible: bool,
     notch_on_hover: bool,
 }
@@ -686,39 +727,48 @@ impl Run<'_> {
         self.close_panel();
     }
 
-    /// Waits for the panel asked for just now: its window, and where it was put.
     fn opened(&self) -> Option<(isize, Placed)> {
-        let look = || {
-            let open = panel::status().is_some_and(|s| s.open);
-            let handle = self
-                .window(PANEL)
-                .and_then(|page| panel_window::hwnd_of(&page))?;
-            let placed = panel_window::placed()?;
-            (open && window::styles(handle).is_some_and(|s| s.visible)).then_some((handle, placed))
-        };
-        if !wait_for(WINDOW_BUILDS, || look().is_some()) {
-            return None;
-        }
-        std::thread::sleep(LOOKS_ARE_OVER);
-        // Again: the frame the panel settled on, not the first one it had.
-        look()
+        opened(self.app)
     }
 
     fn close_panel(&mut self) {
-        panel::close(self.app);
-        let closed = wait_for(CLOSES, || {
-            !panel::status().is_some_and(|s| s.open) && panel_window::placed().is_none()
-        });
-        if !closed {
+        if !close_panel(self.app) {
             self.fail("agentnotch-panel: the panel did not close".into());
         }
-        std::thread::sleep(CLOSE_SETTLES);
     }
+}
+
+/// Waits for the panel asked for just now: its window, and where it was put.
+pub(super) fn opened(app: &AppHandle) -> Option<(isize, Placed)> {
+    let look = || {
+        let open = panel::status().is_some_and(|s| s.open);
+        let handle = app
+            .get_webview_window(PANEL)
+            .and_then(|page| panel_window::hwnd_of(&page))?;
+        let placed = panel_window::placed()?;
+        (open && window::styles(handle).is_some_and(|s| s.visible)).then_some((handle, placed))
+    };
+    if !wait_for(WINDOW_BUILDS, || look().is_some()) {
+        return None;
+    }
+    std::thread::sleep(LOOKS_ARE_OVER);
+    // Again: the frame the panel settled on, not the first one it had.
+    look()
+}
+
+/// Closes the panel and waits until it is gone; whether it went.
+pub(super) fn close_panel(app: &AppHandle) -> bool {
+    panel::close(app);
+    let closed = wait_for(CLOSES, || {
+        !panel::status().is_some_and(|s| s.open) && panel_window::placed().is_none()
+    });
+    std::thread::sleep(CLOSE_SETTLES);
+    closed
 }
 
 // ---- upstream's switches ----
 
-fn read_found(app: &AppHandle) -> Found {
+pub(super) fn read_found(app: &AppHandle) -> Found {
     let state = app.state::<crate::AppState>();
     let config = state.cfg.lock().unwrap_or_else(|e| e.into_inner());
     Found {
@@ -757,7 +807,7 @@ fn notch_placed(since: u64) -> Result<(), String> {
 }
 
 /// Moves the notch through upstream's own command, which saves the edge and places the notch.
-fn move_notch(app: &AppHandle, edge: &str) -> Result<(), String> {
+pub(super) fn move_notch(app: &AppHandle, edge: &str) -> Result<(), String> {
     let since = NOTCH_EDGE_EVENTS.load(Ordering::Relaxed);
     let to = edge.to_string();
     on_main(app, move |app| {
@@ -768,7 +818,7 @@ fn move_notch(app: &AppHandle, edge: &str) -> Result<(), String> {
 
 /// Shows or hides the notch through upstream's own switch (Settings › Show), leaving the other
 /// two flags as they were found.
-fn show_notch(app: &AppHandle, visible: bool, found: &Found) -> Result<(), String> {
+pub(super) fn show_notch(app: &AppHandle, visible: bool, found: &Found) -> Result<(), String> {
     let since = NOTCH_EDGE_EVENTS.load(Ordering::Relaxed);
     let (tray, on_hover) = (found.tray_visible, found.notch_on_hover);
     on_main(app, move |app| {
@@ -791,7 +841,7 @@ fn show_notch(app: &AppHandle, visible: bool, found: &Found) -> Result<(), Strin
 
 // ---- reading windows and pages ----
 
-fn wait_for(timeout: Duration, mut done: impl FnMut() -> bool) -> bool {
+pub(super) fn wait_for(timeout: Duration, mut done: impl FnMut() -> bool) -> bool {
     let deadline = Instant::now() + timeout;
     loop {
         if done() {

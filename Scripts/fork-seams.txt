@@ -285,6 +285,7 @@ FORBID	ISO	.github/workflows/release.yml	Codenotch-Setup
 FORBID	ISO	.github/workflows/release.yml	taskkill /IM
 FORBID	ISO	.github/workflows/agentnotch-windows.yml	taskkill /IM
 FORBID	ISO	windows/scripts/agentnotch-smoke.ps1	taskkill /IM
+FORBID	ISO	windows/scripts/agentnotch-selftest.ps1	taskkill /IM
 FORBID	ISO	windows/codenotch/nsis/agentnotch-hooks.nsh	codenotch.exe
 ALLOW	windows/Cargo.toml
 ALLOW	windows/Cargo.lock
@@ -313,6 +314,7 @@ ALLOW	windows/agentnotch-release/**
 ALLOW	windows/agentnotch-ui-tests/**
 ALLOW	windows/scripts/agentnotch-build.ps1
 ALLOW	windows/scripts/agentnotch-smoke.ps1
+ALLOW	windows/scripts/agentnotch-selftest.ps1
 ALLOW	windows/scripts/smoke/**
 ALLOW	windows/scripts/check-claude-code-facts.mjs
 ALLOW	windows/tools/**

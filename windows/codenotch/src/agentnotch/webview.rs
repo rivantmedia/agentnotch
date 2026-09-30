@@ -27,8 +27,6 @@ const QUICK: Duration = Duration::from_secs(5);
 const LOAD: Duration = Duration::from_secs(30);
 
 /// The first eight bytes of every PNG file.
-// Until the snapshot run captures pages (wp9-10).
-#[allow(dead_code)]
 const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
 
 /// What runs before any script of the page, in every document created after it was added:
@@ -218,8 +216,6 @@ pub(super) fn collected(window: &WebviewWindow) -> Result<Collected, String> {
 /// activating it) and let it paint (two animation frames) before asking. The image is the
 /// WebView's client area in physical pixels; a transparent page keeps whatever background
 /// WebView2 gives it.
-// Until the snapshot run captures pages (wp9-10).
-#[allow(dead_code)]
 pub(super) fn capture_png(window: &WebviewWindow, timeout: Duration) -> Result<Vec<u8>, String> {
     entry()?;
     checked_png(os::capture(window, timeout)?)
@@ -238,8 +234,6 @@ pub(super) fn device_scale(window: &WebviewWindow) -> Result<f64, String> {
 // ---- pure parts ----
 
 /// Width and height from a PNG's header (its first chunk, IHDR).
-// Until the snapshot run captures pages (wp9-10).
-#[allow(dead_code)]
 pub(super) fn png_size(bytes: &[u8]) -> Result<(u32, u32), String> {
     if !bytes.starts_with(&PNG_SIGNATURE) {
         return Err("not a PNG".into());
@@ -261,8 +255,6 @@ pub(super) fn png_size(bytes: &[u8]) -> Result<(u32, u32), String> {
 }
 
 /// A capture is kept only when it is a PNG with pixels in it.
-// Until the snapshot run captures pages (wp9-10).
-#[allow(dead_code)]
 fn checked_png(bytes: Vec<u8>) -> Result<Vec<u8>, String> {
     if bytes.is_empty() {
         return Err("the capture is empty (is the window shown?)".into());
@@ -440,8 +432,6 @@ mod os {
     }
 
     /// `CapturePreview` as a PNG into a stream in memory; the stream's bytes.
-    // Until the snapshot run captures pages (wp9-10).
-    #[allow(dead_code)]
     pub(super) fn capture(window: &WebviewWindow, timeout: Duration) -> Result<Vec<u8>, String> {
         ask(window, timeout, move |core, reply| {
             let stream = memory_stream()?;
@@ -493,8 +483,6 @@ mod os {
         Err(ONLY_WINDOWS.into())
     }
 
-    // Until the snapshot run captures pages (wp9-10).
-    #[allow(dead_code)]
     pub(super) fn capture(_window: &WebviewWindow, _timeout: Duration) -> Result<Vec<u8>, String> {
         Err(ONLY_WINDOWS.into())
     }
