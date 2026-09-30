@@ -7,6 +7,7 @@
 pub mod commands;
 pub mod events;
 pub mod facts;
+pub mod plan;
 pub mod shell_words;
 pub mod version;
 
