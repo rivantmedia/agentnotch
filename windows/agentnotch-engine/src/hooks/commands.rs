@@ -454,8 +454,15 @@ pub fn takeover(current: Option<&Json>, recogniser: &Recogniser, git_bash: bool)
     }
     let leave = |why: &str| Takeover::LeaveAlone(format!("Status line left alone: {why}"));
     let is_command = current.get("type").and_then(Json::as_str) == Some("command");
+    // With `args` the command is a program run without a shell: wrapping
+    // would leave those on our entry (neither ours nor theirs any more), and
+    // the wrapper chains a command line, not a program and its arguments.
     let command = match current.get("command").and_then(Json::as_str) {
-        Some(command) if is_command && !command.trim().is_empty() => command,
+        Some(command)
+            if is_command && !command.trim().is_empty() && current.get("args").is_none() =>
+        {
+            command
+        }
         _ => return leave("it isn't a plain command"),
     };
     if let Some(shell) = current.get("shell") {

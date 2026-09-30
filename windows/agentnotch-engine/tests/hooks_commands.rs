@@ -805,6 +805,9 @@ fn only_a_plain_command_object_is_wrapped() {
         r#"{"type":"command","command":""}"#,
         r#"{"type":"command","command":"   "}"#,
         r#"{"type":"command","command":5}"#,
+        // A program and its arguments, run without a shell.
+        r#"{"type":"command","command":"node","args":["sl.js"]}"#,
+        r#"{"type":"command","command":"sl.sh","args":[]}"#,
         "{}",
         "[]",
         r#""bash x.sh""#,

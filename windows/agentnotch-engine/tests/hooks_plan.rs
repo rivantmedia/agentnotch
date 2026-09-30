@@ -1185,9 +1185,14 @@ fn a_rewrap_never_chains_to_itself() {
 /// Git Bash: anything else is left exactly as it is, with the reason.
 #[test]
 fn a_status_line_it_does_not_understand_is_left_alone() {
-    let cases: [(&str, bool, &str); 14] = [
+    let cases: [(&str, bool, &str); 15] = [
         (r#""echo hi""#, true, "it isn't a plain command"),
         (r#"{"command":"echo hi"}"#, true, "it isn't a plain command"),
+        (
+            r#"{"type":"command","command":"node","args":["status.js"]}"#,
+            true,
+            "it isn't a plain command",
+        ),
         (
             r#"{"type":"command","command":"  "}"#,
             true,
