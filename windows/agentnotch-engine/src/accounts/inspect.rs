@@ -63,6 +63,10 @@ pub struct Login {
     pub cached_usage_fetched_at: Option<SystemTime>,
 }
 
+/// 9999-12-31T23:59:59Z in epoch milliseconds: the last moment the report
+/// can write out.
+const LATEST_FETCHED_AT_MS: f64 = 253_402_300_799_000.0;
+
 /// Only the allowed fields of a `.claude.json`.
 pub fn read_login(bytes: &[u8]) -> Option<Login> {
     let fields = json_scan::values(bytes, &["oauthAccount", "cachedUsageUtilization"])?;
@@ -81,9 +85,12 @@ pub fn read_login(bytes: &[u8]) -> Option<Login> {
             .get("accountUuid")
             .and_then(|value| value.as_str())
             .map(str::to_owned);
+        // A number that is no date anyone can print (before 1970, after the
+        // year 9999) is a broken file, not a reading.
         login.cached_usage_fetched_at = inner
             .get("fetchedAtMs")
             .and_then(lenient_number)
+            .filter(|ms| (0.0..=LATEST_FETCHED_AT_MS).contains(ms))
             .and_then(|ms| time::from_secs_f64(ms / 1000.0));
     }
     Some(login)

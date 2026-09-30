@@ -62,6 +62,7 @@ fn biiosid() -> String {
     format!("uuid:{BIIOS_UUID}")
 }
 
+// PP_IdentityTests.theUsersMacHasExactlyTwoAccounts
 #[test]
 fn the_users_mac_has_exactly_two_accounts() {
     let home = Home::new();
@@ -140,6 +141,7 @@ fn the_users_mac_has_exactly_two_accounts() {
     );
 }
 
+// PP_IdentityTests.aWindowThatSwitchedAccountMovesToTheOtherAccount
 #[test]
 fn a_window_that_switched_account_moves_to_the_other_account() {
     let home = Home::new();
@@ -162,6 +164,7 @@ fn a_window_that_switched_account_moves_to_the_other_account() {
     assert_eq!(registry.identities().len(), 2);
 }
 
+// PP_IdentityTests.aDefaultMirroredToTheOtherAccountJoinsIt
 /// The extension mirrors the last-used account into ~/.claude.
 #[test]
 fn a_default_mirrored_to_the_other_account_joins_it() {
@@ -191,6 +194,7 @@ fn a_default_mirrored_to_the_other_account_joins_it() {
     );
 }
 
+// PP_IdentityTests.aHalfMirroredDefaultFollowsItsEmail
 /// The mirror rewrites the email and keeps the rest of `oauthAccount`: the
 /// UUID left behind belongs to the other person, and the email wins.
 #[test]
@@ -224,6 +228,7 @@ fn a_half_mirrored_default_follows_its_email() {
     );
 }
 
+// PP_IdentityTests.anAccountOnlyItsStoreHoldsStillHasARingButRunsNowhere
 #[test]
 fn an_account_only_its_store_holds_still_has_a_ring_but_runs_nowhere() {
     let home = Home::new();
@@ -240,6 +245,7 @@ fn an_account_only_its_store_holds_still_has_a_ring_but_runs_nowhere() {
         .is_some_and(|f| f.kind == FolderKind::Store));
 }
 
+// PP_IdentityTests.aNewWindowJoinsItsAccountAndAClosedOneLeaves
 #[test]
 fn a_new_window_joins_its_account_and_a_closed_one_leaves() {
     let home = Home::new();
@@ -256,6 +262,7 @@ fn a_new_window_joins_its_account_and_a_closed_one_leaves() {
         .is_none());
 }
 
+// PP_IdentityTests.unsignedFolders
 /// Only a folder added by hand keeps "Run ... then /login"; others that
 /// nobody signed in to are listed, with no ring.
 #[test]
@@ -284,6 +291,7 @@ fn unsigned_folders() {
     assert_eq!(unsigned, home.paths_of(&[".claude-windows/0a1b2c3d4e5f"]));
 }
 
+// PP_IdentityTests.aLoneUnsignedDefaultKeepsItsRing
 /// With nobody signed in anywhere, `~/.claude` still has its ring.
 #[test]
 fn a_lone_unsigned_default_keeps_its_ring() {
@@ -299,6 +307,7 @@ fn a_lone_unsigned_default_keeps_its_ring() {
     assert!(!registry.identities()[0].is_signed_in());
 }
 
+// PP_IdentityTests.plainFoldersWithOneLoginAreOneAccount
 /// Without the extension, two folders with one login are one account.
 #[test]
 fn plain_folders_with_one_login_are_one_account() {
@@ -328,6 +337,7 @@ fn plain_folders_with_one_login_are_one_account() {
     assert!(!registry.layout().extension_detected);
 }
 
+// PP_IdentityTests.perFolderChoicesBecomePerIdentityAndPersist
 /// accounts.json from before (a row per folder): name, colour and tracking go
 /// to the identity from its first folder, then persist.
 #[test]
@@ -386,6 +396,7 @@ fn per_folder_choices_become_per_identity_and_persist() {
     assert!(find(&again, BIIOS).unwrap().is_hidden);
 }
 
+// PP_IdentityTests.trackingAndForgettingApplyToTheWholeIdentity
 #[test]
 fn tracking_and_forgetting_apply_to_the_whole_identity() {
     let home = Home::new();
@@ -419,6 +430,7 @@ fn tracking_and_forgetting_apply_to_the_whole_identity() {
     assert!(registry.identity(&biiosid()).is_some());
 }
 
+// PP_IdentityTests.theSharedHistoryCannotBeAddedByHand
 #[test]
 fn the_shared_history_cannot_be_added_by_hand() {
     let home = Home::new();

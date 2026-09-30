@@ -369,6 +369,48 @@ fn only_the_allowed_fields_of_the_cache_are_read() {
 
 // ---- Hub::inspect_accounts ----
 
+// A `fetchedAtMs` that is no date (a broken or hand-edited file) is not a
+// reading: the report is printed without it, never brought down by it.
+#[test]
+fn a_cache_dated_outside_the_calendar_is_no_reading() {
+    for ms in [
+        "9.9e15",
+        "8.64e15",
+        "253402300800000",
+        "-1",
+        "-9.9e15",
+        "1e300",
+        "\"9900000000000000\"",
+    ] {
+        let file = format!(
+            r#"{{"oauthAccount":{{"accountUuid":"u-1","emailAddress":"me@example.com"}},
+                "cachedUsageUtilization":{{"accountUuid":"u-1","fetchedAtMs":{ms},"utilization":{{}}}}}}"#
+        );
+        let login = read_login(file.as_bytes()).expect("a file");
+        assert_eq!(login.cached_usage_fetched_at, None, "{ms}");
+        assert_eq!(login.cached_usage_account_uuid.as_deref(), Some("u-1"));
+
+        let home = Home::new();
+        home.mkdir(".claude-work/projects");
+        home.write(".claude-work/.claude.json", &file);
+        let text = report_of(&home.roots);
+        assert!(text.contains("me@example.com"), "{ms}: {text}");
+        assert!(
+            text.contains("cached usage: none matching this account"),
+            "{ms}: {text}"
+        );
+    }
+    // The last second of the year 9999 is still a date.
+    let last = read_login(
+        br#"{"cachedUsageUtilization":{"accountUuid":"u-1","fetchedAtMs":253402300799000}}"#,
+    )
+    .expect("a file");
+    assert_eq!(
+        last.cached_usage_fetched_at.map(time::iso8601).as_deref(),
+        Some("9999-12-31T23:59:59Z")
+    );
+}
+
 #[test]
 fn the_hub_prints_the_inspection() {
     let temp = tempfile::tempdir().expect("a temporary folder");

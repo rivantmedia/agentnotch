@@ -228,6 +228,7 @@ fn spellings_of_a_custom_folder_are_one_entry() {
     assert_eq!(registry.known_folders().len(), 1);
 }
 
+// AccountRegistryTests.forgottenAccountsComeBackOnlyAsASuggestion
 // A forgotten folder is not re-added by a session, only suggested (and a
 // sighting for one that is not forgotten adds it).
 #[test]

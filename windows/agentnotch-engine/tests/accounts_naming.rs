@@ -32,6 +32,7 @@ fn both() -> [Paths; 2] {
     [mac(), win()]
 }
 
+// AccountNamingTests.codenotchsWordForAnAddress
 #[test]
 fn upstreams_word_for_an_address() {
     assert_eq!(
@@ -62,6 +63,7 @@ fn upstreams_word_for_an_address() {
     }
 }
 
+// AccountNamingTests.baseNames
 #[test]
 fn base_names() {
     for paths in both() {
@@ -106,6 +108,7 @@ fn base_names() {
     );
 }
 
+// AccountNamingTests.distinctAccountsKeepTheShortName
 #[test]
 fn distinct_accounts_keep_the_short_name() {
     for paths in both() {
@@ -120,6 +123,7 @@ fn distinct_accounts_keep_the_short_name() {
     }
 }
 
+// AccountNamingTests.sameDomainFallsBackToTheAddress
 /// Two gmail logins fall back to the whole address, as upstream does.
 #[test]
 fn same_domain_falls_back_to_the_address() {
@@ -135,6 +139,7 @@ fn same_domain_falls_back_to_the_address() {
     }
 }
 
+// AccountNamingTests.sameAddressInTwoOrganizations
 /// The same address in two organizations: the organization tells them apart.
 #[test]
 fn same_address_in_two_organizations() {
@@ -151,6 +156,7 @@ fn same_address_in_two_organizations() {
     }
 }
 
+// AccountNamingTests.sameFolderNameElsewhere
 /// Nothing but the folder to go on, and even that equal: the path.
 #[test]
 fn same_folder_name_elsewhere() {
@@ -174,6 +180,7 @@ fn same_folder_name_elsewhere() {
     assert_ne!(result[one.dir()].monogram, result[two.dir()].monogram);
 }
 
+// AccountNamingTests.customNamesStayAndTakePart
 /// A default name never equals someone's custom one; custom names stay.
 #[test]
 fn custom_names_stay_and_take_part() {
@@ -187,6 +194,7 @@ fn custom_names_stay_and_take_part() {
     }
 }
 
+// AccountNamingTests.badgesNeverCollide
 #[test]
 fn badges_never_collide() {
     for paths in both() {
@@ -211,6 +219,7 @@ fn badges_never_collide() {
     }
 }
 
+// AccountNamingTests.theRegistryAppliesTheNames
 /// The registry names every folder it publishes.
 #[test]
 fn the_registry_applies_the_names() {

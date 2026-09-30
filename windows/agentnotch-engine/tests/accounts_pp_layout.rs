@@ -23,6 +23,7 @@ fn sorted(mut paths: Vec<String>) -> Vec<String> {
     paths
 }
 
+// PP_ClassificationTests.theUsersLayout
 #[test]
 fn the_users_layout() {
     let home = Home::new();
@@ -71,6 +72,7 @@ fn the_users_layout() {
     assert!(shared.link_targets.is_empty());
 }
 
+// PP_ClassificationTests.discoveryAddsDefaultStandaloneWindowsAndStoresNeverTheSharedHistory
 #[test]
 fn discovery_adds_default_standalone_windows_and_stores_never_the_shared_history() {
     let home = Home::new();
@@ -131,6 +133,7 @@ fn discovery_adds_default_standalone_windows_and_stores_never_the_shared_history
     assert!(position(".claude-windows/b9fbb9ecd7cb") < position(".claude-claude"));
 }
 
+// PP_ClassificationTests.storesAreFoundByMarkerOrManifestAlone
 #[test]
 fn stores_are_found_by_marker_or_manifest_alone() {
     let home = Home::new();
@@ -152,6 +155,7 @@ fn stores_are_found_by_marker_or_manifest_alone() {
     assert!(layout.extension_detected);
 }
 
+// PP_ClassificationTests.withoutTheExtensionEveryFolderRuns
 /// Without the extension everything works as before: every folder is a run
 /// folder (grouped by identity later). This is also the native Windows case.
 #[test]
@@ -173,6 +177,7 @@ fn without_the_extension_every_folder_runs() {
     assert!(layout.stores().is_empty() && layout.infrastructure().is_empty());
 }
 
+// PP_ClassificationTests.aLinkTargetIsInfrastructureUnlessItRunsItself
 /// A user who links a profile's history into `~/.claude` by hand still runs
 /// Claude Code in `~/.claude`; an unsigned link target is history.
 #[test]
@@ -201,6 +206,7 @@ fn a_link_target_is_infrastructure_unless_it_runs_itself() {
     assert_eq!(kind(".claude-history"), Some(FolderKind::Infrastructure));
 }
 
+// PP_ClassificationTests.windowFoldersAreRecognised
 #[test]
 fn window_folders_are_recognised() {
     let paths = mac();
@@ -245,6 +251,7 @@ fn window_folders_are_recognised() {
 
 // ---- PPFix_ReviewTests, the classifier half ----
 
+// PPFix_AdoptedProfileTests.anAdoptedProfileIsARunFolderAndAMadeStoreIsAStore
 #[test]
 fn an_adopted_profile_is_a_run_folder_and_a_made_store_is_a_store() {
     let home = Home::new();
@@ -290,6 +297,7 @@ fn an_adopted_profile_is_a_run_folder_and_a_made_store_is_a_store() {
     assert_eq!(layout.adopted(), home.paths_of(&[".claude-work"]));
 }
 
+// PPFix_AdoptedProfileTests.anUnreadableManifestKeepsTheStoresStores
 #[test]
 fn an_unreadable_manifest_keeps_the_stores_stores() {
     let home = Home::new();
@@ -349,6 +357,7 @@ fn an_unreadable_manifest_keeps_the_stores_stores() {
 
 // ---- PP_WindowWatchTests ----
 
+// PP_WindowWatchTests.aNewWindowOrAnAccountSwitchIsNoticed
 #[test]
 fn a_new_window_or_an_account_switch_is_noticed() {
     let home = Home::new();

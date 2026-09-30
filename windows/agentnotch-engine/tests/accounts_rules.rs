@@ -325,6 +325,55 @@ fn home_and_what_holds_it_is_never_an_account() {
     assert!(!can_be_account(&posix, "/Users", None, None));
 }
 
+// An account's id is "its normalized absolute path" (AccountPaths.accountId):
+// a folder named from nowhere is never one, in either style.
+#[test]
+fn a_folder_not_named_in_full_is_never_an_account() {
+    for paths in both() {
+        for relative in [
+            "",
+            ".",
+            "..",
+            "work",
+            ".claude-work",
+            "sub/.claude",
+            "./.claude",
+        ] {
+            assert!(
+                !can_be_account(&paths, relative, None, None),
+                "{relative:?} ({:?})",
+                paths.style()
+            );
+        }
+        // `~` is the home folder's name in full.
+        assert!(can_be_account(&paths, "~/.claude-work", None, None));
+        assert!(!can_be_account(&paths, "~", None, None));
+    }
+    let windows = win();
+    // Drive-relative and root-relative: which folder depends on where one is.
+    for relative in [
+        r"C:work",
+        r"C:.claude-work",
+        r"\Users\me\.claude-work",
+        r"/work",
+        r"sub\.claude",
+    ] {
+        assert!(
+            !can_be_account(&windows, relative, None, None),
+            "{relative}"
+        );
+    }
+    for full in [
+        r"C:\Users\me\.claude-work",
+        r"c:/users/me/.claude-work/",
+        r"\\?\C:\Users\me\.claude-work",
+        r"~\.claude-work",
+        r"\\server\share\me\.claude",
+    ] {
+        assert!(can_be_account(&windows, full, None, None), "{full}");
+    }
+}
+
 // New Windows vectors: drive and UNC share roots.
 #[test]
 fn a_drive_root_and_a_share_root_are_never_accounts() {

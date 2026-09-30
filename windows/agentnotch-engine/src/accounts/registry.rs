@@ -22,9 +22,11 @@
 //! The registry never touches the disk by itself. `an-core` drives it: a
 //! [`FolderSnapshot`] read on a file lane goes into [`AccountRegistry::discover`],
 //! a `.claude.json` read into [`AccountRegistry::apply_claude_json`], and what
-//! is worth saving comes out of [`AccountRegistry::file_bytes`]. Only a folder
-//! the user picks is looked at on the spot, through a [`FolderProbe`], because
-//! the answer goes straight back to Settings.
+//! is worth saving comes out of [`AccountRegistry::file_bytes`]. Two things
+//! are asked of the disk on the spot, through a [`FolderProbe`]: a folder the
+//! user picks, because the answer goes straight back to Settings, and
+//! whether a folder a session names for the first time is the home folder
+//! through a link, because a run folder gets hooks.
 
 use super::classify::{
     self, can_be_account, is_window_dir, shared_store, windows_root, FolderSuggestion, Layout,
@@ -1052,13 +1054,16 @@ impl AccountRegistry {
 
     /// A hook or status line event came from this config folder.
     ///
-    /// A folder first heard of here has not been looked at (the registry
-    /// never reads the disk): it is taken for a run folder until the next
-    /// read says what it is, and that read drops it again if it turns out
-    /// to be the home folder through a link (later sightings then leave it
-    /// alone). `needs_discovery` asks for that read at once; whoever acts on
-    /// `new_run_folders` from a sighting acts on a folder nothing has
-    /// checked yet.
+    /// This runs for every event, so the common case (a known folder, seen
+    /// again within the minute) compares one folder and returns.
+    ///
+    /// A folder first heard of here is asked about once, through the probe:
+    /// a link to the home folder is the home folder, and is never added (as
+    /// on the Mac). What it is for and who is signed in there comes with
+    /// the next read of the disk, which `needs_discovery` asks for at once.
+    /// A registry without a probe can't ask: it takes the folder at its
+    /// word, and that read drops it again if it turns out to be the home
+    /// folder (later sightings then leave it alone).
     pub fn record(&mut self, sighting: AccountSighting, now: SystemTime) -> AccountsChanged {
         if self.holds_fixtures {
             return AccountsChanged::default();
@@ -1075,18 +1080,27 @@ impl AccountRegistry {
         // (which only ever means ~\.claude).
         let raw_env = sighting.config_dir_env.filter(|env| !env.is_empty());
         let variant = raw_env.clone().or_else(|| is_default_dir.then(String::new));
-        let before = self.summary();
 
         let Some(index) = self.index_of(&id) else {
             let key = paths.key(&id);
             if !can_be_account(&paths, &id, None, None) || self.links_to_home.contains(&key) {
                 return AccountsChanged::default();
             }
-            if self.removed_ids.contains_key(&key) {
+            let forgotten = self.removed_ids.contains_key(&key);
+            if forgotten && self.seen_again_ids.contains_key(&key) {
+                // Suggested already: nothing new, and nothing to ask the disk.
+                return AccountsChanged::default();
+            }
+            if self.resolves_to_home(&id) {
+                // Remembered, so its sessions' later events ask nothing.
+                self.links_to_home.insert(key);
+                return AccountsChanged::default();
+            }
+            let before = self.summary();
+            if forgotten {
                 // Forgotten on purpose: ask, don't re-add.
-                if self.seen_again_ids.insert(key, id).is_none() {
-                    self.refresh_suggestions();
-                }
+                self.seen_again_ids.insert(key, id);
+                self.refresh_suggestions();
                 return self.changes_since(&before);
             }
             let mut folder = Folder::new(&paths, &id);
@@ -1129,6 +1143,7 @@ impl AccountRegistry {
         if folder == self.folders[index] {
             return AccountsChanged::default();
         }
+        let before = self.summary();
         let env_changed = folder.config_dir_env != self.folders[index].config_dir_env
             || folder.seen_config_dir_envs.len() != self.folders[index].seen_config_dir_envs.len();
         if env_changed {
@@ -1140,6 +1155,17 @@ impl AccountRegistry {
         self.dirty = true;
         self.publish(folders, Some(now));
         self.changes_since(&before)
+    }
+
+    /// The folder is the home folder, or holds it, once every link on the
+    /// way is resolved: asked of the probe, for a folder no read of the disk
+    /// has covered. False without a probe, and when the disk can't say.
+    fn resolves_to_home(&self, normalized: &str) -> bool {
+        let Some(probe) = &self.probe else {
+            return false;
+        };
+        let (folder, home) = probe.resolved(normalized);
+        !can_be_account(&self.paths, normalized, folder.as_deref(), home.as_deref())
     }
 
     fn is_infrastructure(&self, normalized: &str) -> bool {
@@ -1232,6 +1258,11 @@ impl AccountRegistry {
         let normalized = paths.normalize(path);
         if self.is_infrastructure(&normalized) {
             return Err(AccountError::Infrastructure);
+        }
+        // `work`, `C:work` or `\work` name a folder only from somewhere: this
+        // app's current folder is not the one the user means.
+        if !paths.is_absolute(&normalized) {
+            return Err(AccountError::Missing);
         }
         let probe = self.probe()?;
         let picked = match probe.look(&normalized) {

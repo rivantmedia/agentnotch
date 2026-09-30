@@ -1,6 +1,7 @@
 //! Discovery, logins, suggestions and adding folders against a throwaway
 //! home folder: the first half of the Mac's AccountRegistryTests (sightings,
-//! user actions and persistence are WP3's next sub-task).
+//! user actions and persistence are in `accounts_registry_actions.rs`), and
+//! the Windows rules beside them (links to home, pid reuse, full paths).
 //! Expected paths are built with `Home::path`, so the same file runs on
 //! Windows CI with `C:\` paths and junctions.
 
@@ -9,11 +10,15 @@ mod accounts_support;
 use accounts_support::{after, Home};
 use agentnotch_engine::accounts::classify::{self, Discovery, FolderSuggestion, SuggestionReason};
 use agentnotch_engine::accounts::snapshot::{has_live_session, SESSION_FILE_SLACK};
-use agentnotch_engine::accounts::{AccountError, FolderMarkers};
+use agentnotch_engine::accounts::snapshot::{DiskProbe, FolderProbe, Picked};
+use agentnotch_engine::accounts::{AccountError, AccountRegistry, FolderMarkers};
 use agentnotch_engine::core::claude_json::has_login;
 use agentnotch_engine::model::{FolderKind, FolderSource};
 use agentnotch_engine::platform::Liveness;
+use agentnotch_engine::testkit::StdSecureFiles;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 const T0: u64 = 0;
@@ -41,6 +46,7 @@ fn live_session(home: &Home, folder: &str, pid: u32) {
 
 // ---- Discovery rules ----
 
+// AccountRegistryTests.discoveryRules
 /// Only folders clearly in use are added by themselves: ~\.claude, and
 /// look-alikes that are signed in or have session files. History alone, a
 /// backup's name, ~\.config\claude and foreign folders are not.
@@ -96,6 +102,7 @@ fn discovery_rules() {
     assert_eq!(found.suggestions.len(), 5, "each folder is suggested once");
 }
 
+// AccountRegistryTests.discoveryWithoutDefaultDir
 #[test]
 fn discovery_without_default_dir() {
     let home = Home::new();
@@ -123,6 +130,7 @@ fn a_session_file_of_a_process_that_ended_does_not_add_a_folder() {
     );
 }
 
+// AccountRegistryTests.extraConfigDirsAreAddedButNeverHome
 #[test]
 fn extra_config_dirs_are_added_but_never_home() {
     let home = Home::new();
@@ -147,6 +155,7 @@ fn a_registry_adds_its_extra_config_dirs() {
 
 // ---- The login byte scan ----
 
+// AccountRegistryTests.loginDetectionReadsOnlyForAnAccountObject
 #[test]
 fn login_detection_reads_only_for_an_account_object() {
     let home = Home::new();
@@ -174,6 +183,7 @@ fn login_detection_reads_only_for_an_account_object() {
 
 // ---- Discovery through the registry ----
 
+// AccountRegistryTests.discoverAddsAccountsWithStableColoursAndSuggestsTheRest
 #[test]
 fn discover_adds_accounts_with_stable_colours_and_suggests_the_rest() {
     let home = Home::new();
@@ -229,6 +239,7 @@ fn discover_adds_accounts_with_stable_colours_and_suggests_the_rest() {
     assert!(registry.suggestions().is_empty());
 }
 
+// AccountRegistryTests.dismissedSuggestionsStayDismissed
 #[test]
 fn dismissed_suggestions_stay_dismissed() {
     let home = Home::new();
@@ -252,6 +263,7 @@ fn dismissed_suggestions_stay_dismissed() {
 
 // ---- Identity ----
 
+// AccountRegistryTests.identityFromGlobalConfig
 #[test]
 fn identity_from_global_config() {
     let home = Home::new();
@@ -313,6 +325,7 @@ fn the_default_folders_login_is_read_from_the_home_claude_json() {
     assert_eq!(default.account_uuid(), Some("u-def"));
 }
 
+// AccountRegistryTests.defaultAccountReadsHomeClaudeJson
 #[test]
 fn default_account_reads_home_claude_json() {
     let home = Home::new();
@@ -334,6 +347,7 @@ fn default_account_reads_home_claude_json() {
     );
 }
 
+// AccountRegistryTests.homeIsNeverAnAccount
 #[test]
 fn home_is_never_an_account() {
     let home = Home::new();
@@ -360,6 +374,7 @@ fn home_is_never_an_account() {
 
 // ---- Adding folders ----
 
+// AccountRegistryTests.addFolderRefusesHomeAndItsParents
 #[test]
 fn add_folder_refuses_home_and_its_parents() {
     let home = Home::new();
@@ -369,9 +384,8 @@ fn add_folder_refuses_home_and_its_parents() {
         r#"{"oauthAccount":{"emailAddress":"me@x.com"}}"#,
     );
     let mut registry = home.registry();
-    let refused = |registry: &mut agentnotch_engine::accounts::AccountRegistry, path: &str| {
-        registry.add_folder(path).expect_err(path)
-    };
+    let refused =
+        |registry: &mut AccountRegistry, path: &str| registry.add_folder(path).expect_err(path);
     let parent = home.paths.parent(&home.home()).expect("home has a parent");
     let root = std::path::Path::new(&home.home())
         .ancestors()
@@ -430,8 +444,10 @@ fn a_link_to_home_is_home() {
 
 /// A `~\.claude-x` that is a link to the home folder looks signed in (it
 /// shows `~\.claude.json` as its own), but it is the home folder: discovery
-/// never adds or suggests it. A session can name it before any read of the
-/// disk has looked; the read then drops it, and later sightings leave it out.
+/// never adds or suggests it, and a session naming it before any read of the
+/// disk has looked adds nothing (the registry asks its probe). A registry
+/// with no probe takes the folder at its word; the next read then drops it,
+/// and later sightings leave it out.
 #[test]
 fn a_link_to_home_is_never_discovered_and_a_sighted_one_is_dropped_for_good() {
     let home = Home::new();
@@ -439,7 +455,7 @@ fn a_link_to_home_is_never_discovered_and_a_sighted_one_is_dropped_for_good() {
     home.sign_in(".claude.json", "me@x.com", "u-def", None);
     home.link_dir(".claude-loop", "");
     let looped = home.path(".claude-loop");
-    let dirs = |registry: &agentnotch_engine::accounts::AccountRegistry| -> Vec<String> {
+    let dirs = |registry: &AccountRegistry| -> Vec<String> {
         registry
             .known_folders()
             .iter()
@@ -458,9 +474,21 @@ fn a_link_to_home_is_never_discovered_and_a_sighted_one_is_dropped_for_good() {
     assert!(!changed.any(), "{changed:?}");
     assert_eq!(dirs(&registry), home.paths_of(&[".claude"]));
 
-    // A registry that hears of it from a session first takes it at its word,
-    // asks for a read, and drops it when the read shows what it is.
-    let mut fresh = home.bare_registry(&[]);
+    // A registry that hears of it from a session first asks what it is, and
+    // adds nothing: no run folder anyone could install hooks into, no read
+    // asked for, nothing to save.
+    let mut asking = home.bare_registry(&[]);
+    let refused = asking.record(
+        home.sighting(".claude-loop", Some(&looped), after(1)),
+        after(1),
+    );
+    assert!(!refused.any(), "{refused:?}");
+    assert!(asking.known_folders().is_empty());
+    assert!(!asking.needs_discovery() && !asking.needs_save());
+
+    // One that can't ask takes it at its word, asks for a read, and drops it
+    // when the read shows what it is.
+    let mut fresh = AccountRegistry::new(home.paths.clone());
     let heard = fresh.record(
         home.sighting(".claude-loop", Some(&looped), after(1)),
         after(1),
@@ -488,6 +516,166 @@ fn a_link_to_home_is_never_discovered_and_a_sighted_one_is_dropped_for_good() {
     home.discover_at(&mut fresh, after(200));
     assert_eq!(dirs(&fresh).len(), 2);
     assert!(fresh.folder(&looped).is_some());
+}
+
+/// The real disk, counting how often a sighting asked it what a folder is.
+struct CountingProbe {
+    disk: DiskProbe,
+    asked: AtomicUsize,
+}
+
+impl CountingProbe {
+    fn over(home: &Home) -> Arc<CountingProbe> {
+        Arc::new(CountingProbe {
+            disk: DiskProbe::new(
+                home.paths.clone(),
+                Arc::new(StdSecureFiles),
+                home.processes.clone(),
+            ),
+            asked: AtomicUsize::new(0),
+        })
+    }
+
+    fn asked(&self) -> usize {
+        self.asked.load(Ordering::SeqCst)
+    }
+}
+
+impl FolderProbe for CountingProbe {
+    fn look(&self, dir: &str) -> Picked {
+        self.disk.look(dir)
+    }
+
+    fn create_dir(&self, dir: &str) -> Result<(), String> {
+        self.disk.create_dir(dir)
+    }
+
+    fn resolved(&self, dir: &str) -> (Option<String>, Option<String>) {
+        self.asked.fetch_add(1, Ordering::SeqCst);
+        self.disk.resolved(dir)
+    }
+}
+
+/// AccountRegistry.canBeAccount, as `record` applies it on the Mac: a folder
+/// a session names is never added when it is the home folder, or holds it,
+/// through a link. Such a link needs no telling name and can lie anywhere,
+/// so no read of the home folder would have met it first. The disk is asked
+/// once per folder, not once per event.
+#[test]
+fn a_session_in_a_link_to_home_or_above_it_never_adds_a_run_folder() {
+    let home = Home::new();
+    home.mkdir(".claude/projects");
+    home.mkdir("elsewhere");
+    home.link_dir("elsewhere/profile", "");
+    let parent = home.paths.parent(&home.home()).expect("home has a parent");
+    home.link_to("elsewhere/above", &parent);
+    home.mkdir("elsewhere/real/projects");
+
+    let probe = CountingProbe::over(&home);
+    let mut registry = AccountRegistry::new(home.paths.clone()).with_probe(probe.clone());
+    home.discover_at(&mut registry, after(0));
+    registry.mark_saved();
+    assert_eq!(
+        probe.asked(),
+        0,
+        "a read of the disk asks the probe nothing"
+    );
+
+    for (n, link) in ["elsewhere/profile", "elsewhere/above"].iter().enumerate() {
+        let path = home.path(link);
+        for second in 1..=3 {
+            let changed = registry.record(
+                home.sighting(link, Some(&path), after(second * 100)),
+                after(second * 100),
+            );
+            assert!(!changed.any(), "{link}: {changed:?}");
+            assert!(changed.new_run_folders.is_empty(), "{link}");
+        }
+        assert!(registry.folder(&path).is_none(), "{link}");
+        assert_eq!(probe.asked(), n + 1, "{link} is asked about once");
+    }
+    assert_eq!(registry.known_folders().len(), 1);
+    assert!(registry.suggestions().is_empty());
+    assert!(!registry.needs_discovery() && !registry.needs_save());
+
+    // A folder of its own beside them is a run folder like any other: asked
+    // about when first met, never again once it is known.
+    let real = home.path("elsewhere/real");
+    let added = registry.record(
+        home.sighting("elsewhere/real", Some(&real), after(500)),
+        after(500),
+    );
+    assert_eq!(added.new_run_folders, vec![home.id("elsewhere/real")]);
+    assert_eq!(probe.asked(), 3);
+    for second in [600, 700] {
+        registry.record(
+            home.sighting("elsewhere/real", Some(&real), after(second)),
+            after(second),
+        );
+    }
+    assert_eq!(probe.asked(), 3);
+
+    // A forgotten folder a session runs in again is suggested once, and its
+    // later events ask nothing either.
+    registry.remove(&real);
+    for second in [800, 900, 1000] {
+        registry.record(
+            home.sighting("elsewhere/real", Some(&real), after(second)),
+            after(second),
+        );
+    }
+    assert_eq!(probe.asked(), 4);
+    assert_eq!(
+        registry.suggestions(),
+        [FolderSuggestion {
+            config_dir: real,
+            reason: SuggestionReason::SeenAgain,
+        }]
+    );
+}
+
+/// An account's id is its folder's full path. A folder named from nowhere
+/// (`work`, or on Windows a path with no drive) is never one: it would be
+/// read, and given hooks, under whatever folder this app runs in.
+#[test]
+fn a_folder_that_is_not_named_in_full_is_never_an_account() {
+    let home = Home::new();
+    home.mkdir(".claude/projects");
+    let mut registry = home.registry();
+    let before = registry.known_folders().len();
+    for relative in ["", ".", "work", ".claude-work", "sub/.claude-work", "../x"] {
+        let sighting = agentnotch_engine::model::AccountSighting {
+            config_dir: agentnotch_engine::model::AccountId::new(relative),
+            config_dir_env: Some(relative.to_owned()),
+            session_id: agentnotch_engine::model::SessionId::new("s"),
+            at: after(1),
+        };
+        let changed = registry.record(sighting, after(1));
+        assert!(!changed.any(), "{relative:?}: {changed:?}");
+        if !relative.is_empty() {
+            assert_eq!(
+                registry.add_folder(relative),
+                Err(AccountError::Missing),
+                "{relative:?}"
+            );
+        }
+    }
+    assert_eq!(registry.known_folders().len(), before);
+    assert!(registry.suggestions().is_empty());
+
+    // Nor does one load from a file that names it.
+    let text = format!(
+        r#"{{"version":2,"removedIds":[],"accounts":[
+          {{"id":"work","configDir":"work","colorIndex":1,"isHidden":false,"source":"hook"}},
+          {{"id":"","configDir":"","colorIndex":2,"isHidden":false,"source":"hook"}},
+          {{"id":{full},"configDir":{full},"colorIndex":3,"isHidden":false,"source":"hook"}}
+        ]}}"#,
+        full = serde_json::to_string(&home.path(".claude-full")).unwrap()
+    );
+    let mut loaded = home.bare_registry(&[]);
+    assert!(loaded.load(text.as_bytes()));
+    let dirs: Vec<&str> = loaded.known_folders().iter().map(|f| f.dir()).collect();
+    assert_eq!(dirs, vec![home.path(".claude-full")]);
 }
 
 /// A link to a folder that contains home holds every account too.
@@ -547,7 +735,7 @@ fn add_folder_refuses_the_shared_history_and_the_windows_folder() {
 fn a_registry_without_a_probe_cannot_check_folders() {
     let home = Home::new();
     home.mkdir("somewhere");
-    let mut registry = agentnotch_engine::accounts::AccountRegistry::new(home.paths.clone());
+    let mut registry = AccountRegistry::new(home.paths.clone());
     assert_eq!(
         registry.add_folder(&home.path("somewhere")),
         Err(AccountError::Unavailable)
@@ -584,6 +772,7 @@ fn the_refusals_say_what_is_wrong() {
         .starts_with("That folder is Claude Parallel Profiles' shared history"));
 }
 
+// AccountRegistryTests.folderMarkersSayWhetherToAsk
 #[test]
 fn folder_markers_say_whether_to_ask() {
     let home = Home::new();

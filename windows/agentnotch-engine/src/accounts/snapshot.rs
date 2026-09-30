@@ -321,6 +321,14 @@ pub trait FolderProbe: Send + Sync {
     fn look(&self, dir: &str) -> Picked;
     /// Makes the folder (and what is missing above it).
     fn create_dir(&self, dir: &str) -> Result<(), String>;
+    /// `dir` and the home folder with every link on the way resolved
+    /// (normalized), each `None` when it can't be resolved. Asked when a
+    /// session names a folder nobody knows: nothing inside the folder is
+    /// read. A probe that can't tell says so.
+    fn resolved(&self, dir: &str) -> (Option<String>, Option<String>) {
+        let _ = dir;
+        (None, None)
+    }
 }
 
 /// [`FolderProbe`] over the real disk.
@@ -363,6 +371,14 @@ impl FolderProbe for DiskProbe {
             has_settings: Path::new(&self.paths.join(&path, "settings.json")).exists(),
             home_canonical: canonical(&self.paths, self.files.as_ref(), self.paths.home()),
         }))
+    }
+
+    fn resolved(&self, dir: &str) -> (Option<String>, Option<String>) {
+        let files = self.files.as_ref();
+        (
+            canonical(&self.paths, files, &self.paths.normalize(dir)),
+            canonical(&self.paths, files, self.paths.home()),
+        )
     }
 
     fn create_dir(&self, dir: &str) -> Result<(), String> {

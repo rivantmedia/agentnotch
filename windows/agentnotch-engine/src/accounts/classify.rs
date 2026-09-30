@@ -444,6 +444,10 @@ fn is_root_or_bare_drive(paths: &Paths, dir: &str) -> bool {
 /// The home folder, and anything holding it, can never be an account: not
 /// as written, and not through a link (`~\.claude-x` → `~`). The resolved
 /// forms are compared when both are known.
+///
+/// Nor can a folder that isn't named in full (`work`, `C:work`, `\work`, or
+/// nothing at all): an account's id is its absolute path, and a relative one
+/// would be read, and given hooks, under whatever folder this app runs in.
 pub fn can_be_account(
     paths: &Paths,
     dir: &str,
@@ -453,7 +457,8 @@ pub fn can_be_account(
     let home = paths.home().to_owned();
     // A root (`/`, `C:\`, a share's `\\server\share`, a bare `C:`) holds
     // more than the home folder: a share root is not even above it.
-    let as_written = !is_root_or_bare_drive(paths, dir)
+    let as_written = paths.is_absolute(&paths.normalize(dir))
+        && !is_root_or_bare_drive(paths, dir)
         && !paths.same(dir, &home)
         && !paths.is_ancestor(dir, &home);
     let resolved = match (dir_canonical, home_canonical) {
