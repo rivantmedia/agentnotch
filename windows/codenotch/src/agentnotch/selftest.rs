@@ -5,6 +5,8 @@
 //! - `AGENTNOTCH_PANEL_SELF_TEST=1` (+ `AGENTNOTCH_SELF_TEST_OUT=<json>`) is the smoke test's
 //!   self-test: the app drives its own panel over every edge, looks at what Windows made of it
 //!   and into its three pages, writes a report and exits 0 (nothing wrong) or 1;
+//!   with `AGENTNOTCH_SELF_TEST_SCALE=1.25` (or `1.5`, …) its three pages are drawn at that
+//!   scale instead of the monitor's, and the run fails unless they then say they are;
 //! - `AGENTNOTCH_SNAPSHOT_CLAUDE=<dir>` is the snapshot run (`snapshots.rs`): PNGs of the
 //!   pages in their states and a manifest. Beside the self-test it runs after it, and the two
 //!   share one exit code.
@@ -174,7 +176,7 @@ pub(super) fn start(app: &AppHandle) {
         NOTCH_EDGE_EVENTS.fetch_add(1, Ordering::Relaxed);
     });
     if switches.self_test {
-        start_self_test(app, switches.out, switches.snapshots);
+        start_self_test(app, switches.out, switches.snapshots, switches.scale);
     } else if let Some(dir) = switches.snapshots {
         start_snapshots(app, dir);
     }
@@ -208,7 +210,12 @@ fn version(app: &AppHandle) -> String {
     app.package_info().version.to_string()
 }
 
-fn start_self_test(app: &AppHandle, out: Option<PathBuf>, snapshots: Option<PathBuf>) {
+fn start_self_test(
+    app: &AppHandle,
+    out: Option<PathBuf>,
+    snapshots: Option<PathBuf>,
+    scale: Option<String>,
+) {
     *progress() = Some((Step::Settle, Report::new(&version(app))));
     super::log(&format!(
         "self-test: starts (report file: {}, at most {} s)",
@@ -239,6 +246,7 @@ fn start_self_test(app: &AppHandle, out: Option<PathBuf>, snapshots: Option<Path
     let _ = std::thread::Builder::new()
         .name("an-selftest".into())
         .spawn(move || {
+            let scale = scale.as_deref().map(report::wanted_scale).transpose();
             let mut run = Run {
                 app: &app,
                 report: Report::new(&version(&app)),
@@ -246,7 +254,11 @@ fn start_self_test(app: &AppHandle, out: Option<PathBuf>, snapshots: Option<Path
                 found: read_found(&app),
                 ring: None,
                 session: None,
+                scale: scale.clone().unwrap_or(None),
             };
+            if let Err(unreadable) = scale {
+                run.fail(unreadable);
+            }
             let finished = panic::catch_unwind(AssertUnwindSafe(|| run.all())).is_ok();
             let (step, mut report) = (run.step, run.report);
             if finished {
@@ -329,6 +341,8 @@ struct Run<'a> {
     /// The first ring and the first session of the sealed hub.
     ring: Option<String>,
     session: Option<String>,
+    /// The scale the pages are to be drawn at; none leaves them at their monitor's.
+    scale: Option<f64>,
 }
 
 impl Run<'_> {
@@ -452,6 +466,15 @@ impl Run<'_> {
         let Some(page) = self.window(label) else {
             return self.fail(format!("{label}: no window to look into"));
         };
+        // Before the reload below, so the page loads at the scale it is then checked at.
+        if let Some(scale) = self.scale {
+            match webview::set_scale(&page, scale) {
+                Ok(now) => super::log(&format!(
+                    "self-test: {label} asked to draw at {scale}, WebView2 says {now}"
+                )),
+                Err(e) => self.fail(format!("{label}: the page's scale could not be set: {e}")),
+            }
+        }
         match webview::install_collector(&page) {
             Ok(()) => super::log(&format!("self-test: collector in {label}")),
             Err(e) => self.fail(format!(
@@ -685,6 +708,24 @@ impl Run<'_> {
             .find_map(|page| webview::device_scale(&page).ok());
         if self.report.scale.is_none() {
             self.fail("no page could say its device scale".into());
+        }
+        // The notch is left out: upstream zooms its page back to the monitor's scale
+        // (`report_dpr`), as it does on a monitor whose scale WebView2 got wrong.
+        for label in [PANEL, SETTINGS] {
+            let drawn = self
+                .window(label)
+                .and_then(|page| webview::device_scale(&page).ok());
+            super::log(&format!(
+                "self-test: {label} draws at {drawn:?} (asked: {:?})",
+                self.scale
+            ));
+            if let Some(wanted) = self.scale {
+                if !drawn.is_some_and(|drawn| report::scale_is(wanted, drawn)) {
+                    self.fail(format!(
+                        "{label}: the page draws at {drawn:?}, not at the {wanted} asked for"
+                    ));
+                }
+            }
         }
         for label in [NOTCH, SETTINGS, PANEL] {
             let Some(page) = self.window(label) else {

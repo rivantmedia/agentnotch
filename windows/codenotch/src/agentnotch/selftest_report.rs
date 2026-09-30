@@ -37,6 +37,9 @@ pub(super) struct Switches {
     /// `AGENTNOTCH_SELF_TEST_OUT`: where the report goes. Without it the run still happens and
     /// still exits with its verdict.
     pub(super) out: Option<PathBuf>,
+    /// `AGENTNOTCH_SELF_TEST_SCALE`, as it was written: the scale the self-test's pages are
+    /// to be drawn at ([`wanted_scale`] reads it). Without it they keep their monitor's.
+    pub(super) scale: Option<String>,
 }
 
 /// Reads the switches. Only a sealed run has any: a live app started from a shell that still
@@ -51,7 +54,25 @@ pub(super) fn switches(sealed: bool, env: impl Fn(&str) -> Option<String>) -> Sw
         self_test: set("AGENTNOTCH_PANEL_SELF_TEST").is_some_and(|value| value != "0"),
         snapshots: set("AGENTNOTCH_SNAPSHOT_CLAUDE").map(PathBuf::from),
         out: set("AGENTNOTCH_SELF_TEST_OUT").map(PathBuf::from),
+        scale: set("AGENTNOTCH_SELF_TEST_SCALE"),
     }
+}
+
+/// The scale a run asked for. One that can't be read is an error (the run fails) rather than
+/// a run at the monitor's scale that would pass for the one asked for.
+pub(super) fn wanted_scale(text: &str) -> Result<f64, String> {
+    match text.trim().parse::<f64>() {
+        Ok(scale) if scale.is_finite() && (1.0..=5.0).contains(&scale) => Ok(scale),
+        _ => Err(format!(
+            "AGENTNOTCH_SELF_TEST_SCALE is '{text}': not a scale between 1 and 5"
+        )),
+    }
+}
+
+/// Whether a page that says it draws at `drawn` draws at the scale asked for. A page's
+/// `devicePixelRatio` is the scale exactly, give or take how a float is printed.
+pub(super) fn scale_is(wanted: f64, drawn: f64) -> bool {
+    (wanted - drawn).abs() <= 0.01
 }
 
 // ---- the steps ----
@@ -658,6 +679,7 @@ mod tests {
             "AGENTNOTCH_PANEL_SELF_TEST" => Some("1".to_string()),
             "AGENTNOTCH_SELF_TEST_OUT" => Some("/tmp/report.json".to_string()),
             "AGENTNOTCH_SNAPSHOT_CLAUDE" => Some("/tmp/agentnotch-snapshots".to_string()),
+            "AGENTNOTCH_SELF_TEST_SCALE" => Some("1.25".to_string()),
             _ => None,
         };
         // A live app started from a shell that still exports them starts normally.
@@ -672,6 +694,7 @@ mod tests {
             sealed.snapshots,
             Some(PathBuf::from("/tmp/agentnotch-snapshots"))
         );
+        assert_eq!(sealed.scale.as_deref(), Some("1.25"));
 
         // Nothing set, or set to nothing: nothing asked for.
         assert_eq!(switches(true, |_| None), Switches::default());
@@ -687,6 +710,32 @@ mod tests {
         assert!(only("yes").self_test);
         // Without a place for the report the run is still asked for.
         assert_eq!(only("1").out, None);
+    }
+
+    #[test]
+    fn the_asked_scale_is_a_number_a_monitor_can_have_or_an_error() {
+        assert_eq!(wanted_scale("1"), Ok(1.0));
+        assert_eq!(wanted_scale("1.25"), Ok(1.25));
+        assert_eq!(wanted_scale(" 1.5 "), Ok(1.5));
+        assert_eq!(wanted_scale("5"), Ok(5.0));
+        for bad in [
+            "", "big", "0", "0.8", "-1.25", "5.5", "NaN", "inf", "1,25", "125%",
+        ] {
+            let refused = wanted_scale(bad).unwrap_err();
+            assert!(refused.contains(&format!("'{bad}'")), "{refused}");
+        }
+    }
+
+    #[test]
+    fn a_page_draws_at_the_asked_scale_or_the_run_says_so() {
+        assert!(scale_is(1.25, 1.25));
+        assert!(scale_is(1.5, 1.5000000001));
+        assert!(scale_is(1.25, 1.2549999));
+        // What run 36716764131 had: asked for 1.25 and 1.5, drawn at 1.
+        assert!(!scale_is(1.25, 1.0));
+        assert!(!scale_is(1.5, 1.0));
+        assert!(!scale_is(1.25, 1.5));
+        assert!(!scale_is(1.25, f64::NAN));
     }
 
     #[test]

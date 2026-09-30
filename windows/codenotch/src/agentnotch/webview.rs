@@ -221,8 +221,24 @@ pub(super) fn capture_png(window: &WebviewWindow, timeout: Duration) -> Result<V
     checked_png(os::capture(window, timeout)?)
 }
 
-/// The page's `devicePixelRatio`: the scale it really draws at, which a
-/// `--force-device-scale-factor` run changes without changing the monitor's.
+/// Makes the window's page draw at `scale` whatever its monitor's scale is, and gives the scale
+/// WebView2 then reports. The window keeps its size in physical pixels, so the page has
+/// 1/`scale` of them to lay itself out in: what a monitor set to that scale does to a page.
+///
+/// WebView2 takes a page's scale from its host window and ignores Chromium's
+/// `--force-device-scale-factor` (run 36716764131: `devicePixelRatio` stayed 1 under 1.25 and
+/// 1.5), so the scaled self-test runs set it here. The page is laid out again at once; reload
+/// it for a load that happens at the new scale from the start.
+pub(super) fn set_scale(window: &WebviewWindow, scale: f64) -> Result<f64, String> {
+    entry()?;
+    if !scale_allowed(scale) {
+        return Err(format!("{scale} is not a scale a page can be drawn at"));
+    }
+    os::set_scale(window, scale, QUICK)
+}
+
+/// The page's `devicePixelRatio`: the scale it really draws at, which [`set_scale`] changes
+/// without changing the monitor's.
 pub(super) fn device_scale(window: &WebviewWindow) -> Result<f64, String> {
     entry()?;
     match eval(window, DEVICE_SCALE, QUICK)?.as_f64() {
@@ -232,6 +248,12 @@ pub(super) fn device_scale(window: &WebviewWindow) -> Result<f64, String> {
 }
 
 // ---- pure parts ----
+
+/// The scales Windows itself offers for a monitor lie between 100 % and 500 %; below 1 is a
+/// zoomed-out page, which nothing here needs.
+fn scale_allowed(scale: f64) -> bool {
+    scale.is_finite() && (1.0..=5.0).contains(&scale)
+}
 
 /// Width and height from a PNG's header (its first chunk, IHDR).
 pub(super) fn png_size(bytes: &[u8]) -> Result<(u32, u32), String> {
@@ -338,13 +360,13 @@ fn on_main_thread() -> bool {
 
 #[cfg(windows)]
 mod os {
-    use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+    use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
     use std::time::Duration;
 
-    use agentnotch_win::capture::{memory_stream, stream_bytes};
+    use agentnotch_win::capture::{memory_stream, stream_bytes, ComInterface};
     use tauri::WebviewWindow;
     use webview2_com::Microsoft::Web::WebView2::Win32::{
-        ICoreWebView2, COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
+        ICoreWebView2, ICoreWebView2Controller3, COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
     };
     use webview2_com::{
         AddScriptToExecuteOnDocumentCreatedCompletedHandler, CapturePreviewCompletedHandler,
@@ -374,6 +396,14 @@ mod os {
                 }
             })
             .map_err(|e| e.to_string())?;
+        wait(window, &answer, timeout)
+    }
+
+    fn wait<T>(
+        window: &WebviewWindow,
+        answer: &Receiver<Result<T, String>>,
+        timeout: Duration,
+    ) -> Result<T, String> {
         match answer.recv_timeout(timeout) {
             Ok(result) => result,
             Err(RecvTimeoutError::Timeout) => Err(format!(
@@ -386,6 +416,38 @@ mod os {
                 Err(format!("{} closed before it answered", window.label()))
             }
         }
+    }
+
+    /// `RasterizationScale`, with WebView2 told to stop following the monitor's scale (or it
+    /// would put the monitor's back at the next move); the scale it reports afterwards.
+    pub(super) fn set_scale(
+        window: &WebviewWindow,
+        scale: f64,
+        timeout: Duration,
+    ) -> Result<f64, String> {
+        let (reply, answer) = mpsc::channel();
+        window
+            .with_webview(move |webview| {
+                // SAFETY: COM calls on the window's own controller, on the thread that owns it
+                // (`with_webview` runs this closure there); each HRESULT is checked, and `now`
+                // is a valid out pointer for the last call.
+                let set = unsafe {
+                    // Controller3 came with WebView2 runtime 88; an older one refuses the cast.
+                    webview
+                        .controller()
+                        .cast::<ICoreWebView2Controller3>()
+                        .and_then(|controller| {
+                            controller.SetShouldDetectMonitorScaleChanges(false)?;
+                            controller.SetRasterizationScale(scale)?;
+                            let mut now = 0.0f64;
+                            controller.RasterizationScale(&mut now)?;
+                            Ok(now)
+                        })
+                };
+                let _ = reply.send(set.map_err(|e| e.to_string()));
+            })
+            .map_err(|e| e.to_string())?;
+        wait(window, &answer, timeout)
     }
 
     /// `ExecuteScript`: the script's result as JSON text.
@@ -486,6 +548,14 @@ mod os {
     pub(super) fn capture(_window: &WebviewWindow, _timeout: Duration) -> Result<Vec<u8>, String> {
         Err(ONLY_WINDOWS.into())
     }
+
+    pub(super) fn set_scale(
+        _window: &WebviewWindow,
+        _scale: f64,
+        _timeout: Duration,
+    ) -> Result<f64, String> {
+        Err(ONLY_WINDOWS.into())
+    }
 }
 
 #[cfg(test)]
@@ -501,6 +571,16 @@ mod tests {
         bytes.extend_from_slice(&width.to_be_bytes());
         bytes.extend_from_slice(&height.to_be_bytes());
         bytes
+    }
+
+    #[test]
+    fn a_page_is_drawn_only_at_a_scale_a_monitor_can_have() {
+        for scale in [1.0, 1.25, 1.5, 2.0, 5.0] {
+            assert!(scale_allowed(scale), "{scale}");
+        }
+        for scale in [0.0, -1.25, 0.99, 5.01, f64::NAN, f64::INFINITY] {
+            assert!(!scale_allowed(scale), "{scale}");
+        }
     }
 
     #[test]
@@ -685,6 +765,7 @@ mod tests {
                 "install_collector",
                 "collected",
                 "capture_png",
+                "set_scale",
                 "device_scale"
             ]
         );

@@ -3,6 +3,10 @@
   Runs Agent Notch's sealed self-test at 100, 125 and 150 % page scale and one sealed snapshot
   run, and fails on anything wrong (DESIGN-WIN 7.4, 5.6).
 
+  The 125 and 150 % runs ask the app for the scale (AGENTNOTCH_SELF_TEST_SCALE): WebView2 takes
+  a page's scale from its window and ignores --force-device-scale-factor, so the app sets each
+  page's scale itself. A scaled run whose report names another scale fails.
+
 .DESCRIPTION
   Every run is sealed (AGENTNOTCH_SAFE_MODE=1): fixture data only, no Claude folder, no network,
   no child process, and its data in %APPDATA%\Agent Notch Sealed, which is deleted before and
@@ -44,7 +48,7 @@ $SnapshotNames = @(
 )
 $SwitchVariables = @(
   'AGENTNOTCH_SAFE_MODE', 'AGENTNOTCH_PANEL_SELF_TEST', 'AGENTNOTCH_SELF_TEST_OUT',
-  'AGENTNOTCH_SNAPSHOT_CLAUDE', 'WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS'
+  'AGENTNOTCH_SELF_TEST_SCALE', 'AGENTNOTCH_SNAPSHOT_CLAUDE'
 )
 
 $failures = New-Object System.Collections.Generic.List[string]
@@ -129,7 +133,7 @@ function Copy-RunLog([string]$to) {
 
 # ---- the self-test's report ----
 
-function Test-Report([string]$what, [string]$path, $exitCode) {
+function Test-Report([string]$what, [string]$path, $exitCode, [string]$scale) {
   if ($null -ne $exitCode -and $exitCode -ne 0) { Add-Failure "${what}: exit code $exitCode" }
   if (-not (Test-Path -LiteralPath $path)) {
     Add-Failure "${what}: no report at $path"
@@ -147,7 +151,18 @@ function Test-Report([string]$what, [string]$path, $exitCode) {
   foreach ($line in @(Get-Prop $report 'failures')) {
     if ($line) { Add-Failure "${what}: $line" }
   }
-  Write-Host "${what}: scale $(Get-Prop $report 'scale'), version $(Get-Prop $report 'version')"
+  $drawn = Get-Prop $report 'scale'
+  Write-Host "${what}: scale $drawn, version $(Get-Prop $report 'version')"
+  # The first run is the machine as it is (a hosted runner is at 100 %, a desk may not be); a
+  # scaled run must have been drawn at its scale, or it proved nothing about it.
+  if ($scale -ne '1') {
+    $asked = [double]::Parse($scale, [System.Globalization.CultureInfo]::InvariantCulture)
+    $value = $null
+    if ($null -ne $drawn) { $value = $drawn -as [double] }
+    if ($null -eq $value -or [math]::Abs($value - $asked) -gt 0.01) {
+      Add-Failure "${what}: the pages were drawn at scale '$drawn', not $scale"
+    }
+  }
 
   $edges = @(Get-Prop $report 'edges')
   $seen = @($edges | ForEach-Object { Get-Prop $_ 'edge' })
@@ -203,11 +218,11 @@ try {
     $env:AGENTNOTCH_PANEL_SELF_TEST = '1'
     $env:AGENTNOTCH_SELF_TEST_OUT = $report
     if ($scale -ne '1') {
-      $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--force-device-scale-factor=$scale"
+      $env:AGENTNOTCH_SELF_TEST_SCALE = $scale
     }
     $code = Invoke-Sealed $what
     Copy-RunLog (Join-Path $Out "selftest-$scale-run.log")
-    Test-Report $what $report $code
+    Test-Report $what $report $code $scale
     Assert-NoAgentNotch "after $what"
   }
 
