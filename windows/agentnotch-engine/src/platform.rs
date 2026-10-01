@@ -89,7 +89,9 @@ impl ProcessTable {
             let Some(parent) = self.parent(current) else {
                 break;
             };
-            if chain.iter().any(|seen: &&ProcEntry| seen.pid == parent.pid) {
+            // A cycle (equal start times in a racy snapshot) ends the walk,
+            // and never lists `pid` as its own ancestor.
+            if parent.pid == pid || chain.iter().any(|seen: &&ProcEntry| seen.pid == parent.pid) {
                 break;
             }
             chain.push(parent);

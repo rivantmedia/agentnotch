@@ -721,6 +721,10 @@ pub struct ReactionContext {
     pub peek_seconds: u32,
     pub panel: PanelState,
     pub full_screen: bool,
+    /// A terminal or editor window is on screen and not covered
+    /// (`JobResult::Visible`): the panel then peeks instead of opening by
+    /// itself (UI§3.8).
+    pub any_terminal_visible: bool,
     pub looking_at: Option<bool>,
     pub ring_shown: bool,
     pub notch_hidden: bool,
