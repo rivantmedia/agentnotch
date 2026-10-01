@@ -211,6 +211,12 @@ jobs:
             exit 1
           fi
 
+      # The test-only executables the smoke test needs (fake-claude, pipe-test-server):
+      # cargo builds them for an integration test, which this crate may not have yet,
+      # so they are built on their own. Never bundled (not in the installer).
+      - name: Build the test executables
+        run: cargo build --locked -p agentnotch-win --bins
+
       # agentnotch-build.ps1 (DESIGN-WIN §6.1 step 12): VERSION == tauri.conf.json,
       # the hook with its C runtime in its own target dir, the overlay (the
       # version; in a release build the update key and feed), the pinned Tauri
