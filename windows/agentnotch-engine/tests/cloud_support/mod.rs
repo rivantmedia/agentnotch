@@ -230,3 +230,134 @@ impl AuthFixture {
         )
     }
 }
+
+// ---- The ledger's stand-ins (the Mac's `SessionLedgerTests.observation`) ----
+
+use agentnotch_engine::cloud::keys;
+use agentnotch_engine::cloud::ledger::CloudLedgerAccount;
+use agentnotch_engine::model::{
+    AccountId, Attribution, BackgroundWait, LiveSessionObservation, Phase, SessionId, SessionState,
+    SessionView,
+};
+use std::collections::BTreeSet;
+
+/// A set of session ids.
+pub fn ids(values: &[&str]) -> BTreeSet<String> {
+    values.iter().map(|v| (*v).to_owned()).collect()
+}
+
+/// The contract key of an account the engine hands the cloud.
+pub fn key_of(account: &CloudAccount) -> String {
+    keys::account_key_of(account).expect("an account with an account UUID")
+}
+
+pub fn ledger_account(account: &CloudAccount) -> CloudLedgerAccount {
+    CloudLedgerAccount::from_account(account)
+}
+
+/// A running session as the hub attributed it: `me` in `/Users/me/code/app`,
+/// in VS Code, last active at the fixture's base. Times are seconds after
+/// [`CloudFixture::base`].
+pub struct Live(pub LiveSessionObservation);
+
+pub fn live(session_id: &str) -> Live {
+    live_for(session_id, &CloudFixture::account())
+}
+
+pub fn live_for(session_id: &str, account: &CloudAccount) -> Live {
+    Live(LiveSessionObservation {
+        session_id: session_id.to_owned(),
+        identity_id: account.identity_id.clone(),
+        account_key: key_of(account),
+        cwd: "/Users/me/code/app".to_owned(),
+        transcript_path: Some(format!(
+            "/Users/me/.claude/projects/-Users-me-code-app/{session_id}.jsonl"
+        )),
+        config_dir: Some("/Users/me/.claude".to_owned()),
+        entrypoint: Some("claude-vscode".to_owned()),
+        started_at: CloudFixture::base(),
+        last_activity_at: CloudFixture::base(),
+        model: Some("claude-opus-4-5".to_owned()),
+        cost_usd: None,
+        title: None,
+        process_started_at: None,
+    })
+}
+
+impl Live {
+    pub fn cwd(mut self, cwd: &str) -> Self {
+        self.0.cwd = cwd.to_owned();
+        self
+    }
+
+    pub fn entrypoint(mut self, entrypoint: Option<&str>) -> Self {
+        self.0.entrypoint = entrypoint.map(str::to_owned);
+        self
+    }
+
+    pub fn active(mut self, seconds: f64) -> Self {
+        self.0.last_activity_at = CloudFixture::at(seconds);
+        self
+    }
+
+    pub fn started(mut self, seconds: f64) -> Self {
+        self.0.started_at = CloudFixture::at(seconds);
+        self
+    }
+
+    pub fn process(mut self, seconds: f64) -> Self {
+        self.0.process_started_at = Some(CloudFixture::at(seconds));
+        self
+    }
+
+    pub fn cost(mut self, cost: f64) -> Self {
+        self.0.cost_usd = Some(cost);
+        self
+    }
+
+    pub fn title(mut self, title: &str) -> Self {
+        self.0.title = Some(title.to_owned());
+        self
+    }
+
+    pub fn build(self) -> LiveSessionObservation {
+        self.0
+    }
+}
+
+/// A session as the hub's projection hands it over: certain as the fixture's
+/// account, in `/Users/me/code/app`, first seen at the fixture's base.
+pub fn session_view(session_id: &str) -> SessionView {
+    SessionView {
+        id: SessionId::from(session_id),
+        account: Some(AccountId::from("/Users/me/.claude")),
+        ring: None,
+        attribution: Attribution::Known(Some(IdentityId::from(CloudFixture::IDENTITY_ID))),
+        attribution_since: CloudFixture::base(),
+        cwd: PathBuf::from("/Users/me/code/app"),
+        project_name: "app".to_owned(),
+        title: "app".to_owned(),
+        title_from_folder: true,
+        state: SessionState::Working,
+        phase: Phase::Processing,
+        pid: Some(4242),
+        pid_started: None,
+        entrypoint: Some("cli".to_owned()),
+        config_dir_env: None,
+        host_session_id: None,
+        registry_status: None,
+        first_seen_at: CloudFixture::base(),
+        model: None,
+        context_pct: None,
+        tasks: None,
+        background: BackgroundWait::default(),
+        last_activity: CloudFixture::base(),
+        turn_started_at: None,
+        completed_at: None,
+        reviewed_at: None,
+        last_assistant_message: None,
+        pending: Vec::new(),
+        cost_usd: None,
+        transcript_path: None,
+    }
+}

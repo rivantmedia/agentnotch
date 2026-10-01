@@ -12,3 +12,7 @@ The cloud files (`cloud-*.json`) are WP8's, with `cloud::files`, in the Mac's
 `CloudJSON` encoding (compact, sorted keys, ISO 8601 with milliseconds);
 `tests/cloud_mac_files.rs` round-trips each. `cloud-session.json` is the
 website sign-in (`cloud::auth::AuthSession`; made-up tokens).
+`cloud-ledger.json` (`cloud::ledger::SessionLedger`, v2: sessions by
+`<sessionId>|<accountKey>`, accounts, owners with a nobody stretch, and the
+unattributed sightings) and `cloud-folder-logins.json`
+(`cloud::folder_logins::CloudFolderLogins`, v1) follow it; both are made up.

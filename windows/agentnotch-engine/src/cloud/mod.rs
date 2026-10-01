@@ -6,10 +6,14 @@
 
 pub mod api;
 pub mod auth;
+pub mod backfill;
 pub mod browser;
 pub mod contract;
+pub mod feed;
 pub mod files;
+pub mod folder_logins;
 pub mod keys;
+pub mod ledger;
 pub mod pricing;
 pub mod website;
 
