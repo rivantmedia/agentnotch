@@ -58,6 +58,14 @@ const REALISTIC: &str = r#"{
 }
 "#;
 
+/// Facts that establish no exec-form minimum, so every folder gets the
+/// string form: the case these tests are about (a test of exec form sets its
+/// own minimum). The committed facts file's own minimum is pinned in
+/// hooks_commands.rs, so a regenerated file doesn't move these tests.
+fn string_form_facts() -> ClaudeCodeFacts {
+    ClaudeCodeFacts::default()
+}
+
 struct Home {
     _temp: tempfile::TempDir,
     /// Resolved, so paths built from it are the ones the installer reports.
@@ -85,7 +93,7 @@ fn home_with(flags: &DevFlags) -> Home {
         manager: HookManager::configured(source, flags),
         settings: ControlSettings::default(),
         versions: vec![sighting(VersionSource::Binary, Some("2.1.280"))],
-        facts: ClaudeCodeFacts::compiled_in(),
+        facts: string_form_facts(),
     }
 }
 
@@ -1089,7 +1097,7 @@ fn at(seconds: u64) -> SystemTime {
 
 #[test]
 fn passes_run_at_start_after_changes_settle_and_every_ten_minutes() {
-    let facts = ClaudeCodeFacts::compiled_in();
+    let facts = string_form_facts();
     let settings = ControlSettings {
         hook_consent: Some(true),
         ..ControlSettings::default()
@@ -1148,7 +1156,7 @@ fn passes_run_at_start_after_changes_settle_and_every_ten_minutes() {
 
 #[test]
 fn a_lower_version_asks_for_a_pass_only_when_hooks_were_written_for_a_newer_one() {
-    let facts = ClaudeCodeFacts::compiled_in();
+    let facts = string_form_facts();
     let on = ControlSettings {
         hook_consent: Some(true),
         ..ControlSettings::default()

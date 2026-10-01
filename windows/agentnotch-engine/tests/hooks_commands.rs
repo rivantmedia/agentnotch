@@ -295,10 +295,31 @@ fn exec_form_is_never_written_without_a_minimum() {
         &facts
     ));
     assert!(!exec_form_allowed(&[], &facts));
-    assert!(!exec_form_allowed(
-        &[sighting(VersionSource::Binary, Some("9.9.9"))],
-        &ClaudeCodeFacts::compiled_in()
-    ));
+}
+
+/// The committed facts file (the facts job's reading of Claude Code's
+/// packages, DESIGN-WIN §6.2) establishes the minimum: 2.1.138 is the last
+/// listed version whose hook entries ignore `args`, every one from 2.1.139
+/// runs them. A regenerated file that moves it must change this test too, so
+/// the change is seen in review.
+#[test]
+fn the_committed_facts_establish_exec_form_from_2_1_139() {
+    let facts = ClaudeCodeFacts::compiled_in();
+    assert_eq!(facts.exec_form_min.as_deref(), Some("2.1.139"));
+    assert!(!facts.versions.is_empty());
+    let allowed = |versions: &[Option<&str>]| {
+        let sightings: Vec<_> = versions
+            .iter()
+            .map(|v| sighting(VersionSource::Binary, *v))
+            .collect();
+        exec_form_allowed(&sightings, &facts)
+    };
+    assert!(allowed(&[Some("2.1.139")]));
+    assert!(allowed(&[Some("2.1.280"), Some("2.1.286")]));
+    assert!(!allowed(&[Some("2.1.138")]));
+    assert!(!allowed(&[Some("2.1.280"), Some("2.1.100")]));
+    assert!(!allowed(&[Some("2.1.280"), None]));
+    assert!(!allowed(&[]));
 }
 
 /// `effectiveVersionIsTheLowestKnown`
