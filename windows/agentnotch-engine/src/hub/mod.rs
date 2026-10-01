@@ -4,6 +4,7 @@
 //! exists. WP7 adds the runtime behind the same `Hub` and its sealed demo.
 
 pub mod api;
+pub mod project;
 pub mod sealed_fixture;
 
 pub use api::*;
