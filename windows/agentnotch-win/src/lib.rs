@@ -119,7 +119,3 @@ pub fn user_sid() -> Option<String> {
         None
     }
 }
-
-/// The message every service gives until its package implements it on Windows.
-#[cfg(windows)]
-pub(crate) const NOT_IMPLEMENTED: &str = "not implemented in this build";
