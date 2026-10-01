@@ -11,8 +11,8 @@
 //!   stands in for it, which is exact for the strings the glue rebrands (the "Quit …" items in
 //!   every language, which carry no article or compound);
 //! - the website comes from `app-config.json` through the engine's validation
-//!   (`cloud::website::from_app_config`, WP8); until it lands the app has no sync website, which
-//!   Settings shows as such.
+//!   (`cloud::website::from_app_config`, WP8): a file that breaks the Mac build's rules means no
+//!   sync website, which Settings shows as such.
 
 use std::path::Path;
 
@@ -48,6 +48,6 @@ pub fn rebrand(text: &str) -> String {
 }
 
 /// The sync website named by `app-config.json`, once the engine has checked it.
-pub fn website(_app_config: &str) -> Option<String> {
-    None
+pub fn website(app_config: &str) -> Option<String> {
+    agentnotch_engine::cloud::website::from_app_config(app_config)
 }
