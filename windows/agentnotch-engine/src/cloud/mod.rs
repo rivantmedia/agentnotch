@@ -5,6 +5,7 @@
 //! Owner: WP8. WP0 stub: the §3.4 signatures; it never signs in or sends.
 
 pub mod api;
+pub mod auth;
 pub mod browser;
 pub mod contract;
 pub mod files;

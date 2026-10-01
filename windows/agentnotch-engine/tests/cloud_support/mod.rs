@@ -5,9 +5,12 @@
 //! `claude`. Later sub-tasks add the fake website and the stand-in engine.
 #![allow(dead_code)]
 
-use agentnotch_engine::cloud::contract::date;
+use agentnotch_engine::cloud::auth::AuthSession;
+use agentnotch_engine::cloud::contract::{date, ConfigResponse, REDIRECT_URL};
 use agentnotch_engine::model::{FolderKind, IdentityId};
+use agentnotch_engine::platform::HttpResponse;
 use agentnotch_engine::runtime_types::{CloudAccount, CloudFolder};
+use agentnotch_engine::testkit::http::json_response;
 use serde_json::Value;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
@@ -167,5 +170,63 @@ impl CloudAccountBuilder {
             corrected: true,
             ..Self::run_folder(config_dir, Some(stale_organization))
         }
+    }
+}
+
+/// The website sign-in's stand-ins (the Mac's `CloudAuthTests` statics):
+/// a made-up Supabase project, its config, sessions and token answers.
+pub struct AuthFixture;
+
+impl AuthFixture {
+    pub const SUPABASE: &'static str = "https://abcdefghijklmnop.supabase.co";
+    pub const PUBLISHABLE_KEY: &'static str = "sb_publishable_test";
+    pub const WEBSITE: &'static str = "https://agentnotch.example.com";
+
+    pub fn config() -> ConfigResponse {
+        ConfigResponse {
+            supabase_url: Self::SUPABASE.into(),
+            supabase_publishable_key: Self::PUBLISHABLE_KEY.into(),
+            redirect_url: REDIRECT_URL.into(),
+            dashboard_url: format!("{}/dashboard", Self::WEBSITE),
+        }
+    }
+
+    /// `access-1`/`refresh-1` for `user-1` (`me@example.com`) through
+    /// [`Self::WEBSITE`], expiring `seconds` after `now`.
+    pub fn session(seconds: i64, now: SystemTime) -> AuthSession {
+        Self::session_with(seconds, now, "access-1", "refresh-1")
+    }
+
+    pub fn session_with(seconds: i64, now: SystemTime, access: &str, refresh: &str) -> AuthSession {
+        let delta = Duration::from_secs(seconds.unsigned_abs());
+        AuthSession {
+            access_token: access.into(),
+            refresh_token: refresh.into(),
+            expires_at: if seconds >= 0 {
+                now + delta
+            } else {
+                now - delta
+            },
+            user_id: Some("user-1".into()),
+            email: Some("me@example.com".into()),
+            supabase_url: Self::SUPABASE.into(),
+            publishable_key: Self::PUBLISHABLE_KEY.into(),
+            website_url: Self::WEBSITE.into(),
+        }
+    }
+
+    /// Supabase's answer to a token request.
+    pub fn token_answer(access: &str, refresh: &str) -> HttpResponse {
+        json_response(
+            200,
+            serde_json::json!({
+                "access_token": access,
+                "refresh_token": refresh,
+                "expires_in": 3600,
+                "token_type": "bearer",
+                "user": {"id": "user-1", "email": "me@example.com"},
+            })
+            .to_string(),
+        )
     }
 }

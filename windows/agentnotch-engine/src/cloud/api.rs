@@ -1,10 +1,28 @@
-//! What can go wrong talking to the website (CL§2; the Mac's
-//! `CloudAPIError`, `CloudHTTP.swift`). The HTTP client and the calls built
-//! on it join this file in later steps; the error type comes first because
-//! the contract tests decode `error.json` through it.
+//! The website's API (`web/contract/README.md`; the Mac's `CloudAPI` and
+//! `CloudAPIError`, `CloudHTTP.swift`): `config` (no sign-in), `me` and
+//! `sync` (a Supabase access token as Bearer, only ever the token of a
+//! session made through this same website). A 401 is retried once after a
+//! refresh, with a token of the sign-in the request started with (one made
+//! since, or through another website, is never sent); a second one is the
+//! caller's to back off from (the session is kept: only Supabase refusing
+//! the refresh token ends it).
+//!
+//! Calls block: the cloud thread makes them, and the platform's [`Http`]
+//! follows no redirect, keeps no cookie and never caches.
 
-use super::contract::{error_code, ErrorBody};
+use super::auth::{describe_http_error, Auth, AuthError};
+use super::contract::{
+    self, error_code, ConfigResponse, ErrorBody, MeResponse, SyncRequest, SyncResponse,
+};
+use super::website;
+use crate::platform::{Clock, Http, HttpRequest, HttpResponse, SystemClock};
+use serde::de::DeserializeOwned;
 use std::fmt;
+use std::sync::Arc;
+use std::time::Duration;
+
+/// How long a call to the website may take (the Mac's request timeout).
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A failed call to the website or to Supabase's auth server.
 #[derive(Debug, Clone, PartialEq)]
@@ -27,6 +45,15 @@ pub enum ApiError {
     },
     /// An answer that doesn't follow the contract.
     BadResponse(String),
+    /// The sign-in gave no token for this website (signed out, another
+    /// website's session) or its refresh failed.
+    Auth(AuthError),
+}
+
+impl From<AuthError> for ApiError {
+    fn from(error: AuthError) -> ApiError {
+        ApiError::Auth(error)
+    }
 }
 
 impl ApiError {
@@ -57,6 +84,17 @@ impl ApiError {
             }
             other => *other == ApiError::NotSignedIn,
         }
+    }
+
+    /// The call found the sign-in over: no session, or one made through
+    /// another website (the service signs out then, CL§5.8).
+    pub fn ends_sign_in(&self) -> bool {
+        matches!(
+            self,
+            ApiError::NotSignedIn
+                | ApiError::Auth(AuthError::SignedOut)
+                | ApiError::Auth(AuthError::OtherWebsite)
+        )
     }
 
     pub fn is_rate_limited(&self) -> bool {
@@ -95,11 +133,150 @@ impl fmt::Display for ApiError {
             ApiError::BadResponse(message) => {
                 write!(f, "Unexpected answer from the website: {message}")
             }
+            ApiError::Auth(error) => error.fmt(f),
         }
     }
 }
 
 impl std::error::Error for ApiError {}
+
+/// A response header's value (names compared without case).
+fn header<'a>(response: &'a HttpResponse, name: &str) -> Option<&'a str> {
+    response
+        .headers
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_str())
+}
+
+/// The website's three endpoints.
+pub struct CloudApi {
+    /// The website, as [`website::validated`] keeps it.
+    pub website: String,
+    http: Arc<dyn Http>,
+    auth: Option<Arc<Auth>>,
+    user_agent: String,
+    clock: Arc<dyn Clock>,
+}
+
+impl CloudApi {
+    /// `auth` `None`: only [`config`](Self::config) works.
+    pub fn new(
+        website: impl Into<String>,
+        http: Arc<dyn Http>,
+        auth: Option<Arc<Auth>>,
+        app_version: &str,
+    ) -> CloudApi {
+        CloudApi {
+            website: website.into(),
+            http,
+            auth,
+            user_agent: format!("AgentNotch/{app_version}"),
+            clock: Arc::new(SystemClock),
+        }
+    }
+
+    /// The clock a sync request is clamped against (its dates must lie
+    /// between 2023 and a day from now).
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> CloudApi {
+        self.clock = clock;
+        self
+    }
+
+    pub fn user_agent(&self) -> &str {
+        &self.user_agent
+    }
+
+    /// `GET /api/app/v1/config`.
+    pub fn config(&self) -> Result<ConfigResponse, ApiError> {
+        let response = self.send(self.request(contract::path::CONFIG, "GET", None, None))?;
+        Self::answer(response)
+    }
+
+    /// `GET /api/app/v1/me`.
+    pub fn me(&self) -> Result<MeResponse, ApiError> {
+        self.authorized(contract::path::ME, "GET", None)
+    }
+
+    /// `POST /api/app/v1/sync` with the request clamped to the contract's
+    /// limits.
+    pub fn sync(&self, request: &SyncRequest) -> Result<SyncResponse, ApiError> {
+        let body = contract::to_json(&request.clamped(self.clock.now()));
+        self.authorized(contract::path::SYNC, "POST", Some(body))
+    }
+
+    /// An authenticated call: the current access token (refreshed when it
+    /// has a minute or less left) of a session made through this website,
+    /// and on a 401 one retry after a refresh, with a token of the same
+    /// sign-in for the same website (the user may have signed in elsewhere
+    /// since).
+    fn authorized<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        method: &str,
+        body: Option<Vec<u8>>,
+    ) -> Result<T, ApiError> {
+        let Some(auth) = &self.auth else {
+            return Err(ApiError::NotSignedIn);
+        };
+        let grant = auth.access_grant(&self.website)?;
+        let mut response =
+            self.send(self.request(path, method, body.clone(), Some(&grant.token)))?;
+        if response.status == 401 {
+            let fresh =
+                auth.refresh_after_unauthorized(&grant.token, &grant.website, grant.sign_in)?;
+            response = self.send(self.request(path, method, body, Some(&fresh)))?;
+        }
+        Self::answer(response)
+    }
+
+    fn request(
+        &self,
+        path: &str,
+        method: &str,
+        body: Option<Vec<u8>>,
+        token: Option<&str>,
+    ) -> HttpRequest {
+        let mut headers = vec![
+            ("Accept".to_owned(), "application/json".to_owned()),
+            ("User-Agent".to_owned(), self.user_agent.clone()),
+        ];
+        if body.is_some() {
+            headers.push(("Content-Type".into(), "application/json".into()));
+        }
+        if let Some(token) = token {
+            headers.push(("Authorization".into(), format!("Bearer {token}")));
+        }
+        HttpRequest {
+            method: method.to_owned(),
+            url: website::endpoint(&self.website, path),
+            headers,
+            body,
+            timeout: REQUEST_TIMEOUT,
+        }
+    }
+
+    fn send(&self, request: HttpRequest) -> Result<HttpResponse, ApiError> {
+        self.http
+            .send(request)
+            .map_err(|e| ApiError::Transport(describe_http_error(&e)))
+    }
+
+    /// A 2xx's body as `T`; anything else as the contract's error.
+    fn answer<T: DeserializeOwned>(response: HttpResponse) -> Result<T, ApiError> {
+        if !(200..300).contains(&response.status) {
+            return Err(ApiError::from_response(
+                response.status,
+                &response.body,
+                header(&response, "Retry-After"),
+            ));
+        }
+        serde_json::from_slice(&response.body).map_err(|e| {
+            let name = std::any::type_name::<T>().rsplit("::").next().unwrap_or("");
+            ApiError::BadResponse(format!("{name}: {e}"))
+        })
+    }
+}
 
 #[cfg(test)]
 mod tests {
