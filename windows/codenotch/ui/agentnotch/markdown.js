@@ -15,8 +15,13 @@
   var C = window.agentnotchCommon;
   var esc = C.esc;
 
-  var FENCE = /^ {0,3}(`{3,}|~{3,})\s*([^`\s]*)[^`]*$/;
-  var HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
+  // A fence is its run of backticks or tildes; the rest of the line may hold no backtick. Tested
+  // in two steps, not as one pattern: `\s*([^`\s]*)[^`]*$` backtracks quadratically over a
+  // long run of spaces that ends in a backtick (a 100 000-character line took seconds).
+  var FENCE_RUN = /^ {0,3}(`{3,}|~{3,})/;
+  // A heading's marker; its text and closing run are cut by headingOf, not by one pattern: the
+  // lazy `(.*?)` before `(?:[ \t]+#+)?[ \t]*$` backtracks quadratically over a long run of spaces.
+  var HEADING_START = /^ {0,3}(#{1,6})(?=[ \t]|$)/;
   var RULE = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
   var QUOTE = /^ {0,3}>[ \t]?(.*)$/;
   var ITEM = /^( {0,3})([-*+]|\d{1,9}[.)])(?:[ \t]+(.*))?$/;
@@ -31,6 +36,39 @@
     if (!/^https:\/\//i.test(u)) return null;
     if (/[\s<>"'`\\]/.test(u)) return null;
     return u;
+  }
+
+  function isSpace(c) {
+    return c === ' ' || c === '\t';
+  }
+
+  /**
+   * `{level, text}` for an ATX heading line, or null. The text is what follows the marker, its
+   * spaces trimmed; a closing run of `#` goes only when whitespace parts it from at least one
+   * character of text ("# foo ##" is "foo", "# #" and "# foo#" keep their `#`).
+   */
+  function headingOf(line) {
+    var m = HEADING_START.exec(line);
+    if (!m) return null;
+    var rest = line.slice(m[0].length);
+    var start = 0;
+    while (start < rest.length && isSpace(rest.charAt(start))) start += 1;
+    var end = rest.length;
+    while (end > start && isSpace(rest.charAt(end - 1))) end -= 1;
+    var hashes = end;
+    while (hashes > start && rest.charAt(hashes - 1) === '#') hashes -= 1;
+    if (hashes < end) {
+      var gap = hashes;
+      while (gap > start && isSpace(rest.charAt(gap - 1))) gap -= 1;
+      if (gap < hashes && gap > start) end = gap;
+    }
+    return { level: m[1].length, text: rest.slice(start, end) };
+  }
+
+  /** The fence a line opens (its run of backticks or tildes), or null. */
+  function fenceOf(line) {
+    var m = FENCE_RUN.exec(line);
+    return m && line.indexOf('`', m[0].length) < 0 ? m[1] : null;
   }
 
   // ---- inline ---------------------------------------------------------------------------
@@ -93,9 +131,12 @@
         continue;
       }
       if (ch === '\n') {
-        // Two spaces before a line end are a hard break; a bare line end is a space.
-        var hard = / {2,}$/.test(plain);
-        if (hard) plain = plain.replace(/ +$/, '');
+        // Two spaces before a line end are a hard break; a bare line end is a space. Counted, not
+        // matched: `/ {2,}$/` retries from every space of a long run that doesn't end the text.
+        var spaces = 0;
+        while (spaces < plain.length && plain.charAt(plain.length - 1 - spaces) === ' ') spaces += 1;
+        var hard = spaces >= 2;
+        if (hard) plain = plain.slice(0, plain.length - spaces);
         flush();
         out += hard ? '<br>' : ' ';
         i += 1;
@@ -220,7 +261,7 @@
   // ---- blocks ---------------------------------------------------------------------------
 
   function startsBlock(line) {
-    return FENCE.test(line) || HEADING.test(line) || RULE.test(line) || QUOTE.test(line) || ITEM.test(line);
+    return fenceOf(line) !== null || headingOf(line) !== null || RULE.test(line) || QUOTE.test(line) || ITEM.test(line);
   }
 
   function indentOf(line) {
@@ -237,13 +278,13 @@
         i += 1;
         continue;
       }
-      var m = FENCE.exec(line);
-      if (m) {
-        var fence = m[1];
+      var m;
+      var fence = fenceOf(line);
+      if (fence !== null) {
         var body = [];
+        var closer = new RegExp('^ {0,3}' + fence.charAt(0) + '{' + fence.length + ',}\\s*$');
         i += 1;
         while (i < lines.length) {
-          var closer = new RegExp('^ {0,3}' + fence.charAt(0) + '{' + fence.length + ',}\\s*$');
           if (closer.test(lines[i])) {
             i += 1;
             break;
@@ -254,9 +295,9 @@
         blocks.push({ type: 'code', text: body.join('\n') });
         continue;
       }
-      m = HEADING.exec(line);
-      if (m) {
-        blocks.push({ type: 'heading', level: m[1].length, text: m[2] || '' });
+      var heading = headingOf(line);
+      if (heading) {
+        blocks.push({ type: 'heading', level: heading.level, text: heading.text });
         i += 1;
         continue;
       }
@@ -356,7 +397,10 @@
 
   /** Markdown → escaped HTML inside `<div class="an-md">`. */
   function render(source, opts) {
-    var text = String(source == null ? '' : source).replace(/\r\n?/g, '\n');
+    // U+2028 and U+2029 end a line too. Left in, they would stop every `.` of the block patterns
+    // short of the line's end, and a long run of spaces before one made a heading or list
+    // pattern backtrack for minutes.
+    var text = String(source == null ? '' : source).replace(/\r\n?|[\u2028\u2029]/g, '\n');
     var cls = 'an-md' + (opts && opts.cls ? ' ' + opts.cls : '');
     return '<div class="' + cls + '">' + renderBlocks(parseBlocks(text.split('\n'), 0), 0) + '</div>';
   }

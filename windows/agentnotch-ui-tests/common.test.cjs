@@ -111,6 +111,12 @@ test('oneLine, plural, needYou and clause', () => {
   assert.equal(C.clause('Typing replies is off.'), 'Typing replies is off');
   assert.equal(C.clause(' done… '), 'done…');
   assert.equal(C.clause(null), '');
+  assert.equal(C.clause('Off.\u3002. '), 'Off');
+  // A long run of dots that does not end the text is scanned once, not retried from every dot.
+  const dots = '.'.repeat(100000) + 'x';
+  const started = Date.now();
+  assert.equal(C.clause(dots), dots);
+  assert.ok(Date.now() - started < 1500, `clause: ${Date.now() - started} ms`);
 });
 
 // ---- formatting (UsageFormatterTests, ElapsedCopyTests) -----------------------------------------

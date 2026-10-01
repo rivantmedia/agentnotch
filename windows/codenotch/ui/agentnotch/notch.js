@@ -75,6 +75,16 @@
     return '';
   }
 
+  /**
+   * A cell's `name` as upstream may use it. Upstream's `glyphHtml` writes it unescaped into
+   * `alt="…"` when the provider's glyph is an image (a PNG override in the glyph folder); its own
+   * names were constants, but an account's label comes from the account or the user. Inside a
+   * quoted attribute only `"` can end it, so that one character is drawn as its typographic twin.
+   */
+  function cellName(label) {
+    return typeof label === 'string' ? label.replace(/"/g, '”') : label;
+  }
+
   /** Upstream cell objects for the shown rings; null before a snapshot or with no account. */
   function cellsFrom(snapshot) {
     if (!snapshot || !Array.isArray(snapshot.rings) || !snapshot.rings.length) return null;
@@ -85,7 +95,7 @@
       return {
         id: r.ring_id,
         base: 'claude',
-        name: r.label,
+        name: cellName(r.label),
         glyph: 'C',
         snap: {
           status: upstreamStatus(u.status),
@@ -819,11 +829,41 @@
     });
   }
 
+  /**
+   * The four seam hooks run inside upstream's own drawing (renderRing, renderCard, the press
+   * handler): an exception there would stop the whole notch, every provider's ring with it. A
+   * snapshot the page can't read degrades to the hook's "not mine" answer, said once in run.log
+   * (no snapshot text in it).
+   */
+  var failed = {};
+  function guarded(name, fn, fallback) {
+    return function () {
+      try {
+        return fn.apply(null, arguments);
+      } catch (e) {
+        if (!failed[name] && C) {
+          failed[name] = true;
+          C.log('notch: ' + name + ' failed');
+        }
+        return typeof fallback === 'function' ? fallback.apply(null, arguments) : fallback;
+      }
+    };
+  }
+
+  /** A click on a cell of ours that failed is still ours: upstream must not refresh a provider by that id. */
+  function ownsCell(cellId) {
+    try {
+      return !!ringOf(state.snapshot, cellId);
+    } catch (e) {
+      return false;
+    }
+  }
+
   window.agentnotch = {
-    claudeCells: claudeCells,
-    decorateCell: decorateCell,
-    cardSessions: cardSessions,
-    ringClick: ringClick,
+    claudeCells: guarded('claudeCells', claudeCells, null),
+    decorateCell: guarded('decorateCell', decorateCell, undefined),
+    cardSessions: guarded('cardSessions', cardSessions, ''),
+    ringClick: guarded('ringClick', ringClick, ownsCell),
     showScene: showScene,
     layoutReport: layoutReport,
     /** For tests and the sealed self-test: the helpers above, pure where they can be. */

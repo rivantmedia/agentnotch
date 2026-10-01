@@ -1292,6 +1292,40 @@ test('layoutReport: marks outside the folded pill fail', async () => {
 
 // ---- hostile strings ------------------------------------------------------------------------------------------
 
+test('an account label can\'t break out of upstream\'s alt="…" when the Claude glyph is an image', async () => {
+  // Upstream's glyphHtml writes the cell's name into alt="…" unescaped when the glyph is a PNG
+  // (an override in the glyph folder); an account's label is not a constant like upstream's names.
+  const glyphs = { claude: { kind: 'appicon', url: 'data:image/png;base64,iVBORw0KGgo=' } };
+  for (const hostile of audit.HOSTILE.concat(['Work" style="position:fixed;inset:0" data-x="'])) {
+    const page = await loadWith((s) => { s.rings[0].label = hostile; }, { commands: { get_glyphs: () => glyphs } });
+    await page.settle();
+    const img = cellFor(page, PERSONAL).querySelector('img');
+    assert.ok(img, 'the image glyph is drawn');
+    assert.deepEqual(img.attributes.map((a) => a.name).sort(), ['alt', 'class', 'src'], hostile.slice(0, 40));
+    // What upstream's unescaped alt="…" reads back as (entities decode; nothing ends the attribute).
+    const read = require('./lib/dom.cjs').parseFragment(`<img alt="${hostile.replace(/"/g, '\u201D')}">`).querySelector('img');
+    assert.equal(img.getAttribute('alt'), read.getAttribute('alt'));
+    assert.deepEqual(audit.problems(page.$('#pill'), { allowTags: ['img'] }).filter((x) => !/^<img src=/.test(x)), [], hostile.slice(0, 40));
+    clean(page);
+  }
+});
+
+test('a snapshot the hooks can\'t read leaves upstream\'s notch drawing: each hook answers "not mine", logged once', async () => {
+  const page = await loadWith((s) => { s.rings[0].badges = null; s.sessions[0] = null; });
+  await page.settle();
+  // renderRing went on past the Claude cells (the hot rect was reported) and nothing escaped.
+  assert.deepEqual(page.errors.map(String), []);
+  assert.ok(cellFor(page, PERSONAL), 'the cells are drawn');
+  page.run('renderRing(); renderRing();');
+  assert.equal(page.run(`agentnotch.cardSessions({ id: ${JSON.stringify(PERSONAL)}, base: 'claude', snap: { windows: [] } })`), '');
+  assert.equal(page.run(`agentnotch.ringClick(${JSON.stringify(PERSONAL)})`), true, 'a click on our cell stays ours');
+  assert.equal(page.run("agentnotch.ringClick('codex')"), false);
+  await page.settle();
+  const logs = page.hub.of('log').map((c) => c.args.msg);
+  assert.deepEqual(logs.filter((m) => /decorateCell/.test(m)), ['notch: decorateCell failed'], 'once, and no snapshot text');
+  clean(page);
+});
+
 test('hostile strings through the ring label, its a11y text and the card\'s name, detail and waiting line', async () => {
   for (const hostile of audit.HOSTILE) {
     const page = await loadWith((s) => {
@@ -1310,7 +1344,9 @@ test('hostile strings through the ring label, its a11y text and the card\'s name
     openCard(page, PERSONAL);
     const card = page.$('#card');
     assert.deepEqual(audit.problems(card), [], `the card for ${hostile.slice(0, 30)}`);
-    assert.ok(card.querySelector('.c-title').textContent.includes(hostile.slice(0, 200)), 'the label is drawn as text');
+    // The cell's name carries a " as ” (cellName: upstream's glyphHtml puts the name in alt="…").
+    const shown = hostile.replace(/"/g, '\u201D');
+    assert.ok(card.querySelector('.c-title').textContent.includes(shown.slice(0, 200)), 'the label is drawn as text');
     const rows = rowsOf(page);
     assert.ok(rows.length >= 3);
     for (const row of rows) {

@@ -114,9 +114,15 @@
     return n + ' ' + (n === 1 ? one : many || one + 's');
   };
 
-  /** A reason ends a sentence of ours: drop its own full stop so it never reads "off.." */
+  /**
+   * A reason ends a sentence of ours: drop its own full stop so it never reads "off..". A loop,
+   * not `/[.。]+$/`, which retries from every dot of a long run that doesn't end the text.
+   */
   C.clause = function (reason) {
-    return String(reason == null ? '' : reason).trim().replace(/[.。]+$/, '');
+    var s = String(reason == null ? '' : reason).trim();
+    var end = s.length;
+    while (end > 0 && (s.charAt(end - 1) === '.' || s.charAt(end - 1) === '\u3002')) end -= 1;
+    return s.slice(0, end);
   };
 
   // ---- account colours (ClaudeControlTheme.accountHues) ---------------------------------

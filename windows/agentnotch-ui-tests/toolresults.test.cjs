@@ -64,6 +64,13 @@ test('baseName: the last part of a Windows or Unix path', () => {
   assert.equal(T.baseName('/a/b/app.ts'), 'app.ts');
   assert.equal(T.baseName('/a/b/'), 'b');
   assert.equal(T.baseName('plain'), 'plain');
+  assert.equal(T.baseName('C:\\a\\b\\\\'), 'b');
+  // A long run of slashes that does not end the path is scanned once.
+  const slashes = '/'.repeat(100000) + 'x';
+  const started = Date.now();
+  assert.equal(T.baseName(slashes), 'x');
+  assert.equal(T.baseName(slashes + '/'.repeat(100000)), 'x');
+  assert.ok(Date.now() - started < 1500, `baseName: ${Date.now() - started} ms`);
   assert.equal(T.baseName(''), '');
   assert.equal(T.baseName(null), '');
 });

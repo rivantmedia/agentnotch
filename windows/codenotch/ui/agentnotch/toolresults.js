@@ -40,9 +40,12 @@
     return tool ? server + ' - ' + titleCase(tool) : server;
   }
 
-  /** The last part of a Windows or Unix path. */
+  /** The last part of a Windows or Unix path (a loop: `/[\\/]+$/` is quadratic on a run of slashes). */
   function baseName(path) {
-    var p = String(path == null ? '' : path).replace(/[\\/]+$/, '');
+    var p = String(path == null ? '' : path);
+    var end = p.length;
+    while (end > 0 && (p.charAt(end - 1) === '/' || p.charAt(end - 1) === '\\')) end -= 1;
+    p = p.slice(0, end);
     var cut = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
     return cut >= 0 ? p.slice(cut + 1) : p;
   }

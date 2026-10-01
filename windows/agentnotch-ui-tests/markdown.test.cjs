@@ -334,6 +334,16 @@ test('pathological input renders in bounded time (no quadratic scans, no unbound
     'indented lists': Array.from({ length: 2000 }, (_, n) => ' '.repeat(n % 40) + '- x').join('\n'),
     'many fences': '```\n'.repeat(10000),
     'many lines': '- a\n'.repeat(20000),
+    // Long runs inside one line, where a pattern anchored at the line's end backtracks: each took
+    // seconds to minutes before the patterns became scans.
+    'a fence line whose spaces end in a backtick': '```' + ' '.repeat(100000) + '`',
+    'a tilde fence run that ends in a backtick': '~'.repeat(100000) + '`',
+    'a heading with a long run of spaces inside': '# x' + ' '.repeat(100000) + 'y',
+    'a heading whose closing run is far away': '######' + ' '.repeat(50000) + '#'.repeat(10) + ' '.repeat(50000) + 'x',
+    'a heading cut by U+2028': '# ' + ' '.repeat(100000) + ' x',
+    'a list item cut by U+2029': '- ' + ' '.repeat(100000) + ' x',
+    'a quote cut by U+2028': '> x' + ' '.repeat(100000) + ' x',
+    'spaces that do not end a line': 'a' + ' '.repeat(100000) + 'x\ny',
   };
   for (const [name, source] of Object.entries(cases)) {
     const started = Date.now();
@@ -342,6 +352,28 @@ test('pathological input renders in bounded time (no quadratic scans, no unbound
     assert.ok(took < 1500, `${name}: ${took} ms`);
     assert.deepEqual(audit.problems(out.slice(0, 200000)), [], name);
   }
+});
+
+test('a heading\'s closing run of # goes only after text and whitespace; U+2028 and U+2029 end a line', () => {
+  const heading = (source) => {
+    const h = fragment(M.render(source)).querySelector('.an-md-h');
+    return h ? [h.getAttribute('aria-level'), h.textContent] : null;
+  };
+  assert.deepEqual(heading('# foo ##'), ['1', 'foo']);
+  assert.deepEqual(heading('### foo \t#\t'), ['3', 'foo']);
+  assert.deepEqual(heading('# a # b #'), ['1', 'a # b']);
+  assert.deepEqual(heading('# foo#'), ['1', 'foo#'], 'no whitespace before the run: it is text');
+  assert.deepEqual(heading('# #'), ['1', '#'], 'a run with no text before it is the text');
+  assert.deepEqual(heading('#  #'), ['1', '#']);
+  assert.deepEqual(heading('#'), ['1', '']);
+  assert.deepEqual(heading('   ## two'), ['2', 'two']);
+  assert.equal(heading('#foo'), null);
+  assert.equal(heading('####### seven'), null);
+  assert.equal(heading('    # four spaces'), null);
+  const split = fragment(M.render('# title body - item'));
+  assert.equal(split.querySelector('.an-md-h').textContent, 'title');
+  assert.equal(split.querySelector('.an-md-p').textContent, 'body');
+  assert.equal(split.querySelector('.an-md-list .an-md-item').textContent, 'item');
 });
 
 test('nesting stops at a fixed depth and the rest is text', () => {
