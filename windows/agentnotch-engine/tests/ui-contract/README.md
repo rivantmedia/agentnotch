@@ -14,14 +14,19 @@ type and requires the same keys and values back.
 | `events.json` | each `an:*` event's payload (`payload_fixture` names a file above) | |
 | `rebrand-vectors.json` | `{input, expected}` for `core::rebrand` and `rebrand.js` | |
 
-The sealed hub (`hub::sealed_fixture`) serves these files, with their times
-shifted so `generated_at_ms` is "now": every `*_at_ms` and `since_ms` field,
-and upstream's `resets_at` / `fetched_at`; durations stay as written. A
-`calls.json` entry's reply is what a fresh sealed hub answers; `error` names
-the `CallError` code.
+The sealed hub (`hub::sealed_fixture`) serves the sealed demo
+(`hub::sealed_demo`: the fixture accounts, sessions and usage in the real
+stores, through the hub's own projections), made at its clock's "now".
+`snapshot.json` and `settings.json` are that demo made at their
+`generated_at_ms`, and `chat.json` is its chat sample; `tests/hub_sealed_demo.rs`
+holds them equal, also at any other time with the times moved: every
+`*_at_ms` and `since_ms` field, and upstream's `resets_at` / `fetched_at`;
+durations and labels stay as written. A `calls.json` entry's reply is what a
+fresh sealed hub answers; `error` names the `CallError` code.
 
 Made by WP0 (the data follows the Mac's `SampleSessions`); WP7 maintains
-them, and its sealed demo's snapshot must equal `snapshot.json`.
+them. A change to the demo or to a projection that changes what they show
+changes them, with the node tests that read them.
 
 `events.json` also holds the glue's own events, which the hub never emits:
 `an:panel_place` (a `model::PanelPlace`: where an open panel moved to, `edge`

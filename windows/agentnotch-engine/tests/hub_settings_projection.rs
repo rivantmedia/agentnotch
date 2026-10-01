@@ -463,10 +463,14 @@ fn install_is_disabled_when_sealed_or_with_no_install() {
     );
     sealed.sealed = true;
     sealed.settings.hook_consent = Some(true);
+    // Sealed: the Mac's empty setup state (no banner, no card); the pane
+    // says nothing is installed.
     let setup = sealed.setup();
-    assert!(setup.install_disabled && !setup.needs_hook_consent);
+    assert!(!setup.install_disabled && !setup.needs_hook_consent);
     assert!(setup.consent_files.is_empty() && setup.codenotch_hooks_folders.is_empty());
-    assert!(sealed.snapshot().sealed);
+    let pane = sealed.snapshot();
+    assert!(pane.sealed && !pane.hooks.install_allowed && pane.hooks.enabled_locked);
+    assert!(pane.accounts.iter().all(|row| !row.can_install));
 }
 
 #[test]
@@ -1263,7 +1267,12 @@ fn the_snapshot_has_the_keys_of_the_ui_contract_fixture() {
     world.hotkey_message = Some("taken".into());
     world.cloud.last_error = Some("x".into());
     let mine = serde_json::to_value(world.snapshot()).unwrap();
-    let keys = key_paths(&mine);
+    // The fixture is the sealed demo, which finds no folder to suggest and
+    // asks no consent: its lists are empty, so their items have no keys.
+    let keys: BTreeSet<String> = key_paths(&mine)
+        .into_iter()
+        .filter(|k| !k.starts_with(".setup.consent_files[]") && !k.starts_with(".suggestions[]"))
+        .collect();
     let expected = key_paths(&fixture);
     // `cloud.auth` is a variant: the fixture shows the signed-in one.
     let strip = |set: &BTreeSet<String>| -> BTreeSet<String> {

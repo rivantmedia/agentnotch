@@ -220,7 +220,7 @@
     "call": {
       "method": "refresh_usage",
       "args": {
-        "ring_id": "claude-acct-5f3e1d2c0b9a",
+        "ring_id": "claude-acct-1e41d94e802a",
         "reason": "ring_click"
       }
     },
@@ -326,7 +326,7 @@
       "args": {
         "action": {
           "ring_shown": {
-            "ring_id": "claude-acct-8a7b6c5d4e3f",
+            "ring_id": "claude-acct-5688209c6cfb",
             "on": false
           }
         }
@@ -340,7 +340,7 @@
       "args": {
         "action": {
           "forget": {
-            "id": "uuid:8a7b6c5d-0000-4000-8000-000000000002/org-work-0002"
+            "id": "uuid:8a7b6c5d-0000-4000-8000-000000000002"
           }
         }
       }
@@ -478,7 +478,7 @@
     "call": {
       "method": "launch_command",
       "args": {
-        "account_id": "uuid:8a7b6c5d-0000-4000-8000-000000000002/org-work-0002"
+        "account_id": "uuid:8a7b6c5d-0000-4000-8000-000000000002"
       }
     },
     "reply": {
@@ -501,7 +501,7 @@
       "args": {
         "open": true,
         "route": "sessions",
-        "ring_id": "claude-acct-5f3e1d2c0b9a",
+        "ring_id": "claude-acct-1e41d94e802a",
         "reason": "ring_click",
         "engaged": false,
         "focused": true,

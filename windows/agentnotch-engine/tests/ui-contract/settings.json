@@ -2,7 +2,7 @@
   "accounts": [
     {
       "identity_id": "uuid:5f0c3a1e-0000-4000-8000-000000000001",
-      "ring_id": "claude-acct-5f3e1d2c0b9a",
+      "ring_id": "claude-acct-1e41d94e802a",
       "label": "Personal",
       "default_label": "Claude Personal",
       "has_custom_label": true,
@@ -32,14 +32,14 @@
       "ring_shown": true,
       "is_signed_in": true,
       "launch_command": "claude",
-      "can_install": true,
+      "can_install": false,
       "install_label": "Reinstall hooks",
       "can_forget": false,
       "forget_caption": "This app's hooks are removed from its settings.json and it stops being tracked. The folder and its sessions are left alone."
     },
     {
-      "identity_id": "uuid:8a7b6c5d-0000-4000-8000-000000000002/org-work-0002",
-      "ring_id": "claude-acct-8a7b6c5d4e3f",
+      "identity_id": "uuid:8a7b6c5d-0000-4000-8000-000000000002",
+      "ring_id": "claude-acct-5688209c6cfb",
       "label": "Work",
       "default_label": "Claude Work",
       "has_custom_label": true,
@@ -58,7 +58,7 @@
           "codenotch_hooks": false
         }
       ],
-      "usage_line": "5-hour 72% · weekly 55% · 4m ago",
+      "usage_line": "5-hour 100% · weekly 55% · 4m ago",
       "usage_stale": false,
       "hook_state": "Hooks installed",
       "hook_state_tone": "ok",
@@ -69,24 +69,19 @@
       "ring_shown": true,
       "is_signed_in": true,
       "launch_command": "$env:CLAUDE_CONFIG_DIR='C:\\Users\\me\\.claude-work'; claude",
-      "can_install": true,
+      "can_install": false,
       "install_label": "Reinstall hooks",
       "can_forget": true,
       "forget_caption": "This app's hooks are removed from its settings.json and it stops being tracked. The folder and its sessions are left alone."
     }
   ],
-  "suggestions": [
-    {
-      "path": "~\\.claude-old",
-      "reason": "Named like a backup copy."
-    }
-  ],
+  "suggestions": [],
   "unsigned_folders": [],
   "hooks": {
     "consent": true,
     "enabled": true,
-    "enabled_locked": false,
-    "summary": "Installed in all 2 tracked accounts.",
+    "enabled_locked": true,
+    "summary": "Installing is off for this run (--no-install).",
     "summary_warning": false,
     "status_line": true,
     "pipe_name": "\\\\.\\pipe\\agentnotch-hook-S-1-5-21-1000000001-1000000002-1000000003-1001",
@@ -95,7 +90,7 @@
     "claude_path_chosen": false,
     "claude_caption": "Hooks are written for the oldest claude found, so every version reads them.",
     "last_change": "Last change: settings.json in ~\\.claude-work. The previous version is kept as settings.json.agentnotch-20260921-141000-000.bak.",
-    "install_allowed": true,
+    "install_allowed": false,
     "busy": false,
     "footnotes": [
       "Sessions inside WSL aren't tracked yet.",
@@ -117,16 +112,16 @@
     "desktop_format": "absent",
     "accounts": [
       {
-        "ring_id": "claude-acct-5f3e1d2c0b9a",
+        "ring_id": "claude-acct-1e41d94e802a",
         "label": "Personal",
         "color_index": 0,
         "line": "5-hour 34% · weekly 41% · 4m ago"
       },
       {
-        "ring_id": "claude-acct-8a7b6c5d4e3f",
+        "ring_id": "claude-acct-5688209c6cfb",
         "label": "Work",
         "color_index": 3,
-        "line": "5-hour 72% · weekly 55% · 4m ago"
+        "line": "5-hour 100% · weekly 55% · 4m ago"
       }
     ],
     "refreshing": false
@@ -184,16 +179,7 @@
   "setup": {
     "hook_consent": true,
     "needs_hook_consent": false,
-    "consent_files": [
-      {
-        "path": "~\\.claude\\settings.json",
-        "account": "me@personal.example"
-      },
-      {
-        "path": "~\\.claude-work\\settings.json",
-        "account": "me@work.example"
-      }
-    ],
+    "consent_files": [],
     "codenotch_hooks_folders": [],
     "new_install_folders": [],
     "transport_error": null,

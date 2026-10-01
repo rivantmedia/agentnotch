@@ -100,7 +100,10 @@ pub struct SettingsInput<'a> {
 // ---- setup state ----
 
 /// The consent card and the banners (`AccountHookManager.setupState`).
-/// Sealed: nothing to ask, nothing found, nothing written.
+/// Sealed: nothing to ask, nothing found, nothing written, and no banner
+/// (the Mac's sealed setup state is the empty one; the panel's
+/// `install_disabled` banner reads "--no-install"). The Settings pane still
+/// says installing is off (`hooks.install_allowed`).
 pub fn setup_state(input: &SetupInput<'_>) -> SetupState {
     let settings = input.settings;
     let installs_disabled = input.sealed || input.hooks.installs_disabled();
@@ -114,7 +117,7 @@ pub fn setup_state(input: &SetupInput<'_>) -> SetupState {
             transport_error: input.transport_error.map(str::to_owned),
             control_off: false,
             missing_hooks_accounts: Vec::new(),
-            install_disabled: true,
+            install_disabled: false,
         };
     }
     let registry = input.registry;

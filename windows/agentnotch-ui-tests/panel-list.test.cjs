@@ -31,8 +31,8 @@ const harness = require('./lib/harness.cjs');
 const scripts = require('./lib/scripts.cjs');
 
 const CSS = fs.readFileSync(path.join(harness.UI, 'agentnotch', 'panel.css'), 'utf8');
-const PERSONAL = 'claude-acct-5f3e1d2c0b9a';
-const WORK = 'claude-acct-8a7b6c5d4e3f';
+const PERSONAL = 'claude-acct-1e41d94e802a';
+const WORK = 'claude-acct-5688209c6cfb';
 const NOW = harness.NOW;
 const plain = scripts.plain;
 
@@ -295,7 +295,7 @@ test('every row detail kind of the fixture renders its own words', async () => {
   assert.equal(text(detail('needs-question')), 'Asks Which charting library should the dashboard use?');
   assert.equal(text(detail('needs-plan')), 'Plan ready for approval');
   assert.equal(text(detail('needs-elicitation')), 'Figma needs you to pick a file');
-  assert.equal(text(detail('needs-ratelimit')), 'Rate limited · weekly limit resets Fri 9:00 AM');
+  assert.equal(text(detail('needs-ratelimit')), 'Rate limited · 5-hour limit resets in 40m');
   assert.ok(detail('needs-ratelimit').classList.contains('an-d-error'));
   assert.equal(text(detail('review-darkmode')), 'Added a Dark mode toggle under Settings › Appearance. It follows the system by default, persists the choice, and all 42 tests pass.');
   assert.equal(text(detail('work-migration')), 'Writing tests for the v2 schema');

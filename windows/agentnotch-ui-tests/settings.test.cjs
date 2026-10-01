@@ -27,7 +27,7 @@ const plain = scripts.plain;
 const SETTINGS_JS = fs.readFileSync(path.join(scripts.DIR, 'settings.js'), 'utf8');
 const SETTINGS_CSS = fs.readFileSync(path.join(scripts.DIR, 'settings.css'), 'utf8');
 const PERSONAL = 'uuid:5f0c3a1e-0000-4000-8000-000000000001';
-const WORK = 'uuid:8a7b6c5d-0000-4000-8000-000000000002/org-work-0002';
+const WORK = 'uuid:8a7b6c5d-0000-4000-8000-000000000002';
 const WRITES = ['hook_consent', 'hooks_enabled', 'status_line_enabled', 'hooks_reinstall', 'remove_codenotch_hooks',
   'acknowledge_scope', 'account', 'choose_claude_binary', 'copy_text', 'reveal', 'pick_folder', 'launch_command', 'set_setting'];
 /** rebrand.js's product phrases: copy about upstream's own products keeps its name. */
@@ -36,8 +36,26 @@ const KEPT = ['Codenotch app on your phone', 'Codenotch on your phone', 'Codenot
 
 // ---- helpers ---------------------------------------------------------------------------------
 
+/**
+ * The fixture is the sealed demo, which installs nothing (its pane says so, as the Mac's sealed
+ * one does). These tests are about a live run's pane, so they start from what the hub shows for
+ * the same accounts when installing is allowed: the hooks in place, a folder suggestion.
+ */
+function live(settings) {
+  settings.hooks.install_allowed = true;
+  settings.hooks.enabled_locked = false;
+  settings.hooks.summary = 'Installed in all 2 tracked accounts.';
+  for (const account of settings.accounts) account.can_install = true;
+  settings.setup.consent_files = [
+    { path: '~\\.claude\\settings.json', account: 'me@personal.example' },
+    { path: '~\\.claude-work\\settings.json', account: 'me@work.example' },
+  ];
+  settings.suggestions = [{ path: '~\\.claude-old', reason: 'Named like a backup copy.' }];
+}
+
 function settingsWith(edit) {
   const settings = harness.fixture('settings.json');
+  live(settings);
   if (edit) edit(settings);
   return settings;
 }
@@ -507,7 +525,7 @@ test('every account action sends its exact call, from its own click', async () =
   await click(page, action(work(), 'reveal', WORK));
   assert.deepEqual(calls(page), [
     { method: 'account', args: { action: { track: { id: WORK, on: false } } } },
-    { method: 'account', args: { action: { ring_shown: { ring_id: 'claude-acct-8a7b6c5d4e3f', on: false } } } },
+    { method: 'account', args: { action: { ring_shown: { ring_id: 'claude-acct-5688209c6cfb', on: false } } } },
     { method: 'hooks_reinstall', args: { account_id: WORK } },
     { method: 'reveal', args: { kind: 'config_dir', id: 'C:\\Users\\me\\.claude-work' } },
   ]);

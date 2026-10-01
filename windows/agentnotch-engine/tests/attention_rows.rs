@@ -1183,8 +1183,8 @@ struct Spec {
     can_focus: bool,
 }
 
-const PERSONAL: (&str, &str, u8) = ("claude-acct-5f3e1d2c0b9a", "Personal", 0);
-const WORK: (&str, &str, u8) = ("claude-acct-8a7b6c5d4e3f", "Work", 3);
+const PERSONAL: (&str, &str, u8) = ("claude-acct-1e41d94e802a", "Personal", 0);
+const WORK: (&str, &str, u8) = ("claude-acct-5688209c6cfb", "Work", 3);
 
 fn spec(id: &'static str, account: (&'static str, &'static str, u8), host: &'static str) -> Spec {
     Spec {
@@ -1487,12 +1487,11 @@ fn rows_built_from_the_snapshot_inputs_reproduce_the_snapshot() {
     let views = fixture_views();
     assert_eq!(views.len(), expected.len());
 
-    // The one limit the fixture shows: Work's weekly window, spent, resetting
-    // on a Friday morning.
-    let friday = UNIX_EPOCH + Duration::from_secs(1_790_326_800); // Fri 2026-09-25 09:00 UTC
+    // The one limit the fixture shows: Work's 5-hour window, spent, resetting
+    // in 40 minutes.
     let work_limit = RateLimitReset {
-        window: "weekly limit".into(),
-        resets_at: friday,
+        window: "5-hour limit".into(),
+        resets_at: generated_at() + Duration::from_secs(2_400),
     };
 
     let mut mismatches = Vec::new();

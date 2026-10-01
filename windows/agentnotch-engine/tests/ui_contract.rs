@@ -101,7 +101,9 @@ fn the_snapshot_fixture_is_consistent() {
         }
     }
     assert_eq!(snapshot.totals, totals);
-    assert_eq!(snapshot.tray_badge, totals.needs_you + totals.failed);
+    // A failed turn is never amber: the tray counts what can be answered.
+    assert_eq!(snapshot.tray_badge, totals.needs_you);
+    assert_eq!(snapshot.resting_marks.needs_you_key, totals.needs_you);
     let section_total: u32 = snapshot.sections.iter().map(|s| s.count).sum();
     assert_eq!(section_total as usize, snapshot.sessions.len());
     for ring in &snapshot.rings {
@@ -118,10 +120,7 @@ fn the_snapshot_fixture_is_consistent() {
                 .filter(|r| r.ring_id.as_ref() == Some(&ring.ring_id))
                 .count()
         );
-        assert_eq!(
-            ring.badges.needs_you,
-            ring.counts.needs_you + ring.counts.failed
-        );
+        assert_eq!(ring.badges.needs_you, ring.counts.needs_you);
         for window in &ring.usage.windows {
             assert!((0.0..=1.0).contains(&window.used), "{}", window.id);
         }

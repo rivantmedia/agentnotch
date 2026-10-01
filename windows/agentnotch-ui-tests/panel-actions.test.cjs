@@ -880,9 +880,14 @@ test('a field owns plain keys, digits and Enter; a Ctrl shortcut with nothing to
 
 // ---- the consent card ----------------------------------------------------------------------------
 
+// A first run's card: the sealed fixture finds nothing and installs nothing, so it shows none.
 const unasked = (s) => {
   s.setup.hook_consent = null;
   s.setup.needs_hook_consent = true;
+  s.setup.consent_files = [
+    { path: '~\\.claude\\settings.json', account: 'me@personal.example' },
+    { path: '~\\.claude-work\\settings.json', account: 'me@work.example' },
+  ];
 };
 const consentButton = (page, action) => page.$(`#an-banners [data-an-action="${action}"]`);
 
