@@ -307,6 +307,10 @@ function New-SmokeProfile {
         $text = [IO.File]::ReadAllText($source)
         [IO.File]::WriteAllBytes($target, (ConvertTo-FixtureBytes -Text $text -Style $item.Style))
     }
+    # A profile has its AppData folders. The shell resolves them through the USERPROFILE the app
+    # runs with and, when they do not exist, answers with nothing: the app then logs to its
+    # current folder instead of its data folder (seen on the runner).
+    New-Item -ItemType Directory -Force -Path (Join-Path $Root 'AppData\Roaming'), (Join-Path $Root 'AppData\Local') | Out-Null
     # Where Claude Code's installer puts claude.exe; the engine finds it there. The fake only
     # answers --version and the usage probe, and logs what it was asked.
     $bin = Join-Path $Root '.local\bin'

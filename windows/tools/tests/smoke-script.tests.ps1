@@ -270,6 +270,7 @@ Test-Case 'the profile is built exactly as the design says' {
     Assert-True (@($hashes.Keys | Where-Object { $_ -like '.claude/projects/*/*.jsonl' }).Count -eq 1) 'one transcript'
     Assert-Equal $hashes.Count 6 'file count'
     Assert-Equal $hashes['.local/bin/claude.exe'] (Get-FileSha256 $fake) 'the fake is claude.exe'
+    foreach ($folder in 'AppData/Roaming', 'AppData/Local') { Assert-True (Test-Path (Join-Path $root $folder) -PathType Container) "P holds an empty $folder (the shell resolves the app's data folders through it)" }
 
     $default = [IO.File]::ReadAllBytes((Join-Path $root '.claude/settings.json'))
     Assert-Equal ($default[0..2] -join ',') '239,187,191' 'default settings: BOM'
