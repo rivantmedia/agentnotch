@@ -18,6 +18,18 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+/// The temp folder's real path as the engine spells it. `canonicalize` on
+/// Windows answers `\\?\C:\...`, which the engine's `Paths` drops, so a test
+/// comparing against that spelling would never match.
+pub fn plain_canonical(path: &Path) -> PathBuf {
+    let canonical = std::fs::canonicalize(path).unwrap();
+    let text = canonical.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with("UNC\\") => PathBuf::from(rest),
+        _ => canonical,
+    }
+}
+
 /// 2027-01-15, a fixed instant for lines that need a time.
 pub fn t0() -> SystemTime {
     UNIX_EPOCH + Duration::from_secs(1_800_000_000)

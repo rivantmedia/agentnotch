@@ -224,7 +224,7 @@ fn the_expected_path_is_spelt_in_each_style() {
 
 fn home() -> (tempfile::TempDir, Paths, String) {
     let dir = tempfile::tempdir().unwrap();
-    let canonical = dir.path().canonicalize().unwrap();
+    let canonical = plain_canonical(dir.path());
     let paths = Paths::native(&canonical);
     let home = paths.home().to_owned();
     (dir, paths, home)

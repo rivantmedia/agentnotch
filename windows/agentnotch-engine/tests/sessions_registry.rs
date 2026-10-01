@@ -713,7 +713,7 @@ struct Shared {
 impl Shared {
     fn new() -> Shared {
         let home = TempDir::new().unwrap();
-        let root = std::fs::canonicalize(home.path()).unwrap();
+        let root = sessions_support::plain_canonical(home.path());
         let paths = Paths::native(&root);
         let shared = root.join(".claude-shared").join("sessions");
         std::fs::create_dir_all(&shared).unwrap();
@@ -838,7 +838,7 @@ fn the_shared_folder_is_scanned_once_and_split() {
 #[test]
 fn separate_sessions_folders_are_separate_groups() {
     let home = TempDir::new().unwrap();
-    let root = std::fs::canonicalize(home.path()).unwrap();
+    let root = sessions_support::plain_canonical(home.path());
     let paths = Paths::native(&root);
     let (a, b) = (root.join(".claude"), root.join(".claude-work"));
     std::fs::create_dir_all(a.join("sessions")).unwrap();
