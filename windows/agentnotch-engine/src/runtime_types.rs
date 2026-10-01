@@ -38,6 +38,9 @@ pub enum Lane {
 }
 
 /// Blocking work, with its lane and result variant.
+// Moved once through a channel or a call; boxing variants would change the
+// §3 signatures every package codes against.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Job {
@@ -502,6 +505,13 @@ pub struct ProbePlan {
     pub spec: CommandSpec,
     pub reason: RefreshReason,
     pub planned_at: SystemTime,
+    /// The `.claude.json` that names who the folder is signed in as
+    /// (`~\.claude.json` for the default folder), read right before and
+    /// after the run.
+    pub identity_file: PathBuf,
+    /// Who that file must name for the check to run and its answer to count
+    /// (AU§9.9's folder-changed-hands rule).
+    pub expected: ExpectedLogin,
 }
 
 // Moved once through a channel or a call; boxing variants would change the

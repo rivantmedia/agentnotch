@@ -88,14 +88,29 @@ pub fn iso8601_ms(t: SystemTime) -> String {
 pub fn parse_iso8601(text: &str) -> Option<SystemTime> {
     let text = text.trim();
     if let Ok(date) = DateTime::parse_from_rfc3339(text) {
-        return Some(date.with_timezone(&Utc).into());
+        return system_time(date.with_timezone(&Utc));
     }
     for format in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%dT%H:%M:%S"] {
         if let Ok(naive) = NaiveDateTime::parse_from_str(text, format) {
-            return Some(naive.and_utc().into());
+            return system_time(naive.and_utc());
         }
     }
     None
+}
+
+/// A parsed date as a `SystemTime`; `None` when this platform's can't hold
+/// it. chrono's own `into()` panics there, and Windows' `SystemTime` starts
+/// in 1601: a year-1 date in a corrupt file must be no date, not a crash.
+fn system_time(date: DateTime<Utc>) -> Option<SystemTime> {
+    let seconds = date.timestamp();
+    let nanos = Duration::from_nanos(u64::from(date.timestamp_subsec_nanos()));
+    let whole = Duration::from_secs(seconds.unsigned_abs());
+    let at = if seconds >= 0 {
+        UNIX_EPOCH.checked_add(whole)?
+    } else {
+        UNIX_EPOCH.checked_sub(whole)?
+    };
+    at.checked_add(nanos)
 }
 
 /// A date written as whole-second ISO 8601 (`Z`), read leniently. Round
