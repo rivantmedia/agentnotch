@@ -69,7 +69,7 @@ fn non_empty(value: Option<&str>) -> Option<String> {
 
 /// A loosely typed JSON scalar as text (`JSONValue.string`): a number
 /// counts, an empty string doesn't.
-fn json_string(value: Option<&Value>) -> Option<String> {
+pub(crate) fn json_string(value: Option<&Value>) -> Option<String> {
     match value? {
         Value::String(s) if !s.is_empty() => Some(s.clone()),
         Value::Number(n) => Some(n.to_string()),
