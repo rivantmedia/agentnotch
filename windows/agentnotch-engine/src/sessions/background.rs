@@ -119,6 +119,50 @@ pub fn decide(
     now: SystemTime,
     timing: WaitTiming,
 ) -> WaitDecision {
+    let (quiet_since, deadline) = quiet_deadline(
+        wait_since,
+        registry_status,
+        registry_changed_at,
+        last_hook_event_at,
+        timing,
+    );
+    if now >= deadline {
+        WaitDecision::End { at: quiet_since }
+    } else {
+        WaitDecision::Keep {
+            recheck_in: Some(deadline.duration_since(now).unwrap_or_default()),
+        }
+    }
+}
+
+/// When [`decide`] ends the wait if nothing changes before: the store's
+/// next deadline for a wait (the clock alone can end it).
+pub fn check_at(
+    wait_since: SystemTime,
+    registry_status: Option<&str>,
+    registry_changed_at: Option<SystemTime>,
+    last_hook_event_at: Option<SystemTime>,
+    timing: WaitTiming,
+) -> SystemTime {
+    quiet_deadline(
+        wait_since,
+        registry_status,
+        registry_changed_at,
+        last_hook_event_at,
+        timing,
+    )
+    .1
+}
+
+/// Since when the wait has had no sign of work, and when that has lasted
+/// long enough to end it.
+fn quiet_deadline(
+    wait_since: SystemTime,
+    registry_status: Option<&str>,
+    registry_changed_at: Option<SystemTime>,
+    last_hook_event_at: Option<SystemTime>,
+    timing: WaitTiming,
+) -> (SystemTime, SystemTime) {
     let (quiet_since, patience) = match registry_status {
         Some("idle" | "shell") => (
             registry_changed_at.unwrap_or(wait_since).max(wait_since),
@@ -129,14 +173,7 @@ pub fn decide(
             timing.quiet_timeout,
         ),
     };
-    let deadline = quiet_since + patience;
-    if now >= deadline {
-        WaitDecision::End { at: quiet_since }
-    } else {
-        WaitDecision::Keep {
-            recheck_in: Some(deadline.duration_since(now).unwrap_or_default()),
-        }
-    }
+    (quiet_since, quiet_since + patience)
 }
 
 #[cfg(test)]

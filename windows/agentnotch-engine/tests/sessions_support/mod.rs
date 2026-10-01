@@ -260,8 +260,8 @@ pub fn object(pairs: &[(&str, Value)]) -> Value {
 
 use agentnotch_engine::core::paths::{PathStyle, Paths};
 use agentnotch_engine::model::{
-    AccountSighting, Answer, Attribution, HookEvent, SessionId, SessionState, SessionView,
-    StatusLineMessage,
+    AccountSighting, Answer, Attribution, HookEvent, RegistryEntry, RegistrySnapshot, SessionId,
+    SessionState, SessionView, StatusLineMessage,
 };
 use agentnotch_engine::runtime_types::{IngestContext, Release, SessionEffects, SessionInput};
 use agentnotch_engine::sessions::background::WaitTiming;
@@ -272,6 +272,38 @@ use agentnotch_engine::sessions::SessionStore;
 /// The transcript path every harness event carries (POSIX rules, so the
 /// tests mean the same on every OS).
 pub const TRANSCRIPT: &str = "/home/me/.claude/projects/-tmp-proj/s1.jsonl";
+
+/// The config folder the harness's transcript, and its registry, are in.
+pub const FOLDER: &str = "/home/me/.claude";
+
+/// The pid of the harness's Claude process.
+pub const PID: u32 = 4242;
+
+/// A registry entry of an interactive `cli` session in `/tmp/proj` whose
+/// status changed at `at`.
+pub fn registry_entry(session: &str, pid: u32, status: &str, at: SystemTime) -> RegistryEntry {
+    let mut entry = RegistryEntry::new(pid, session);
+    entry.cwd = Some("/tmp/proj".into());
+    entry.status = Some(status.into());
+    entry.status_updated_at = Some(at);
+    entry
+}
+
+/// One read of `<folder>\sessions`.
+pub fn registry_snapshot(
+    folder: &str,
+    via_link: bool,
+    entries: Vec<RegistryEntry>,
+    read_at: SystemTime,
+) -> RegistrySnapshot {
+    RegistrySnapshot {
+        sessions_dir: format!("{folder}/sessions").into(),
+        via_link,
+        entries,
+        read_at,
+        error: None,
+    }
+}
 
 /// Builds HookEvents tersely for store tests.
 #[derive(Clone)]
@@ -499,6 +531,56 @@ impl Harness {
             session: "s1".into(),
             at,
         })
+    }
+
+    /// The registry of [`FOLDER`] with `s1` (pid [`PID`]) in `status` since `at`.
+    pub fn registry(&mut self, status: &str, at: SystemTime) -> SessionEffects {
+        self.registry_of("s1", PID, status, at)
+    }
+
+    pub fn registry_of(
+        &mut self,
+        session: &str,
+        pid: u32,
+        status: &str,
+        at: SystemTime,
+    ) -> SessionEffects {
+        self.registry_entries(
+            FOLDER,
+            false,
+            vec![registry_entry(session, pid, status, at)],
+        )
+    }
+
+    pub fn registry_entries(
+        &mut self,
+        folder: &str,
+        via_link: bool,
+        entries: Vec<RegistryEntry>,
+    ) -> SessionEffects {
+        let snapshot = registry_snapshot(folder, via_link, entries, self.now);
+        self.apply(SessionInput::Registry(snapshot))
+    }
+
+    pub fn tick(&mut self) -> SessionEffects {
+        self.apply(SessionInput::Tick)
+    }
+
+    /// Ticks at every deadline up to `until`, as the runtime does, and moves
+    /// the clock there. Returns the jobs the ticks asked for.
+    pub fn run_until(&mut self, until: SystemTime) -> Vec<agentnotch_engine::runtime_types::Job> {
+        let mut jobs = Vec::new();
+        for _ in 0..1000 {
+            match self.store.next_deadline() {
+                Some(deadline) if deadline <= until => {
+                    self.now = self.now.max(deadline);
+                    jobs.extend(self.tick().jobs);
+                }
+                _ => break,
+            }
+        }
+        self.now = self.now.max(until);
+        jobs
     }
 
     /// The releases since the last call.

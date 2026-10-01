@@ -17,16 +17,22 @@
 
 use crate::core::paths::{PathStyle, Paths};
 use crate::model::{
-    AccountId, AccountSighting, ChatHistory, HookEvent, NeedsInputReason, PermissionContext, Phase,
-    SessionId, SessionView, StatusLineMessage,
+    AccountId, AccountSighting, ChatHistory, DesktopCandidate, HookEvent, NeedsInputReason,
+    PermissionContext, Phase, SessionId, SessionView, StatusLineMessage,
 };
+use crate::platform::Processes;
 use crate::runtime_types::{IngestContext, Release, SessionEffects, SessionInput};
 use crate::sessions::attention;
 use crate::sessions::background;
 use crate::sessions::completion::CompletionTiming;
+use crate::sessions::desktop::DesktopAttributor;
 use crate::sessions::phase;
+use crate::sessions::registry::SessionsFolderGroup;
 use crate::sessions::session::{Session, SessionTitleSource, SubagentState};
+use crate::sessions::store_turns::QuickRescan;
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 /// Claude Code's user message after an automatic compaction; a Stop right
@@ -63,13 +69,33 @@ pub struct SessionStore {
     pub(super) sync_due: BTreeMap<SessionId, SystemTime>,
     /// The folder each session was last sighted in, and when.
     sightings: BTreeMap<SessionId, (AccountId, SystemTime)>,
-    /// Folders whose registry is rescanned soon, with the time of the Stop
-    /// that asked (the quick rescans at 0.3 s and 1.2 s are wp5-8's).
-    pub(super) rescan_after_stop: BTreeMap<AccountId, SystemTime>,
+    /// Folders whose registry is read again soon after a Stop (at 0.3 s and
+    /// 1.2 s: the registry goes idle moments after our hook ran).
+    pub(super) rescan_after_stop: BTreeMap<AccountId, QuickRescan>,
     pub(super) paths: Paths,
     pub(super) completion_timing: CompletionTiming,
     pub(super) wait_timing: background::WaitTiming,
-    effects: SessionEffects,
+    /// Process liveness and start times for the periodic check; none means
+    /// no process is ever found gone.
+    pub(super) processes: Option<Arc<dyn Processes>>,
+    /// Claude Desktop's lookups of whose a hosted session is, the folders
+    /// its records are under and the identities worth looking for (the hub
+    /// sets both).
+    pub(super) desktop: DesktopAttributor,
+    pub(super) desktop_roots: Vec<PathBuf>,
+    pub(super) desktop_candidates: Vec<DesktopCandidate>,
+    /// The physical sessions folders and the config folders that lead to
+    /// each (the hub's scan plan): how a shared folder's entries are
+    /// attributed.
+    pub(super) registry_folders: Vec<SessionsFolderGroup>,
+    /// When the periodic check last ran; none while there is no session.
+    pub(super) last_check: Option<SystemTime>,
+    /// When this run began and when the previous one last was alive: a
+    /// session the registry shows idle since before the launch may have
+    /// finished a turn while the app was down.
+    pub(super) started_at: Option<SystemTime>,
+    pub(super) previous_run_alive_at: Option<SystemTime>,
+    pub(super) effects: SessionEffects,
 }
 
 impl Default for SessionStore {
@@ -92,6 +118,14 @@ impl SessionStore {
             paths: Paths::new(PathStyle::native(), ""),
             completion_timing: CompletionTiming::STANDARD,
             wait_timing: background::WaitTiming::STANDARD,
+            processes: None,
+            desktop: DesktopAttributor::new(),
+            desktop_roots: Vec::new(),
+            desktop_candidates: Vec::new(),
+            registry_folders: Vec::new(),
+            last_check: None,
+            started_at: None,
+            previous_run_alive_at: None,
             effects: SessionEffects::default(),
         }
     }
@@ -113,6 +147,41 @@ impl SessionStore {
         self.completion_timing = completion;
         self.wait_timing = wait;
         self
+    }
+
+    /// Process liveness and start times: the periodic check drops sessions
+    /// whose process is gone or whose pid another process now holds.
+    pub fn with_processes(mut self, processes: Arc<dyn Processes>) -> Self {
+        self.processes = Some(processes);
+        self
+    }
+
+    /// When this run began, and when the previous one last was alive (the
+    /// review file's heartbeat).
+    pub fn set_launch(
+        &mut self,
+        started_at: SystemTime,
+        previous_run_alive_at: Option<SystemTime>,
+    ) {
+        self.started_at = Some(started_at);
+        self.previous_run_alive_at = previous_run_alive_at;
+    }
+
+    /// The identities a Claude Desktop-hosted session may belong to.
+    pub fn set_desktop_candidates(&mut self, candidates: Vec<DesktopCandidate>) {
+        self.desktop_candidates = candidates;
+    }
+
+    /// Claude Desktop's data folders (`Roots::claude_desktop`); none means
+    /// no hosted session is looked up.
+    pub fn set_desktop_roots(&mut self, roots: Vec<PathBuf>) {
+        self.desktop_roots = roots;
+    }
+
+    /// The physical sessions folders and their config folders (see
+    /// `registry::grouped_by_sessions_folder`).
+    pub fn set_registry_folders(&mut self, folders: Vec<SessionsFolderGroup>) {
+        self.registry_folders = folders;
     }
 
     // ---- reading ----
@@ -184,6 +253,12 @@ impl SessionStore {
             SessionInput::Review(action) => self.apply_review(action, now),
             SessionInput::AccountsChanged(change) => self.apply_accounts_changed(change, now),
             SessionInput::Tick => self.tick(now),
+        }
+        // The periodic check counts from the first session.
+        if self.sessions.is_empty() {
+            self.last_check = None;
+        } else if self.last_check.is_none() {
+            self.last_check = Some(now);
         }
         let mut effects = std::mem::take(&mut self.effects);
         effects.changed = effects.changed || before != self.views();
@@ -582,7 +657,7 @@ impl SessionStore {
             self.settle_pending_completion(session, now);
         }
         if let Some(account) = &session.account {
-            self.rescan_after_stop.insert(account.clone(), now);
+            self.request_quick_rescan(account.clone(), now);
         }
         self.settle_background_wait(session, now);
     }
@@ -673,7 +748,7 @@ impl SessionStore {
 
     // ---- creating and ending ----
 
-    fn create_session(
+    pub(super) fn create_session(
         &mut self,
         id: &SessionId,
         cwd: &str,

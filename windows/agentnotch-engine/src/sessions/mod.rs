@@ -6,8 +6,9 @@
 //! `chat`, `completion`, `locator`, `phase`, `summary`, `tasks`, `tool_input`, `tool_results`,
 //! `transcript`, `registry`, `desktop`, `session`).
 //! The store (`store` and its `store_*` siblings, impl blocks of one
-//! struct): hook and status line inputs are real (wp5-7); the registry,
-//! review, transcript and periodic-check arms follow in wp5-8..wp5-10.
+//! struct): hook and status line inputs are real (wp5-7), and so are the
+//! registry, Desktop-hosted and periodic-check arms (wp5-8); the review and
+//! transcript arms follow in wp5-9 and wp5-10.
 
 pub mod attention;
 pub mod background;
