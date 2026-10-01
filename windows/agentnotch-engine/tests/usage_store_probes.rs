@@ -17,6 +17,8 @@
 mod usage_support;
 
 use agentnotch_engine::core::claude_json::ClaudeJsonReader;
+use agentnotch_engine::core::flags::DevFlags;
+use agentnotch_engine::core::settings::ControlSettings;
 use agentnotch_engine::core::time::{iso8601, to_ns, IsoSeconds};
 use agentnotch_engine::model::{
     Account, AccountUsage, Attribution, DesktopCacheFormat, DesktopReading, DesktopWindow,
@@ -1417,6 +1419,63 @@ fn the_interval_and_the_allowance_gate_the_schedule() {
     out.refresh(&fx.id, RefreshReason::Manual, now());
     assert!(out.due_probe(now()).is_none());
     assert_eq!(out.fetch_state_of(&fx.id), schedule::not_signed_in());
+}
+
+/// What a run starts with (`UsageStoreConfig::for_run`): a sealed run never
+/// launches Claude Code, not even on request, and never reads Claude
+/// Desktop's cache whatever the settings say; a dev run (`--no-install`)
+/// probes only on request unless `AGENTNOTCH_USAGE_PROBE=1`.
+#[test]
+fn a_runs_configuration_follows_its_flags() {
+    let fx = Fx::new();
+    let settings = ControlSettings::default();
+    let flags = |sealed: bool, no_install: bool, usage_probe: bool| DevFlags {
+        sealed,
+        no_install,
+        usage_probe_on_dev_run: usage_probe,
+        ..DevFlags::default()
+    };
+    let config =
+        |flags: &DevFlags| UsageStoreConfig::for_run(fx.roots.home.clone(), flags, &settings);
+
+    let live = config(&flags(false, false, false));
+    assert!(live.probes_allowed && !live.probes_disabled && live.reads_desktop);
+    assert_eq!(live.probe_interval_minutes, 5);
+    assert_eq!(live.home, fx.roots.home);
+    assert!(!live.mirrors_default);
+    let dev = config(&flags(false, true, false));
+    assert!(!dev.probes_allowed && !dev.probes_disabled && dev.reads_desktop);
+    assert!(config(&flags(false, true, true)).probes_allowed);
+    let off = UsageStoreConfig::for_run(
+        fx.roots.home.clone(),
+        &flags(false, false, false),
+        &ControlSettings {
+            usage_probe_interval_minutes: 0,
+            reads_desktop_usage_cache: false,
+            ..ControlSettings::default()
+        },
+    );
+    assert_eq!(off.probe_interval_minutes, 0);
+    assert!(!off.reads_desktop);
+
+    let sealed = config(&flags(true, false, true));
+    assert!(!sealed.probes_allowed && sealed.probes_disabled && !sealed.reads_desktop);
+    let mut store = fx.store_of(
+        sealed,
+        std::slice::from_ref(&fx.account),
+        std::slice::from_ref(&fx.folder),
+    );
+    let reads = [fx.read(Some(20.0), ago(20 * 60))];
+    let mut desktop = Desktop::with(desktop_reading(50.0, now()));
+    assert!(cycle(&mut store, &reads, &mut desktop, now()).is_none());
+    assert!(desktop.asked.is_empty(), "a sealed run read Claude Desktop");
+    let asked = ask(&mut store, &reads, &fx.id, RefreshReason::Manual, now());
+    assert!(asked.desktop_reads.is_empty());
+    assert!(store.due_probe(now()).is_none());
+    assert_eq!(
+        store.fetch_state_of(&fx.id),
+        UsageFetchState::Unavailable(PROBES_OFF_TEXT.into())
+    );
 }
 
 #[test]

@@ -25,7 +25,9 @@
 //! probe) is a second `impl UsageStore` in `store_probes.rs`: the fields it
 //! needs are `pub(super)`.
 
+use crate::core::flags::DevFlags;
 use crate::core::paths::Paths;
+use crate::core::settings::ControlSettings;
 use crate::core::time::IsoSeconds;
 use crate::model::RingStatus;
 use crate::model::{
@@ -75,6 +77,23 @@ impl Default for UsageStoreConfig {
             probes_disabled: false,
             probe_interval_minutes: 5,
             reads_desktop: true,
+            mirrors_default: false,
+        }
+    }
+}
+
+impl UsageStoreConfig {
+    /// The configuration a run starts with (what the hub builds the store
+    /// from): automatic probes as `DevFlags::probes_allowed` says; a sealed
+    /// run never launches Claude Code, not even on request, and never reads
+    /// Claude Desktop's files, whatever the settings say.
+    pub fn for_run(home: PathBuf, flags: &DevFlags, settings: &ControlSettings) -> Self {
+        UsageStoreConfig {
+            home,
+            probes_allowed: flags.probes_allowed(),
+            probes_disabled: flags.sealed,
+            probe_interval_minutes: settings.usage_probe_interval_minutes,
+            reads_desktop: settings.reads_desktop_usage_cache && !flags.sealed,
             mirrors_default: false,
         }
     }
@@ -224,7 +243,8 @@ impl UsageStore {
         self.config.probe_interval_minutes = minutes;
     }
 
-    /// The "Also read Claude Desktop's cached usage" setting changed.
+    /// The "Also read Claude Desktop's cached usage" setting changed (a
+    /// sealed run passes `false` whatever the fixture says).
     pub fn set_reads_desktop(&mut self, on: bool) {
         self.config.reads_desktop = on;
     }
