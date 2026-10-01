@@ -1308,6 +1308,11 @@
     apply: apply,
     naturalHeight: naturalHeight,
     layoutProblems: layoutProblems,
+    /** The page's report (the chat lives in the panel's card): `{ok, failures, ...}`, the chat's own problems included in a chat. */
+    layoutReport: function () {
+      var panel = window.agentnotchPanel;
+      return panel && typeof panel.layoutReport === 'function' ? panel.layoutReport() : { ok: false, failures: ['no panel page'] };
+    },
     /** Snapshots: the task board open or shut. */
     openBoard: setBoard,
     /** The bottom bar's renderer (`(row, chat) => html`); tests may replace it. */

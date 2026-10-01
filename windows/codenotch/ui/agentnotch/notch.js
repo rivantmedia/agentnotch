@@ -696,7 +696,7 @@
 
   /** Sealed snapshot scenes (§7.4): the notch open, with the first Claude ring's card, or folded. */
   function showScene(name) {
-    if (!C) return false;
+    if (!C || (name !== 'notch-open' && name !== 'notch-card' && name !== 'notch-folded')) return false;
     C.setStatic(true);
     var cells = cellsFrom(state.snapshot) || [];
     if (name === 'notch-folded') {

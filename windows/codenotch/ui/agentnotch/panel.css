@@ -134,7 +134,7 @@ button:focus-visible { outline: 1px solid var(--an-row-sel-stroke); outline-offs
 }
 .an-chip:hover { background: var(--an-fill); }
 .an-chip.an-sel { background: var(--an-fill-hover); border-color: transparent; color: var(--an-text); }
-.an-chip-l { max-width: 150px; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
+.an-chip-l { max-width: 175px; /* the Mac's 150 pt at the Windows type scale (x1.15) */ overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
 .an-chip-n { color: var(--an-text-2); font-variant-numeric: tabular-nums; }
 .an-chip-need { display: inline-flex; align-items: center; gap: 2px; color: var(--an-needs-you); font-variant-numeric: tabular-nums; }
 .an-need-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
@@ -214,7 +214,7 @@ button:focus-visible { outline: 1px solid var(--an-row-sel-stroke); outline-offs
 .an-row:not(.an-first) { margin-top: 2px; }
 .an-lst[data-compact] .an-row { margin-top: 0; }
 .an-row.an-cmp { padding-top: 4px; padding-bottom: 4px; }
-.an-row:hover { background: var(--an-row-hover); }
+.an-row:hover, .an-row.an-force { background: var(--an-row-hover); }
 .an-row.an-sel { background: var(--an-row-sel); box-shadow: inset 0 0 0 var(--an-hair) var(--an-row-sel-stroke); }
 .an-reg { display: flex; flex-direction: column; gap: var(--an-line-gap); }
 
@@ -231,8 +231,8 @@ button:focus-visible { outline: 1px solid var(--an-row-sel-stroke); outline-offs
 .an-trail { display: inline-flex; align-items: center; gap: 5px; font-size: var(--an-fs-caption); font-weight: 500; font-variant-numeric: tabular-nums; }
 .an-elapsed { white-space: nowrap; }
 .an-hover { display: inline-flex; align-items: center; gap: 1px; opacity: 0; pointer-events: none; }
-.an-row:hover .an-trail, .an-row.an-sel .an-trail, .an-row:focus-within .an-trail { opacity: 0; }
-.an-row:hover .an-hover, .an-row.an-sel .an-hover, .an-row:focus-within .an-hover { opacity: 1; pointer-events: auto; }
+.an-row:hover .an-trail, .an-row.an-force .an-trail, .an-row.an-sel .an-trail, .an-row:focus-within .an-trail { opacity: 0; }
+.an-row:hover .an-hover, .an-row.an-force .an-hover, .an-row.an-sel .an-hover, .an-row:focus-within .an-hover { opacity: 1; pointer-events: auto; }
 .an-rbtn {
   display: inline-flex; align-items: center; justify-content: center; width: 22px; height: var(--an-control-h); padding: 0;
   border: 0; border-radius: 6px; background: transparent; color: var(--an-text-2); cursor: pointer;
@@ -429,8 +429,9 @@ button:focus-visible { outline: 1px solid var(--an-row-sel-stroke); outline-offs
   margin: 0; font-size: var(--an-fs-row-title); font-weight: 600; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate;
 }
 .an-ch-sub { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--an-fs-caption); color: var(--an-text-2); white-space: nowrap; }
-.an-ch-sub > .an-acct { flex: 0 1 auto; min-width: 24px; }
-.an-ch-subt { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
+/* the account keeps its name (up to 11 em); the task text gives way first */
+.an-ch-sub > .an-acct { flex: 0 0 auto; min-width: 24px; max-width: 11em; }
+.an-ch-subt { flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; unicode-bidi: isolate; }
 .an-ch-act { color: var(--an-text); }
 .an-ch-right { flex: none; display: flex; align-items: center; gap: 8px; }
 .an-ch-tasks {
@@ -611,13 +612,13 @@ button.an-tool-head { cursor: pointer; }
 .an-md > * + * { margin-top: 8px; }
 .an-md-h { padding-top: 3px; font-size: inherit; font-weight: 600; }
 .an-md-h1, .an-md-h2 { font-weight: 700; }
-.an-md-list { display: flex; flex-direction: column; gap: 6px; padding: 0; list-style: none; }
+.an-md-list { display: flex; flex-direction: column; gap: 3px; /* MarkdownRenderer.swift: VStack spacing 3 */ padding: 0; list-style: none; }
 .an-md-list > li { display: flex; gap: 6px; min-width: 0; }
 .an-md-marker { flex: none; min-width: 1.1em; color: var(--an-text-2); text-align: right; font-variant-numeric: tabular-nums; }
 .an-md-item { flex: 1 1 auto; min-width: 0; }
 /* a list item's paragraphs sit on the marker's line, as the Mac's MarkdownText draws them */
 .an-md-item > *, .an-md-quote > * { margin: 0; }
-.an-md-item > * + *, .an-md-quote > * + * { margin-top: 6px; }
+.an-md-item > * + *, .an-md-quote > * + * { margin-top: 3px; }
 .an-md-quote { padding-left: 9px; border-left: 3px solid var(--an-sep); color: var(--an-text-2); }
 .an-md-pre {
   box-sizing: border-box; padding: 7px 9px; border-radius: 8px; background: var(--an-fill); color: var(--an-text);

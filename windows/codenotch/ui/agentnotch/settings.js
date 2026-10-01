@@ -1235,7 +1235,7 @@
       texts += 1;
       if (el.scrollWidth > el.clientWidth + 1 && !cutWithEllipsis(el)) failures.push('text is clipped: ' + C.oneLine(el.textContent).slice(0, 40));
     });
-    Array.prototype.forEach.call(pane.querySelectorAll('button, input, select, textarea'), function (el) {
+    Array.prototype.forEach.call(pane.querySelectorAll('button, [data-an-action], [role="button"], a[href], input, select, textarea'), function (el) {
       var r = el.getBoundingClientRect();
       if (r.width && pr.width && !insideAcross(r, pr, 0.5)) {
         failures.push('control outside the pane: ' + (el.getAttribute('aria-label') || C.oneLine(el.textContent)).slice(0, 40));

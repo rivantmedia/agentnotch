@@ -1,113 +1,125 @@
 {
-  "comment": "Every scene the snapshot tool (tools/render-scenes.cjs) and WP9's self-test render. See README.md for the fields.",
+  "comment": "Every scene the snapshot tool (tools/render-scenes.cjs) and WP9's self-test render. `file` is the PNG the app's snapshot run writes for it ({width} is 400 or 520 for a scene with widths: true); `mac` is the Mac sheet of the same scene. See README.md for the fields.",
   "scenes": [
     {
-      "name": "notch-open-right",
+      "name": "notch-right-open",
       "page": "notch.html",
       "global": "agentnotch",
       "scene": "notch-open",
       "edge": "right",
       "width": 360,
-      "height": 650
+      "height": 650,
+      "file": "notch-right-open.png"
     },
     {
-      "name": "notch-card-right",
+      "name": "notch-right-card",
       "page": "notch.html",
       "global": "agentnotch",
       "scene": "notch-card",
       "edge": "right",
       "width": 360,
-      "height": 650
+      "height": 650,
+      "file": "notch-right-card.png"
     },
     {
-      "name": "notch-folded-right",
+      "name": "notch-right-folded",
       "page": "notch.html",
       "global": "agentnotch",
       "scene": "notch-folded",
       "edge": "right",
       "width": 360,
-      "height": 650
+      "height": 650,
+      "file": "notch-right-folded.png"
     },
     {
-      "name": "notch-open-left",
+      "name": "notch-left-open",
       "page": "notch.html",
       "global": "agentnotch",
       "scene": "notch-open",
       "edge": "left",
       "width": 360,
-      "height": 650
+      "height": 650,
+      "file": "notch-left-open.png"
     },
     {
-      "name": "notch-card-left",
+      "name": "notch-left-card",
       "page": "notch.html",
       "global": "agentnotch",
       "scene": "notch-card",
       "edge": "left",
       "width": 360,
-      "height": 650
+      "height": 650,
+      "file": "notch-left-card.png"
     },
     {
-      "name": "notch-folded-left",
+      "name": "notch-left-folded",
       "page": "notch.html",
       "global": "agentnotch",
       "scene": "notch-folded",
       "edge": "left",
       "width": 360,
-      "height": 650
+      "height": 650,
+      "file": "notch-left-folded.png"
     },
     {
-      "name": "notch-open-top",
+      "name": "notch-top-open",
       "page": "notch.html",
       "global": "agentnotch",
       "scene": "notch-open",
       "edge": "top",
       "width": 650,
-      "height": 650
+      "height": 650,
+      "file": "notch-top-open.png"
     },
     {
-      "name": "notch-card-top",
+      "name": "notch-top-card",
       "page": "notch.html",
       "global": "agentnotch",
       "scene": "notch-card",
       "edge": "top",
       "width": 650,
-      "height": 650
+      "height": 650,
+      "file": "notch-top-card.png"
     },
     {
-      "name": "notch-folded-top",
+      "name": "notch-top-folded",
       "page": "notch.html",
       "global": "agentnotch",
       "scene": "notch-folded",
       "edge": "top",
       "width": 650,
-      "height": 650
+      "height": 650,
+      "file": "notch-top-folded.png"
     },
     {
-      "name": "notch-open-bottom",
+      "name": "notch-bottom-open",
       "page": "notch.html",
       "global": "agentnotch",
       "scene": "notch-open",
       "edge": "bottom",
       "width": 650,
-      "height": 650
+      "height": 650,
+      "file": "notch-bottom-open.png"
     },
     {
-      "name": "notch-card-bottom",
+      "name": "notch-bottom-card",
       "page": "notch.html",
       "global": "agentnotch",
       "scene": "notch-card",
       "edge": "bottom",
       "width": 650,
-      "height": 650
+      "height": 650,
+      "file": "notch-bottom-card.png"
     },
     {
-      "name": "notch-folded-bottom",
+      "name": "notch-bottom-folded",
       "page": "notch.html",
       "global": "agentnotch",
       "scene": "notch-folded",
       "edge": "bottom",
       "width": 650,
-      "height": 650
+      "height": 650,
+      "file": "notch-bottom-folded.png"
     },
     {
       "name": "panel-empty",
@@ -121,7 +133,9 @@
         "ring_id": null,
         "highlight": null,
         "reason": "ring_click"
-      }
+      },
+      "file": "panel-empty-{width}.png",
+      "mac": "panel-empty"
     },
     {
       "name": "panel-every-state",
@@ -136,7 +150,9 @@
         "highlight": null,
         "reason": "ring_click"
       },
-      "maxHeight": 1400
+      "maxHeight": 1400,
+      "file": "panel-every-state-{width}.png",
+      "mac": "panel-every-state"
     },
     {
       "name": "panel-menu",
@@ -150,7 +166,8 @@
         "ring_id": null,
         "highlight": null,
         "reason": "ring_click"
-      }
+      },
+      "file": "panel-menu-{width}.png"
     },
     {
       "name": "panel-filtered",
@@ -165,7 +182,9 @@
         "highlight": null,
         "reason": "ring_click"
       },
-      "maxHeight": 1400
+      "maxHeight": 1400,
+      "file": "panel-filtered-{width}.png",
+      "mac": "panel-filtered"
     },
     {
       "name": "panel-needs-you",
@@ -180,7 +199,9 @@
         "highlight": null,
         "reason": "ring_click"
       },
-      "maxHeight": 2400
+      "maxHeight": 2400,
+      "file": "panel-needs-you-{width}.png",
+      "mac": "panel-needs-you"
     },
     {
       "name": "panel-banners",
@@ -195,7 +216,9 @@
         "highlight": null,
         "reason": "ring_click"
       },
-      "maxHeight": 2400
+      "maxHeight": 2400,
+      "file": "panel-banners-{width}.png",
+      "mac": "panel-banners"
     },
     {
       "name": "panel-consent",
@@ -210,7 +233,9 @@
         "highlight": null,
         "reason": "ring_click"
       },
-      "maxHeight": 2400
+      "maxHeight": 2400,
+      "file": "panel-consent-{width}.png",
+      "mac": "panel-consent"
     },
     {
       "name": "panel-scope-notice",
@@ -225,7 +250,9 @@
         "highlight": null,
         "reason": "ring_click"
       },
-      "maxHeight": 2400
+      "maxHeight": 2400,
+      "file": "panel-scope-notice-{width}.png",
+      "mac": "panel-scope-notice"
     },
     {
       "name": "panel-regular-rows",
@@ -240,7 +267,9 @@
         "highlight": null,
         "reason": "ring_click"
       },
-      "maxHeight": 1400
+      "maxHeight": 1400,
+      "file": "panel-regular-rows-{width}.png",
+      "mac": "panel-regular-rows"
     },
     {
       "name": "panel-busy-window",
@@ -254,7 +283,9 @@
         "ring_id": null,
         "highlight": null,
         "reason": "ring_click"
-      }
+      },
+      "file": "panel-busy-window-{width}.png",
+      "mac": "panel-busy-window"
     },
     {
       "name": "panel-busy-full",
@@ -269,7 +300,9 @@
         "highlight": null,
         "reason": "ring_click"
       },
-      "maxHeight": 4000
+      "maxHeight": 4000,
+      "file": "panel-busy-full-{width}.png",
+      "mac": "panel-busy-full"
     },
     {
       "name": "panel-undo",
@@ -284,7 +317,9 @@
         "highlight": null,
         "reason": "ring_click"
       },
-      "maxHeight": 1400
+      "maxHeight": 1400,
+      "file": "panel-undo-{width}.png",
+      "mac": "panel-undo"
     },
     {
       "name": "panel-keyboard-folded",
@@ -299,7 +334,9 @@
         "highlight": null,
         "reason": "ring_click"
       },
-      "maxHeight": 1400
+      "maxHeight": 1400,
+      "file": "panel-keyboard-folded-{width}.png",
+      "mac": "panel-keyboard-folded"
     },
     {
       "name": "panel-single-account",
@@ -313,7 +350,8 @@
         "ring_id": null,
         "highlight": null,
         "reason": "ring_click"
-      }
+      },
+      "file": "panel-single-account-{width}.png"
     },
     {
       "name": "panel-pinned",
@@ -327,10 +365,11 @@
         "ring_id": null,
         "highlight": null,
         "reason": "ring_click"
-      }
+      },
+      "file": "panel-pinned-{width}.png"
     },
     {
-      "name": "panel-tail-left",
+      "name": "panel-chrome-left",
       "page": "agentnotch/panel.html",
       "global": "agentnotchPanel",
       "scene": "panel-every-state",
@@ -347,10 +386,11 @@
           "width": 400
         }
       },
-      "height": "fit"
+      "height": "fit",
+      "file": "panel-chrome-left.png"
     },
     {
-      "name": "panel-tail-right",
+      "name": "panel-chrome-right",
       "page": "agentnotch/panel.html",
       "global": "agentnotchPanel",
       "scene": "panel-every-state",
@@ -367,10 +407,11 @@
           "width": 400
         }
       },
-      "height": "fit"
+      "height": "fit",
+      "file": "panel-chrome-right.png"
     },
     {
-      "name": "panel-tail-top",
+      "name": "panel-chrome-top",
       "page": "agentnotch/panel.html",
       "global": "agentnotchPanel",
       "scene": "panel-every-state",
@@ -387,10 +428,11 @@
           "width": 440
         }
       },
-      "height": "fit"
+      "height": "fit",
+      "file": "panel-chrome-top.png"
     },
     {
-      "name": "panel-tail-bottom",
+      "name": "panel-chrome-bottom",
       "page": "agentnotch/panel.html",
       "global": "agentnotchPanel",
       "scene": "panel-every-state",
@@ -407,7 +449,23 @@
           "width": 440
         }
       },
-      "height": "fit"
+      "height": "fit",
+      "file": "panel-chrome-bottom.png"
+    },
+    {
+      "name": "panel-chrome-floating",
+      "page": "agentnotch/panel.html",
+      "global": "agentnotchPanel",
+      "scene": "panel-every-state",
+      "width": 440,
+      "panel": {
+        "route": "sessions",
+        "ring_id": null,
+        "highlight": null,
+        "reason": "ring_click"
+      },
+      "height": "fit",
+      "file": "panel-chrome-floating.png"
     },
     {
       "name": "chat-approval",
@@ -421,7 +479,9 @@
         "ring_id": null,
         "highlight": null,
         "reason": "hover_row"
-      }
+      },
+      "file": "chat-approval-{width}.png",
+      "mac": "chat-approval"
     },
     {
       "name": "chat-tasks",
@@ -487,7 +547,9 @@
             "loading": false
           }
         }
-      ]
+      ],
+      "file": "chat-tasks-{width}.png",
+      "mac": "chat-tasks"
     },
     {
       "name": "chat-plan",
@@ -545,7 +607,9 @@
             "loading": false
           }
         }
-      ]
+      ],
+      "file": "chat-plan-{width}.png",
+      "mac": "chat-plan"
     },
     {
       "name": "chat-question-other",
@@ -590,7 +654,9 @@
             "loading": false
           }
         }
-      ]
+      ],
+      "file": "chat-question-other-{width}.png",
+      "mac": "chat-question-other"
     },
     {
       "name": "chat-composer",
@@ -662,7 +728,9 @@
             "loading": false
           }
         }
-      ]
+      ],
+      "file": "chat-composer-{width}.png",
+      "mac": "chat-composer"
     },
     {
       "name": "chat-terminal-only",
@@ -707,7 +775,9 @@
             "loading": false
           }
         }
-      ]
+      ],
+      "file": "chat-terminal-only-{width}.png",
+      "mac": "chat-terminal-only"
     },
     {
       "name": "chat-no-route",
@@ -773,15 +843,19 @@
             "loading": false
           }
         }
-      ]
+      ],
+      "file": "chat-no-route-{width}.png",
+      "mac": "chat-no-route"
     },
     {
-      "name": "settings-full",
+      "name": "settings",
       "page": "settings.html",
       "global": "agentnotchSettings",
       "scene": "settings-full",
       "width": 680,
-      "height": 3600
+      "height": 3600,
+      "file": "settings.png",
+      "mac": "settings"
     },
     {
       "name": "settings-first-run",
@@ -789,7 +863,9 @@
       "global": "agentnotchSettings",
       "scene": "settings-first-run",
       "width": 680,
-      "height": 1500
+      "height": 1500,
+      "file": "settings-first-run.png",
+      "mac": "settings-first-run"
     },
     {
       "name": "settings-scope-notice",
@@ -797,7 +873,9 @@
       "global": "agentnotchSettings",
       "scene": "settings-scope-notice",
       "width": 680,
-      "height": 1500
+      "height": 1500,
+      "file": "settings-scope-notice.png",
+      "mac": "settings-scope-notice"
     },
     {
       "name": "settings-parallel-profiles",
@@ -805,7 +883,9 @@
       "global": "agentnotchSettings",
       "scene": "settings-parallel-profiles",
       "width": 680,
-      "height": 1900
+      "height": 1900,
+      "file": "settings-parallel-profiles.png",
+      "mac": "settings-parallel-profiles"
     },
     {
       "name": "settings-unnamed-accounts",
@@ -813,7 +893,9 @@
       "global": "agentnotchSettings",
       "scene": "settings-unnamed-accounts",
       "width": 680,
-      "height": 1700
+      "height": 1700,
+      "file": "settings-unnamed-accounts.png",
+      "mac": "settings-unnamed-accounts"
     },
     {
       "name": "settings-cloud-signed-out",
@@ -821,7 +903,9 @@
       "global": "agentnotchSettings",
       "scene": "settings-cloud-signed-out",
       "width": 680,
-      "height": 420
+      "height": 420,
+      "file": "settings-cloud-signed-out.png",
+      "mac": "settings-cloud-signed-out"
     },
     {
       "name": "settings-cloud-signed-in",
@@ -829,7 +913,9 @@
       "global": "agentnotchSettings",
       "scene": "settings-cloud-signed-in",
       "width": 680,
-      "height": 900
+      "height": 900,
+      "file": "settings-cloud-signed-in.png",
+      "mac": "settings-cloud-signed-in"
     },
     {
       "name": "settings-cloud-overridden",
@@ -837,7 +923,9 @@
       "global": "agentnotchSettings",
       "scene": "settings-cloud-overridden",
       "width": 680,
-      "height": 420
+      "height": 420,
+      "file": "settings-cloud-overridden.png",
+      "mac": "settings-cloud-overridden"
     },
     {
       "name": "settings-cloud-no-website",
@@ -845,7 +933,9 @@
       "global": "agentnotchSettings",
       "scene": "settings-cloud-no-website",
       "width": 680,
-      "height": 420
+      "height": 420,
+      "file": "settings-cloud-no-website.png",
+      "mac": "settings-cloud-no-website"
     }
   ]
 }

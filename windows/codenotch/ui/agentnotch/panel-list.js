@@ -379,7 +379,7 @@
 
   function rowClasses(row, o, extra) {
     var kind = C().glyphKind(row);
-    return 'an-row an-b-' + tone(kind) + extra + (str(row.session_id) === o.selected ? ' an-sel' : '') + (o.first ? ' an-first' : '');
+    return 'an-row an-b-' + tone(kind) + extra + (str(row.session_id) === o.selected ? ' an-sel' : '') + (str(row.session_id) === o.forceHover ? ' an-force' : '') + (o.first ? ' an-first' : '');
   }
 
   function rowOpen(row, o, extra) {
@@ -478,7 +478,7 @@
       }
       section.rows.forEach(function (row, position) {
         out += rowHtml(row, {
-          compact: lay.compact, selected: opts.selected, first: position === 0, showAccount: showAccount,
+          compact: lay.compact, selected: opts.selected, forceHover: opts.forceHover, first: position === 0, showAccount: showAccount,
           now: opts.now, actions: opts.actions,
         });
       });

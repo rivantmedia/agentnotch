@@ -859,8 +859,8 @@ test('the list scenes render: regular rows, busy, undo, keyboard-folded, filtere
   const page = await open();
   const show = (name) => { assert.equal(page.run(`agentnotchPanel.showScene(${JSON.stringify(name)})`), true, name); return page; };
   show('panel-regular-rows');
-  assert.equal(rows(page).length, 8);
-  assert.equal(page.$('.an-lst').getAttribute('data-compact'), null, 'eight rows are still regular');
+  assert.equal(rows(page).length, 9, "the Mac's nine rows");
+  assert.equal(page.$('.an-lst').getAttribute('data-compact'), '1', 'nine rows are past the compact threshold of eight');
   show('panel-busy-window');
   assert.equal(rows(page).length, 19, '3 + 6 + 10 rows; the 6 idle ones are folded to a line');
   const ids = rowIds(page);
@@ -882,7 +882,7 @@ test('the list scenes render: regular rows, busy, undo, keyboard-folded, filtere
   show('panel-filtered');
   assert.ok(rows(page).length > 0 && rows(page).length < 15);
   show('panel-every-state');
-  assert.equal(rows(page).length, 11);
+  assert.equal(rows(page).length, 16, 'eight needing you, four to review, four working (the idle ones are one line)');
   assert.equal(page.run('agentnotchPanel.showScene("panel-nonsense")'), false);
   clean(page);
 });

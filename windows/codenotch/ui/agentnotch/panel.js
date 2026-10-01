@@ -113,6 +113,8 @@
     /** A row to point out (a banner click, an auto-open), selected too. */
     highlight: null,
     selected: null,
+    /** A row drawn as if the pointer were on it (the sealed scenes; the Mac's forcesHover). */
+    forceHover: null,
     /** The PanelRequest's reason (ring_click, hover_row, notification, auto, ...). */
     reason: null,
     /** {kind, tail, offset, width}: where the glue put the card (see normalizePlacement). */
@@ -938,6 +940,7 @@
     state.displayed = lay.order;
     return L.html(lay, {
       selected: state.selected,
+      forceHover: state.forceHover,
       multi: !!v.accounts_multi,
       filtered: !!effectiveFilter(v),
       now: C.now(),
@@ -1500,6 +1503,24 @@
       }
     });
     s.sessions = made;
+    // Three accounts with long names, as the Mac's sheet has, so the chips wrap onto a second line.
+    var base = ringsOf(s);
+    if (base.length >= 2) {
+      var names = [['me@example.com \u00b7 Max 20x', 0, 0], ['me@example.com \u00b7 Team', 1, 1], ['Side project', 2, 0]];
+      s.rings = names.map(function (n, i) {
+        var ring = clone(base[n[2]]);
+        ring.ring_id = 'claude-acct-busy' + i;
+        ring.label = n[0];
+        ring.color_index = n[1];
+        return ring;
+      });
+      made.forEach(function (row, i) {
+        var ring = s.rings[i % 3];
+        row.ring_id = ring.ring_id;
+        row.account_label = ring.label;
+        row.account_color = ring.color_index;
+      });
+    }
     return retally(s);
   }
 
@@ -1527,22 +1548,62 @@
    * you, plus the variants the fixture has no row for: several questions (Answer…), a request
    * too long to judge from the row (Review…), and a permission only the terminal can answer.
    */
-  function needsYou(s) {
+  /** The ring of the fixture's second account (Work). */
+  function workRing(s) {
+    var row = s.sessions.filter(function (r) { return r.account_label === 'Work'; })[0];
+    return row ? row.ring_id : null;
+  }
+
+  /** The rows the fixture has no row for (see needsYou); `withLong` adds the request too long to judge. */
+  function needsYouExtras(s, withLong) {
     var long = 'git push origin --delete release/2025.1 && \\\n  git push origin --delete release/2025.2 && \\\n  git push origin --delete release/2025.3 && \\\n  git push origin --delete release/2025.4 && \\\n  git push origin --delete release/2025.5';
-    var extra = [
+    return [
       variant(s, 'needs-question', 'needs-questions', { title: 'Plan the onboarding flow', project: 'mobile-app', since_ms: s.generated_at_ms - 70000,
         detail: { kind: 'question', text: 'Which screens should onboarding include?' } },
       { tool_use_id: 'toolu_scene_questions', single_tap: false, questions: [
         { text: 'Which screens should onboarding include?', header: 'Screens', multi_select: true, options: [{ label: 'Welcome', description: null }, { label: 'Permissions', description: null }] },
         { text: 'Should it be skippable?', header: 'Skip', multi_select: false, options: [{ label: 'Yes', description: null }, { label: 'No', description: null }] },
       ] }),
-      variant(s, 'needs-permission', 'needs-long', { title: 'Clean up old release branches', tasks: null, since_ms: s.generated_at_ms - 40000,
+      withLong ? variant(s, 'needs-permission', 'needs-long', { title: 'Clean up old release branches', tasks: null, since_ms: s.generated_at_ms - 40000,
         detail: { kind: 'permission', tool: 'Bash', request: long, waiting_in_terminal: false } },
-      { tool_use_id: 'toolu_scene_long', request: long, needs_review: true }),
+      { tool_use_id: 'toolu_scene_long', request: long, needs_review: true }) : null,
+      // Dialogs only the terminal can answer (the Mac shows their one line and "Show terminal").
       variant(s, 'needs-elicitation', 'needs-terminal', { title: 'Clean up old branches', project: 'infra', since_ms: s.generated_at_ms - 65000,
-        detail: { kind: 'permission', tool: 'Bash', request: null, waiting_in_terminal: true } }),
+        context_pct: 15, detail: { kind: 'dialog', text: 'Worker permission' } }),
+      variant(s, 'needs-elicitation', 'needs-network', { title: 'Set up the staging database', project: 'infra', since_ms: s.generated_at_ms - 180000,
+        context_pct: 12, ring_id: workRing(s), account_label: 'Work', account_color: 3, detail: { kind: 'dialog', text: 'Network access to registry.npmjs.org' } }),
     ].filter(Boolean);
-    s.sessions = s.sessions.filter(function (r) { return r.bucket === 'needs_you'; }).concat(extra);
+  }
+
+  /** Only the rows that need you, with every kind of action bar (the Mac's panel-needs-you). */
+  function needsYou(s) {
+    s.sessions = s.sessions.filter(function (r) { return r.bucket === 'needs_you'; }).concat(needsYouExtras(s, true));
+    return retally(s);
+  }
+
+  /**
+   * The Mac's every-state sheet: every kind of row at once, the fixture's own plus the variants of
+   * needsYouExtras, a fourth review row and a fourth working row (twenty-odd rows, so the review and
+   * working rows are one line each).
+   */
+  function everyState(s) {
+    var extra = needsYouExtras(s, false);
+    var speed = variant(s, 'review-darkmode', 'review-speedup', { title: 'Speed up the test suite', project: 'acme-web', since_ms: s.generated_at_ms - 300000 });
+    var trace = variant(s, 'work-ci', 'work-trace', { title: 'Trace the memory leak in the worker', project: 'acme-web',
+      since_ms: s.generated_at_ms - 180000, context_pct: 93, tasks: null, detail: { kind: 'working', text: 'Thinking\u2026', secondary: true } });
+    s.sessions = s.sessions.concat(extra, [speed, trace].filter(Boolean));
+    return retally(s);
+  }
+
+  /**
+   * The Mac's panel-regular-rows: nine rows (three need you, one to review, four working, one idle),
+   * which is past the compact threshold, so the review and working rows are one line each.
+   */
+  function regularRows(s) {
+    only(['needs-question', 'needs-permission', 'needs-ratelimit', 'review-darkmode', 'work-migration', 'work-ci', 'work-summary', 'idle-notch'])(s);
+    var sweep = variant(s, 'work-summary', 'work-sweep', { title: 'Sweep the repo for the old name', project: 'acme-web',
+      since_ms: s.generated_at_ms - 9 * 60000, detail: { kind: 'working', text: 'Waiting on 1 workflow…', secondary: true }, context_pct: 41, tasks: null });
+    if (sweep) s.sessions.push(sweep);
     return retally(s);
   }
 
@@ -1557,6 +1618,7 @@
   }
 
   function banners(s) {
+    regularRows(s);
     s.setup = s.setup || {};
     s.setup.needs_hook_consent = false;
     s.setup.transport_error = 'The hook pipe couldn’t be opened (access is denied).';
@@ -1566,6 +1628,7 @@
   }
 
   function scopeNotice(s) {
+    regularRows(s);
     s.setup = s.setup || {};
     s.setup.needs_hook_consent = false;
     s.setup.new_install_folders = ['~\\.claude-windows\\5d1e0a7b3c21', '~\\.claude-windows\\9b4f2e8d6a10', '~\\.claude-windows\\c07a3f5e1d94'];
@@ -1579,13 +1642,13 @@
     'panel-consent': consent,
     'panel-scope-notice': scopeNotice,
     'panel-empty': emptied,
-    'panel-every-state': same,
+    'panel-every-state': everyState,
     'panel-header': same,
-    'panel-menu': same,
+    'panel-menu': everyState,
     'panel-filtered': same,
     'panel-undo': same,
-    'panel-keyboard-folded': same,
-    'panel-regular-rows': only(['needs-question', 'needs-permission', 'needs-ratelimit', 'review-darkmode', 'work-migration', 'work-ci', 'work-summary', 'idle-notch']),
+    'panel-keyboard-folded': everyState,
+    'panel-regular-rows': regularRows,
     'panel-busy-window': busy,
     'panel-busy-full': busy,
     'panel-pinned': function (s) {
@@ -1627,6 +1690,10 @@
       var ids = v ? sessionsOf(v).filter(function (r) { return r.bucket === 'ready_for_review'; }).slice(0, 2).map(function (r) { return String(r.session_id); }) : [];
       if (ids.length) state.pending = { ids: ids, at: C.now(), timer: null };
     },
+    // The Mac shows the first row under the pointer: hover fill and its actions.
+    'panel-needs-you': function () {
+      state.forceHover = 'needs-plan';
+    },
     'panel-keyboard-folded': function () {
       state.selected = 'needs-question';
       state.folds.working = true;
@@ -1642,6 +1709,7 @@
     state.route = SCENE_ROUTES[name] || 'sessions';
     state.filter = null;
     state.selected = null;
+    state.forceHover = null;
     state.folds = {};
     if (state.pending && state.pending.timer !== null) window.clearTimeout(state.pending.timer);
     state.pending = null;
@@ -1697,7 +1765,7 @@
       texts += 1;
       if (el.scrollWidth > el.clientWidth + 1 && !cutWithEllipsis(el)) failures.push('text is clipped: ' + C.oneLine(el.textContent).slice(0, 40));
     });
-    var controls = els.card.querySelectorAll('button, [data-an-action], input, textarea, select');
+    var controls = els.card.querySelectorAll('button, [data-an-action], [role="button"], [role="link"], a[href], input, textarea, select');
     Array.prototype.forEach.call(controls, function (el) {
       var r = el.getBoundingClientRect();
       // A scrolling list has rows below the fold: they may lie below the card, never beside it.
@@ -1719,6 +1787,12 @@
       var joined = t === 'left' ? Math.abs(tail.right - 1 - cr.left) < 1.5 : t === 'right' ? Math.abs(tail.left + 1 - cr.right) < 1.5
         : t === 'top' ? Math.abs(tail.bottom - 1 - cr.top) < 1.5 : Math.abs(tail.top + 1 - cr.bottom) < 1.5;
       if (!joined) failures.push('the tail does not meet the card');
+      // The tail's base lies between the card's rounded corners, never on one.
+      var corner = parseFloat(window.getComputedStyle(els.card).getPropertyValue('--an-corner')) || 16;
+      var vertical = t === 'left' || t === 'right';
+      var from = vertical ? tail.top - cr.top : tail.left - cr.left;
+      var to = vertical ? cr.bottom - tail.bottom : cr.right - tail.right;
+      if (from < corner - 0.5 || to < corner - 0.5) failures.push('the tail reaches into a corner of the card');
     }
     return {
       ok: failures.length === 0,
