@@ -69,6 +69,10 @@ export default async function DownloadPage({
     downloads[bounced] === null
       ? bounced
       : null;
+  // The Windows steps only while a Windows installer may be on offer: not for a release known to
+  // have none (every release before the first Windows one), but when GitHub can't say.
+  const windowsSteps =
+    latest.kind === "unavailable" || downloads.windows !== null;
 
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-10 px-4 py-8 sm:py-12">
@@ -198,73 +202,75 @@ export default async function DownloadPage({
         </details>
       </section>
 
-      <section
-        aria-labelledby="install-windows-title"
-        className="flex flex-col gap-4"
-      >
-        <h2
-          id="install-windows-title"
-          className="flex items-center gap-2 text-lg font-semibold tracking-tight"
+      {windowsSteps ? (
+        <section
+          aria-labelledby="install-windows-title"
+          className="flex flex-col gap-4"
         >
-          Installing on Windows
-          <Badge>Preview</Badge>
-        </h2>
-        <p className="max-w-2xl text-sm text-ink-2">
-          The Windows app is new and still a preview: it is built and tested
-          automatically, but it has not been used by people yet. Please report
-          anything odd. It needs Windows 10 or 11 (x64). It updates itself too:
-          the app checks shortly after it starts, and{" "}
-          <strong className="font-semibold text-ink">
-            Settings &gt; General
-          </strong>{" "}
-          installs an update. Every update is verified with Agent Notch&apos;s
-          own signing key before it runs.
-        </p>
-        <details className="card group p-5">
-          <summary className="flex items-center gap-1.5 text-sm font-medium select-none">
-            <svg
-              viewBox="0 0 12 12"
-              aria-hidden="true"
-              className="size-3 transition-transform group-open:rotate-90"
-              fill="currentColor"
-            >
-              <path d="M4 2.5 8 6l-4 3.5z" />
-            </svg>
-            Opening it for the first time
-          </summary>
-          <ol className="mt-4 flex flex-col gap-3 text-sm text-ink-2">
-            <Step n={1}>
-              Run the installer. It installs for your user only, with no
-              administrator, into{" "}
-              <code className="rounded-md bg-surface-2 px-1.5 py-0.5 font-mono text-xs text-ink">
-                %LOCALAPPDATA%\Agent Notch
-              </code>
-              , and fetches Microsoft&apos;s WebView2 if it is missing.
-            </Step>
-            <Step n={2}>
-              The installer isn&apos;t code-signed yet, so Windows SmartScreen
-              may say &ldquo;Windows protected your PC&rdquo;. Choose{" "}
-              <strong className="font-semibold text-ink">More info</strong>,
-              then{" "}
-              <strong className="font-semibold text-ink">Run anyway</strong>.
-            </Step>
-            <Step n={3}>
-              With{" "}
-              <strong className="font-semibold text-ink">
-                Smart App Control
-              </strong>{" "}
-              turned on (Windows 11), unsigned apps are blocked with no way
-              around it: Agent Notch can&apos;t be used there until it is
-              code-signed.
-            </Step>
-          </ol>
-        </details>
-        <p className="max-w-2xl text-sm text-ink-2">
-          To remove Agent Notch&apos;s Claude Code hooks when uninstalling, turn
-          Claude Code control off in Settings first, or tick &ldquo;Delete the
-          application data&rdquo; in the uninstaller.
-        </p>
-      </section>
+          <h2
+            id="install-windows-title"
+            className="flex items-center gap-2 text-lg font-semibold tracking-tight"
+          >
+            Installing on Windows
+            <Badge>Preview</Badge>
+          </h2>
+          <p className="max-w-2xl text-sm text-ink-2">
+            The Windows app is new and still a preview: it is built and tested
+            automatically, but it has not been used by people yet. Please report
+            anything odd. It needs Windows 10 or 11 (x64). It updates itself
+            too: the app checks shortly after it starts, and{" "}
+            <strong className="font-semibold text-ink">
+              Settings &gt; General
+            </strong>{" "}
+            installs an update. Every update is verified with Agent Notch&apos;s
+            own signing key before it runs.
+          </p>
+          <details className="card group p-5">
+            <summary className="flex items-center gap-1.5 text-sm font-medium select-none">
+              <svg
+                viewBox="0 0 12 12"
+                aria-hidden="true"
+                className="size-3 transition-transform group-open:rotate-90"
+                fill="currentColor"
+              >
+                <path d="M4 2.5 8 6l-4 3.5z" />
+              </svg>
+              Opening it for the first time
+            </summary>
+            <ol className="mt-4 flex flex-col gap-3 text-sm text-ink-2">
+              <Step n={1}>
+                Run the installer. It installs for your user only, with no
+                administrator, into{" "}
+                <code className="rounded-md bg-surface-2 px-1.5 py-0.5 font-mono text-xs text-ink">
+                  %LOCALAPPDATA%\Agent Notch
+                </code>
+                , and fetches Microsoft&apos;s WebView2 if it is missing.
+              </Step>
+              <Step n={2}>
+                The installer isn&apos;t code-signed yet, so Windows SmartScreen
+                may say &ldquo;Windows protected your PC&rdquo;. Choose{" "}
+                <strong className="font-semibold text-ink">More info</strong>,
+                then{" "}
+                <strong className="font-semibold text-ink">Run anyway</strong>.
+              </Step>
+              <Step n={3}>
+                With{" "}
+                <strong className="font-semibold text-ink">
+                  Smart App Control
+                </strong>{" "}
+                turned on (Windows 11), unsigned apps are blocked with no way
+                around it: Agent Notch can&apos;t be used there until it is
+                code-signed.
+              </Step>
+            </ol>
+          </details>
+          <p className="max-w-2xl text-sm text-ink-2">
+            To remove Agent Notch&apos;s Claude Code hooks when uninstalling,
+            turn Claude Code control off in Settings first, or tick
+            &ldquo;Delete the application data&rdquo; in the uninstaller.
+          </p>
+        </section>
+      ) : null}
 
       <p className="text-sm text-ink-2">
         Every release, with its notes, is on{" "}
