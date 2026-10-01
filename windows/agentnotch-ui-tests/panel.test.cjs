@@ -848,6 +848,43 @@ test('the tail follows the placement: left and right beside, top and bottom abov
   assert.equal(page.$('#an-panel').getAttribute('data-tail'), 'none', 'and one with no placement takes it away');
 });
 
+test('the glue\'s own placement fields (edge, floating, width, tail_offset) place the tail, and an:panel_place moves it', async () => {
+  // What panel_window.rs sends: the notch's edge, which is the side of the card the tail is on.
+  const cases = [
+    [{ edge: 'right', floating: false, width: 400, tail_offset: 12 }, 'beside', 'right', 12, 400],
+    [{ edge: 'left', floating: false, width: 440, tail_offset: -30 }, 'beside', 'left', -30, 440],
+    [{ edge: 'top', floating: false, width: 520, tail_offset: 0 }, 'above_or_below', 'top', 0, 520],
+    [{ edge: 'bottom', floating: false, width: 440, tail_offset: 60 }, 'above_or_below', 'bottom', 60, 440],
+    [{ edge: null, floating: true, width: 520, tail_offset: 0 }, 'floating', 'none', 0, 0],
+    // Anything the glue would not send is floating.
+    [{ edge: 'right' }, 'floating', 'none', 0, 0],
+    [{ edge: 'sideways', floating: false }, 'floating', 'none', 0, 0],
+  ];
+  for (const [fields, kind, tail, offset, width] of cases) {
+    const page = await open(Object.assign({ route: 'sessions', reason: 'ring_click' }, fields));
+    const label = JSON.stringify(fields);
+    assert.deepEqual(state(page).placement, { kind, tail, offset, width }, label);
+    assert.equal(page.$('#an-panel').getAttribute('data-tail'), tail, label);
+    assert.equal(page.$('#an-frame').style.getPropertyValue('--an-tail-offset'), `${offset}px`, label);
+    clean(page);
+  }
+  const page = await open({ route: 'sessions', reason: 'ring_click', edge: 'right', floating: false, width: 400, tail_offset: 0 });
+  page.emit('an:panel', { route: 'sessions', reason: 'ring_click', edge: 'left', floating: false, width: 400, tail_offset: 8,
+    placement: { kind: 'above_or_below', tail_edge: 'top', tail_offset: 3 } });
+  assert.equal(page.$('#an-panel').getAttribute('data-tail'), 'top', 'a placement object, when there is one, wins');
+  page.emit('an:panel_place', { edge: 'bottom', floating: false, width: 520, tail_offset: -5 });
+  assert.equal(page.$('#an-panel').getAttribute('data-tail'), 'bottom', 'an open panel that moved takes its new side');
+  assert.equal(page.$('#an-frame').style.getPropertyValue('--an-tail-offset'), '-5px');
+  assert.equal(state(page).placement.width, 520);
+  assert.equal(state(page).route, 'sessions', 'a move is not a new request');
+  page.emit('an:panel_place', { edge: null, floating: true, width: 440, tail_offset: 0 });
+  assert.equal(page.$('#an-panel').getAttribute('data-tail'), 'none', 'and one that now floats has no tail');
+  page.emit('an:panel_place', null);
+  page.emit('an:panel_place', 'right');
+  assert.equal(page.$('#an-panel').getAttribute('data-tail'), 'none', 'junk is ignored');
+  clean(page);
+});
+
 // ---- hostile strings ---------------------------------------------------------------------------------------------
 
 test('hostile account labels are text in the chips, the strip and the labels, whatever they say', async () => {

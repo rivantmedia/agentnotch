@@ -217,6 +217,29 @@
     };
   }
 
+  /**
+   * The placement in what the glue sends (panel_window.rs `place_fields`): `edge` (the notch's
+   * edge; null when floating), `floating`, `width` and `tail_offset`, beside the request's own
+   * fields in `an:panel` and on their own in `an:panel_place`. The card faces the notch, so its
+   * tail is on the notch's edge: beside a side notch, above or below a top or bottom one. A
+   * `placement` object, when there is one, is taken as it is.
+   */
+  function placementOf(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    if (raw.placement && typeof raw.placement === 'object') return raw.placement;
+    if (raw.floating !== false || typeof raw.edge !== 'string') return null;
+    var side = raw.edge === 'left' || raw.edge === 'right';
+    return { kind: side ? 'beside' : 'above_or_below', tail_edge: raw.edge, tail_offset: raw.tail_offset, width: raw.width };
+  }
+
+  /** An open panel moved or changed width (`an:panel_place`): its tail and width follow. */
+  function applyPlace(payload) {
+    if (!payload || typeof payload !== 'object') return;
+    state.placement = normalizePlacement(placementOf(payload));
+    applyPlacement();
+    render();
+  }
+
   function applyPlacement() {
     var p = state.placement;
     els.panel.setAttribute('data-tail', p.tail);
@@ -1413,7 +1436,7 @@
     }
     if (mode() === 'chat') state.selected = p.id;
     state.reason = typeof req.reason === 'string' ? req.reason : null;
-    state.placement = normalizePlacement(req.placement);
+    state.placement = normalizePlacement(placementOf(req));
     state.menuOpen = false;
     state.rearm = true;
     applyPlacement();
@@ -1860,6 +1883,7 @@
     C.listen('theme_resolved', applyTheme);
     C.listen('an:snapshot', applySnapshot);
     C.listen('an:panel', applyRequest);
+    C.listen('an:panel_place', applyPlace);
     C.listen('an:panel_focus', applyFocus);
 
     // The first request is on the window; without one the panel is a floating list.

@@ -20,7 +20,8 @@
 //! - **Where it goes.** The rules only hand on what they were told (the ring, the rect the notch's
 //!   page measured, list or chat, the content's height); the window service asks the engine's
 //!   `geometry::panel` for the frame.
-//! - **Reports.** Every change goes to the hub as `panel_state`, in order, through one thread.
+//! - **Reports.** Every change goes to the hub as `panel_state`, in order, through one thread,
+//!   and to the notch's page as `an:panel_state`.
 //!
 //! When an auto-opened panel closes by itself is the engine's rule (`control`, on the state
 //! reported here); this file only obeys `HubEvent::PanelClose`.
@@ -31,11 +32,15 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use agentnotch_engine::geometry::panel::PanelMode;
 use agentnotch_engine::model::ui::PanelRequest;
 use serde_json::{json, Value};
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 
 use super::panel_window::PanelWindow;
 
 pub(super) const LABEL: &str = "agentnotch-panel";
+/// The notch's window, which is told the panel's state too.
+const NOTCH_LABEL: &str = "notch";
+/// The notch's page's copy of each `panel_state` report.
+const PANEL_STATE_EVENT: &str = "an:panel_state";
 /// The list, every account or one ring's.
 const LIST: &str = "sessions";
 /// A chat's route is this followed by the session's id.
@@ -474,10 +479,16 @@ static CORE: OnceLock<Core<PanelWindow>> = OnceLock::new();
 
 fn core(app: &AppHandle) -> &'static Core<PanelWindow> {
     CORE.get_or_init(|| {
+        let notch = app.clone();
         Core::new(
             PanelWindow::new(app.clone()),
             super::sealed(),
-            Box::new(send_report),
+            Box::new(move |state: Value| {
+                // The notch's page stays unfolded, its hover card hidden, while the panel is open
+                // (notch.js `an:panel_state`). An emit only queues the event, so the order holds.
+                let _ = notch.emit_to(NOTCH_LABEL, PANEL_STATE_EVENT, state.clone());
+                send_report(state);
+            }),
         )
     })
 }
