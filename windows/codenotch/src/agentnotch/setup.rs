@@ -1,6 +1,7 @@
 //! Starting the hub inside upstream's `setup` (seam WB2, DESIGN-WIN §2.4 `setup.rs`).
 //!
-//! Builds the hub's configuration from what this process knows (the folders, the flags, the
+//! First makes sure this process is the only copy of the app (`instance.rs`). Then builds the
+//! hub's configuration from what this process knows (the folders, the flags, the
 //! installed hook exe, the pipe name), picks the fixture hub when sealed and the real platform
 //! otherwise, subscribes the event sink, starts the hub and hands it a cold-start deep link.
 //!
@@ -17,7 +18,7 @@ use agentnotch_engine::platform::{Platform, Roots};
 use agentnotch_win::proto;
 use tauri::AppHandle;
 
-use super::{deeplink, emit, selftest, IDENTIFIER};
+use super::{deeplink, emit, hotkey, instance, panel_window, selftest, IDENTIFIER};
 
 pub fn setup(app: &AppHandle) {
     // Upstream makes its config folder only when it first saves a setting, so on a first launch
@@ -26,6 +27,11 @@ pub fn setup(app: &AppHandle) {
     if let Some(folder) = crate::config::config_path().parent() {
         let _ = std::fs::create_dir_all(folder);
     }
+    // Before anything of the fork starts: a second copy the single-instance plugin let through
+    // hands its launch to the first and exits here (sealed or not, §4.13).
+    instance::ensure_single(app);
+    // The sessions panel follows the notch from the start, whether or not the hub comes up.
+    panel_window::start(app);
     match panic::catch_unwind(AssertUnwindSafe(|| start(app))) {
         Ok(Ok(())) => {
             let mode = if super::sealed() { "sealed" } else { "live" };
@@ -67,6 +73,8 @@ fn start(app: &AppHandle) -> Result<(), String> {
             deeplink::handle(url.to_string());
         }
     }
+    // The panel shortcut, from the settings as they are now (never when sealed).
+    hotkey::start(app, &hub);
     selftest::start(app);
     Ok(())
 }

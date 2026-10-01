@@ -11,6 +11,10 @@
 //! read Claude's credentials. An argument naming the `agentnotch:` scheme is never a command,
 //! whatever else argv holds: such an argv is either an app launch (`None`) or, when it also names
 //! one of these commands, refused without running anything.
+//!
+//! Sealed (`AGENTNOTCH_SAFE_MODE`), the commands that would read or write the real Claude
+//! folders (`inspect-accounts`, `install-hooks`, `uninstall-hooks`) do neither and say so; the
+//! doctor asks the sealed hub.
 
 use std::io::Write;
 use std::panic::{self, AssertUnwindSafe};
@@ -18,7 +22,7 @@ use std::path::{Path, PathBuf};
 
 use agentnotch_engine::hub::{DoctorExtras, Hub};
 
-use super::{deeplink, setup};
+use super::{deeplink, setup, DISPLAY_NAME};
 
 /// Every command this module answers for.
 const COMMANDS: [&str; 6] = [
@@ -30,8 +34,11 @@ const COMMANDS: [&str; 6] = [
     "autostart",
 ];
 
-/// The exit code of a command line that names a command and a link at once.
+/// The exit code of a command that was refused with nothing run: a command line naming a command
+/// and a link at once, `install-hooks` without the consent, a Claude folder's command sealed.
 const REFUSED: i32 = 2;
+/// The scheme the installer registers for the app's links.
+const LINK_SCHEME: &str = "agentnotch";
 
 /// `Some(exit code)` for a command the fork owns (it has run, or was refused), `None` to let the
 /// app start.
@@ -51,15 +58,12 @@ pub fn run(args: &[String]) -> Option<i32> {
     crate::attach_console();
     let rest: Vec<&str> = args.iter().skip(2).map(String::as_str).collect();
     let quiet = command == "uninstall-hooks" && rest.contains(&"--quiet");
+    let sealed = super::sealed();
     let outcome = panic::catch_unwind(AssertUnwindSafe(|| match command {
+        _ if sealed && touches_claude_folders(command) => sealed_answer(command),
         "doctor" => doctor(&rest),
         "inspect-accounts" => inspect_accounts(),
-        "install-hooks" => (
-            1,
-            "Installing hooks from the command line isn't available in this build. \
-             Turn on Claude Code control in Settings › Claude Code."
-                .to_string(),
-        ),
+        "install-hooks" => install_hooks(),
         "uninstall-hooks" => uninstall_hooks(quiet),
         "control" => control(&rest),
         // "autostart", the last of COMMANDS.
@@ -78,6 +82,35 @@ pub fn run(args: &[String]) -> Option<i32> {
     Some(code)
 }
 
+/// The commands that read or write the real Claude folders (through the real platform, which
+/// a sealed run never builds: DESIGN-WIN §4.13).
+fn touches_claude_folders(command: &str) -> bool {
+    matches!(
+        command,
+        "inspect-accounts" | "install-hooks" | "uninstall-hooks"
+    )
+}
+
+/// What one of those answers in a sealed run, with nothing read or written. A sealed run never
+/// installs hooks, so there are none of its own to remove: `uninstall-hooks` is done (0, which
+/// the uninstaller's `--quiet` needs anyway); the other two are refused.
+fn sealed_answer(command: &str) -> (i32, String) {
+    match command {
+        "uninstall-hooks" => (
+            0,
+            "Sealed: nothing was removed (a sealed run touches no Claude folder).".into(),
+        ),
+        "install-hooks" => (
+            REFUSED,
+            "Sealed: a sealed run installs no hooks (it touches no Claude folder).".into(),
+        ),
+        _ => (
+            REFUSED,
+            format!("Sealed: {command} reads the Claude folders, which a sealed run never does."),
+        ),
+    }
+}
+
 fn doctor(rest: &[&str]) -> (i32, String) {
     if rest.first() == Some(&"deep") {
         // Upstream's diagnostics: window, monitor and provider facts; it reads no Claude
@@ -88,11 +121,12 @@ fn doctor(rest: &[&str]) -> (i32, String) {
     let extras = DoctorExtras {
         exe: exe.clone(),
         updates: super::update::doctor_line(),
-        // The registration check (HKCU\Software\Classes\agentnotch) and the Start-menu shortcut
-        // check come with the app's Windows plumbing (WP9); until then they say "unknown".
-        deep_link: "unknown".into(),
+        // What Windows would run for an `agentnotch:` link (HKCU\Software\Classes\agentnotch),
+        // as the installer registered it.
+        deep_link: deep_link_line(agentnotch_win::shell::scheme_command(LINK_SCHEME)),
         autostart: crate::autostart::is_enabled(),
-        shortcut_present: false,
+        // The Start-menu shortcut Windows needs before it shows this app's notifications.
+        shortcut_present: agentnotch_win::shell::start_menu_shortcut(DISPLAY_NAME).is_some(),
         providers: Vec::new(),
         // Asking a running copy (`control status`) needs the pipe client (WP1).
         running: None,
@@ -103,6 +137,44 @@ fn doctor(rest: &[&str]) -> (i32, String) {
             0,
             format!("Agent Notch doctor v{}\nerror: {e}", super::app_version()),
         ),
+    }
+}
+
+/// The doctor's `deep-link:` value (§4.14).
+fn deep_link_line(command: Option<String>) -> String {
+    match command {
+        Some(command) => format!("registered -> {command}"),
+        None => "not registered".into(),
+    }
+}
+
+/// One install pass now, through a hub that is never started (nothing listens, nothing is
+/// watched): the pass itself is the engine's.
+fn install_hooks() -> (i32, String) {
+    let exe = std::env::current_exe().unwrap_or_default();
+    match offline_hub(&exe) {
+        // The consent is read from the hub, never assumed: it is what the user clicked.
+        Ok(hub) => install_hooks_with(hub.snapshot().setup.hook_consent, || {
+            super::calls::engine_call(&hub, "hooks_reinstall", serde_json::json!({}))
+                .map(|_| ())
+                .map_err(|e| e.message)
+        }),
+        Err(e) => (1, format!("install-hooks: {e}")),
+    }
+}
+
+/// `install-hooks` given the consent on record: without it nothing is written (exit 2);
+/// with it, `pass` runs once (0, or 1 with the engine's reason).
+fn install_hooks_with(
+    hook_consent: Option<bool>,
+    pass: impl FnOnce() -> Result<(), String>,
+) -> (i32, String) {
+    if let Err(refusal) = super::hooks_change_allowed(true, hook_consent) {
+        return (REFUSED, refusal);
+    }
+    match pass() {
+        Ok(()) => (0, "Claude Code hooks are installed.".into()),
+        Err(e) => (1, format!("install-hooks: {e}")),
     }
 }
 
@@ -123,6 +195,9 @@ fn uninstall_hooks(quiet: bool) -> (i32, String) {
     }
 }
 
+/// `control status|quit` asks a running copy over the hook pipe. The pipe's client side isn't
+/// in this build (it comes with the bridge, WP1), so the command says so rather than guess
+/// whether a copy runs; §4.14's exit codes (0, or 3 with no copy running) come with it.
 fn control(rest: &[&str]) -> (i32, String) {
     match rest {
         ["status"] | ["quit"] => (
@@ -213,6 +288,75 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn install_hooks_refuses_without_the_consent() {
+        for consent in [None, Some(false)] {
+            let (code, text) = super::install_hooks_with(consent, || {
+                panic!("nothing may be written without the consent")
+            });
+            assert_eq!(code, super::REFUSED, "{consent:?}");
+            assert_eq!(code, 2);
+            assert_eq!(text, super::super::TURN_ON_FIRST);
+        }
+    }
+
+    #[test]
+    fn install_hooks_runs_one_pass_with_the_consent() {
+        let mut passes = 0;
+        let (code, _) = super::install_hooks_with(Some(true), || {
+            passes += 1;
+            Ok(())
+        });
+        assert_eq!((code, passes), (0, 1));
+        let (code, text) =
+            super::install_hooks_with(Some(true), || Err("settings.json doesn't parse".into()));
+        assert_eq!(code, 1);
+        assert_eq!(text, "install-hooks: settings.json doesn't parse");
+    }
+
+    // DESIGN-WIN §4.13: a sealed run reads and writes no Claude folder, the command line included.
+    #[test]
+    fn a_sealed_run_never_reaches_the_claude_folders_from_the_command_line() {
+        for command in ["inspect-accounts", "install-hooks", "uninstall-hooks"] {
+            assert!(super::touches_claude_folders(command), "{command}");
+            let (_, text) = super::sealed_answer(command);
+            assert!(text.starts_with("Sealed: "), "{text}");
+        }
+        // The doctor asks the sealed hub; control and autostart are no Claude folder's.
+        for command in ["doctor", "control", "autostart"] {
+            assert!(!super::touches_claude_folders(command), "{command}");
+        }
+        for command in COMMANDS {
+            assert!(
+                super::touches_claude_folders(command)
+                    || ["doctor", "control", "autostart"].contains(&command),
+                "{command} must say whether it reaches the Claude folders"
+            );
+        }
+        // Nothing installed, nothing to remove: done, as the uninstaller's --quiet needs.
+        assert_eq!(super::sealed_answer("uninstall-hooks").0, 0);
+        // Never "installed" or an account list made up: refused, with nothing done.
+        assert_eq!(super::sealed_answer("install-hooks").0, super::REFUSED);
+        assert_eq!(super::sealed_answer("inspect-accounts").0, super::REFUSED);
+    }
+
+    #[test]
+    fn control_is_claimed_and_says_it_cannot_ask_yet() {
+        // Never 0: a script must not read "no answer" as "nothing is running".
+        for rest in [&["status"][..], &["quit"], &[], &["status", "now"]] {
+            assert_eq!(super::control(rest).0, 1, "{rest:?}");
+        }
+    }
+
+    #[test]
+    fn the_doctor_says_what_a_link_would_run() {
+        assert_eq!(super::deep_link_line(None), "not registered");
+        assert_eq!(
+            super::deep_link_line(Some(r#""C:\Apps\agentnotch.exe" "%1""#.into())),
+            r#"registered -> "C:\Apps\agentnotch.exe" "%1""#
+        );
     }
 
     #[test]

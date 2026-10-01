@@ -226,6 +226,15 @@ jobs:
           "version=$V" >> $env:GITHUB_OUTPUT
           "name=$name" >> $env:GITHUB_OUTPUT
 
+      # The built app, sealed (fixture data only), before anything is installed:
+      # its self-test at 100, 125 and 150 % and one snapshot run. The script
+      # stops only its own processes, by id. Its reports, run logs and PNGs are
+      # uploaded with the smoke test's files.
+      - name: Sealed self-test and snapshots (M1)
+        run: |
+          scripts\agentnotch-selftest.ps1 -Exe target\release\agentnotch.exe -Out out\smoke\selftest
+          if ($LASTEXITCODE) { exit 1 }
+
       # What a user gets, on a runner that has never seen Agent Notch: the
       # install, a sealed launch (fixture data only: no Claude folder, no
       # network, no child process) that stays up and shows its notch, the

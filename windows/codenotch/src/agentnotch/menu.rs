@@ -44,7 +44,7 @@ pub fn notch_menu_event(app: &AppHandle, item: &str) -> bool {
 }
 
 /// Claude's cells: upstream's `claude`, and the fork's per-account rings (`claude-acct-…`, and
-/// the older `claude-<slug>` / `claude-dir-…` ids).
-fn is_claude_ring(provider: &str) -> bool {
-    provider == "claude" || provider.starts_with("claude-")
+/// the older `claude-<slug>` / `claude-dir-…` ids): the ones upstream's refresh hands the fork.
+pub(super) fn is_claude_ring(provider: &str) -> bool {
+    super::is_claude_provider(provider)
 }
