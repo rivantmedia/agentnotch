@@ -1,0 +1,139 @@
+{
+  "schema": 1,
+  "generator": "windows/scripts/check-claude-code-facts.mjs",
+  "generated_at": "2026-10-01",
+  "versions": [
+    {
+      "version": "2.0.0",
+      "hook_exec_form": false,
+      "hook_shell_key": false,
+      "hook_unknown_keys_rejected": false,
+      "status_line_shell_key": false,
+      "windows_default_shell": "the system's default shell (spawned with shell: true)",
+      "claude_pid_exported": false,
+      "bash_transform": null
+    },
+    {
+      "version": "2.0.77",
+      "hook_exec_form": false,
+      "hook_shell_key": false,
+      "hook_unknown_keys_rejected": false,
+      "status_line_shell_key": false,
+      "windows_default_shell": "the system's default shell (spawned with shell: true)",
+      "claude_pid_exported": false,
+      "bash_transform": null
+    },
+    {
+      "version": "2.1.0",
+      "hook_exec_form": false,
+      "hook_shell_key": false,
+      "hook_unknown_keys_rejected": false,
+      "status_line_shell_key": false,
+      "windows_default_shell": "the system's default shell (spawned with shell: true)",
+      "claude_pid_exported": false,
+      "bash_transform": null
+    },
+    {
+      "version": "2.1.100",
+      "hook_exec_form": false,
+      "hook_shell_key": true,
+      "hook_unknown_keys_rejected": false,
+      "status_line_shell_key": false,
+      "windows_default_shell": "bash",
+      "claude_pid_exported": false,
+      "bash_transform": "[as read from the package; at most 400 characters; token-like text removed] if(D&&!f&&v.trim().match(/\\.sh(\\s|$|\")/)){if(!v.trim().startsWith(\"bash \"))v=`bash ${v}`}"
+    },
+    {
+      "version": "2.1.101",
+      "hook_exec_form": false,
+      "hook_shell_key": true,
+      "hook_unknown_keys_rejected": false,
+      "status_line_shell_key": false,
+      "windows_default_shell": "bash",
+      "claude_pid_exported": false,
+      "bash_transform": "[as read from the package; at most 400 characters; token-like text removed] if(D&&!f&&v.trim().match(/\\.sh(\\s|$|\")/)){if(!v.trim().startsWith(\"bash \"))v=`bash ${v}`}"
+    },
+    {
+      "version": "2.1.138",
+      "hook_exec_form": false,
+      "hook_shell_key": true,
+      "hook_unknown_keys_rejected": false,
+      "status_line_shell_key": false,
+      "windows_default_shell": "bash when Git Bash is found, else powershell",
+      "claude_pid_exported": false,
+      "bash_transform": "[as read from the package; at most 400 characters; token-like text removed] if(X&&!Z&&v.trim().match(/\\.sh(\\s|$|\")/)){if(!v.trim().startsWith(\"bash \"))v=`bash ${v}`}"
+    },
+    {
+      "version": "2.1.139",
+      "hook_exec_form": true,
+      "hook_shell_key": true,
+      "hook_unknown_keys_rejected": false,
+      "status_line_shell_key": false,
+      "windows_default_shell": "bash when Git Bash is found, else powershell",
+      "claude_pid_exported": false,
+      "bash_transform": "[as read from the package; at most 400 characters; token-like text removed] if(X&&!Z&&!J&&T.trim().match(/\\.sh(\\s|$|\")/)){if(!T.trim().startsWith(\"bash \"))T=`bash ${T}`}"
+    },
+    {
+      "version": "2.1.213",
+      "hook_exec_form": true,
+      "hook_shell_key": true,
+      "hook_unknown_keys_rejected": false,
+      "status_line_shell_key": false,
+      "windows_default_shell": "bash when Git Bash is found, else powershell",
+      "claude_pid_exported": true,
+      "bash_transform": "[as read from the package; at most 400 characters; token-like text removed] function VMn(e){let t=e.trim(),r=\"\",n=0;while(n<t.length){let o=t[n];if(o==='\"'||o===\"'\"){let i=t.indexOf(o,n+1);if(i===-1){r+=t.slice(n+1),n=t.length;break}r+=t.slice(n+1,i),n=i+1}else if(o===\"\\\\\"&&n+1<t.length)r+=t[n+1],n+=2;else if(/\\s/.test(o))break;else r+=o,n++}return r.endsWith(\".sh\")?`bash ${e}`:e}"
+    },
+    {
+      "version": "2.1.214",
+      "hook_exec_form": true,
+      "hook_shell_key": true,
+      "hook_unknown_keys_rejected": false,
+      "status_line_shell_key": false,
+      "windows_default_shell": "bash when Git Bash is found, else powershell",
+      "claude_pid_exported": true,
+      "bash_transform": "[as read from the package; at most 400 characters; token-like text removed] function VMn(e){let t=e.trim(),r=\"\",n=0;while(n<t.length){let o=t[n];if(o==='\"'||o===\"'\"){let i=t.indexOf(o,n+1);if(i===-1){r+=t.slice(n+1),n=t.length;break}r+=t.slice(n+1,i),n=i+1}else if(o===\"\\\\\"&&n+1<t.length)r+=t[n+1],n+=2;else if(/\\s/.test(o))break;else r+=o,n++}return r.endsWith(\".sh\")?`bash ${e}`:e}"
+    },
+    {
+      "version": "2.1.280",
+      "hook_exec_form": true,
+      "hook_shell_key": true,
+      "hook_unknown_keys_rejected": false,
+      "status_line_shell_key": false,
+      "windows_default_shell": "bash when Git Bash is found, else powershell",
+      "claude_pid_exported": true,
+      "bash_transform": "[as read from the package; at most 400 characters; token-like text removed] function gnn(e){let r=e.trim(),i=\"\",n=0;while(n<r.length){let o=r[n];if(o==='\"'||o===\"'\"){let l=r.indexOf(o,n+1);if(l===-1){i+=r.slice(n+1),n=r.length;break}i+=r.slice(n+1,l),n=l+1}else if(o===\"\\\\\"&&n+1<r.length)i+=r[n+1],n+=2;else if(/\\s/.test(o))break;else i+=o,n++}return i.endsWith(\".sh\")?`bash ${e}`:e}"
+    },
+    {
+      "version": "2.1.282",
+      "hook_exec_form": true,
+      "hook_shell_key": true,
+      "hook_unknown_keys_rejected": false,
+      "status_line_shell_key": false,
+      "windows_default_shell": "bash when Git Bash is found, else powershell",
+      "claude_pid_exported": true,
+      "bash_transform": "[as read from the package; at most 400 characters; token-like text removed] function Kcn(e){let r=e.trim(),i=\"\",n=0;while(n<r.length){let o=r[n];if(o==='\"'||o===\"'\"){let l=r.indexOf(o,n+1);if(l===-1){i+=r.slice(n+1),n=r.length;break}i+=r.slice(n+1,l),n=l+1}else if(o===\"\\\\\"&&n+1<r.length)i+=r[n+1],n+=2;else if(/\\s/.test(o))break;else i+=o,n++}return i.endsWith(\".sh\")?`bash ${e}`:e}"
+    },
+    {
+      "version": "2.1.285",
+      "hook_exec_form": true,
+      "hook_shell_key": true,
+      "hook_unknown_keys_rejected": false,
+      "status_line_shell_key": false,
+      "windows_default_shell": "bash when Git Bash is found, else powershell",
+      "claude_pid_exported": true,
+      "bash_transform": "[as read from the package; at most 400 characters; token-like text removed] function cyn(e){let r=e.trim(),i=\"\",n=0;while(n<r.length){let o=r[n];if(o==='\"'||o===\"'\"){let l=r.indexOf(o,n+1);if(l===-1){i+=r.slice(n+1),n=r.length;break}i+=r.slice(n+1,l),n=l+1}else if(o===\"\\\\\"&&n+1<r.length)i+=r[n+1],n+=2;else if(/\\s/.test(o))break;else i+=o,n++}return i.endsWith(\".sh\")?`bash ${e}`:e}"
+    },
+    {
+      "version": "2.1.286",
+      "hook_exec_form": true,
+      "hook_shell_key": true,
+      "hook_unknown_keys_rejected": false,
+      "status_line_shell_key": false,
+      "windows_default_shell": "bash when Git Bash is found, else powershell",
+      "claude_pid_exported": true,
+      "bash_transform": "[as read from the package; at most 400 characters; token-like text removed] function Wbn(e){let r=e.trim(),i=\"\",n=0;while(n<r.length){let o=r[n];if(o==='\"'||o===\"'\"){let l=r.indexOf(o,n+1);if(l===-1){i+=r.slice(n+1),n=r.length;break}i+=r.slice(n+1,l),n=l+1}else if(o===\"\\\\\"&&n+1<r.length)i+=r[n+1],n+=2;else if(/\\s/.test(o))break;else i+=o,n++}return i.endsWith(\".sh\")?`bash ${e}`:e}"
+    }
+  ],
+  "exec_form_min": null,
+  "exec_form_evidence": null
+}

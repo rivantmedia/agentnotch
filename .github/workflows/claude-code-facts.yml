@@ -1,0 +1,105 @@
+name: Claude Code facts
+
+# Reads what Claude Code's own npm packages say about hooks, the status line
+# and the shell they run in, and regenerates
+# windows/agentnotch-engine/tests/fixtures/claude-code-facts.json (DESIGN-WIN
+# §6.2, R1, R2). The Windows engine compiles that file in: it is the only
+# source of EXEC_FORM_MIN (the first Claude Code that runs hook entries in
+# exec form), so a hook entry never goes into a settings.json that an older
+# Claude Code would read wrongly.
+#
+# NOTHING FROM A CLAUDE CODE PACKAGE RUNS HERE. The script downloads the
+# tarballs with `npm pack` (no install, no scripts), unpacks one file with tar
+# and greps its bytes. This job has no secrets and a read-only token.
+#
+# It never pushes and never opens a pull request. It uploads the regenerated
+# file as an artifact and writes the diff against the committed file into the
+# run's summary; a person reads the diff and opens the pull request by hand.
+#
+# Never part of the Release workflow: the facts change when Anthropic ships,
+# not when this repository does.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 5 * * 1' # Mondays, 05:23 UTC
+  push:
+    paths:
+      - 'windows/scripts/check-claude-code-facts.mjs'
+      - 'windows/tools/tests/facts.test.mjs'
+      - '.github/workflows/claude-code-facts.yml'
+  pull_request:
+    paths:
+      - 'windows/scripts/check-claude-code-facts.mjs'
+      - 'windows/tools/tests/facts.test.mjs'
+      - '.github/workflows/claude-code-facts.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  facts:
+    # Upstream's repository has its own workflows; this one is the fork's.
+    if: github.repository != 'vinzdg/codenotch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      FACTS_FILE: windows/agentnotch-engine/tests/fixtures/claude-code-facts.json
+      npm_config_update_notifier: 'false'
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Test the script
+        run: node --test windows/tools/tests/facts.test.mjs
+
+      # The script starts from the committed file's version list (so versions a
+      # person pinned stay checked) and its explicit minimum, if it has one,
+      # and writes its answer to the same name in a scratch folder.
+      - name: Read the packages
+        run: |
+          mkdir -p "$RUNNER_TEMP/facts-new" "$RUNNER_TEMP/claude-code-packages"
+          cp "$FACTS_FILE" "$RUNNER_TEMP/facts-new/claude-code-facts.json"
+          node windows/scripts/check-claude-code-facts.mjs \
+            --cache "$RUNNER_TEMP/claude-code-packages" \
+            --out "$RUNNER_TEMP/facts-new/claude-code-facts.json"
+
+      - name: Compare with the committed file
+        run: |
+          {
+            echo '## Claude Code facts'
+            echo
+            echo "Regenerated from the npm packages (nothing was run). Compare with $FACTS_FILE;"
+            echo 'if the facts changed, open a pull request with the artifact by hand.'
+            echo
+            # git diff --no-index exits 1 when the files differ.
+            if git diff --no-index --no-color --exit-code -- "$FACTS_FILE" "$RUNNER_TEMP/facts-new/claude-code-facts.json" > "$RUNNER_TEMP/facts.diff"; then
+              echo 'No difference at all.'
+            else
+              # generated_at changes every run: say whether anything else did.
+              changed=$(grep -E '^[+-] ' "$RUNNER_TEMP/facts.diff" | grep -vc '"generated_at"' || true)
+              if [ "$changed" = "0" ]; then
+                echo 'Only generated_at differs: the facts are unchanged.'
+              else
+                echo "**The facts changed** ($changed lines)."
+              fi
+              echo
+              echo '~~~diff'
+              cat "$RUNNER_TEMP/facts.diff"
+              echo '~~~'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the regenerated file
+        uses: actions/upload-artifact@v7
+        with:
+          name: claude-code-facts
+          path: ${{ runner.temp }}/facts-new/claude-code-facts.json
+          retention-days: 30
+          if-no-files-found: error
