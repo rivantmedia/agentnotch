@@ -624,6 +624,341 @@ Test-Case 'the phase table runs in the design order, with gates that exist and a
     }
 }
 
+
+# --- phases 5-9: what the UI-driven phases decide ----------------------------------------------------------------
+
+Test-Case 'control status lines are read as key: value, and the check names what differs' {
+    $text = "Agent Notch 1.1.0`r`ntransport: listening`r`naccounts: 2`r`nhook_consent: unasked`r`nreadings: 2`r`nsessions=0`r`n"
+    $status = ConvertFrom-ControlStatus -Text $text
+    Assert-Equal $status['transport'] 'listening' 'transport'
+    Assert-Equal $status['sessions'] '0' 'a key=value line is read too'
+    $expect = [ordered]@{ transport = 'listening'; accounts = '2'; hook_consent = 'unasked'; readings = '2' }
+    Assert-Equal @(Test-ControlStatus -Status $status -Expect $expect).Count 0 'a matching status has no problems'
+    $bad = @(Test-ControlStatus -Status (ConvertFrom-ControlStatus -Text "transport: stopped`naccounts: 2`n") -Expect $expect)
+    Assert-Equal ($bad -join '|') "transport is 'stopped', expected 'listening'|no 'hook_consent' line|no 'readings' line" 'each difference is named'
+    Assert-Equal (ConvertFrom-ControlStatus -Text '').Count 0 'empty text is an empty status'
+}
+
+Test-Case 'a private DACL is protected and names only the user and SYSTEM' {
+    $allowed = @('S-1-5-21-1-2-3-1001', 'S-1-5-18')
+    Assert-Equal @(Test-PrivateAcl -Protected $true -Sids @('S-1-5-21-1-2-3-1001', 'S-1-5-18') -Allowed $allowed).Count 0 'user + SYSTEM'
+    Assert-Equal @(Test-PrivateAcl -Protected $true -Sids @('S-1-5-21-1-2-3-1001') -Allowed $allowed).Count 0 'the user alone'
+    Assert-Equal (@(Test-PrivateAcl -Protected $false -Sids @('S-1-5-18') -Allowed $allowed) -join '|') 'the DACL inherits from the parent (it is not protected)' 'unprotected'
+    Assert-Equal (@(Test-PrivateAcl -Protected $true -Sids @('S-1-5-18', 'S-1-5-32-544') -Allowed $allowed) -join '|') 'the DACL names S-1-5-32-544' 'Administrators'
+    Assert-Equal (@(Test-PrivateAcl -Protected $true -Sids @() -Allowed $allowed) -join '|') 'the DACL is empty' 'empty'
+}
+
+function New-FakeClaudeLine([string[]]$Argv, [string]$Cwd, [string[]]$Names = @()) {
+    ConvertTo-Json @{ argv = $Argv; cwd = $Cwd; env = $Names } -Compress -Depth 5
+}
+
+Test-Case 'the fake claude log: the probe with its exact argv in usage-probe, and --version, are fine' {
+    $dir = 'C:\Users\x\AppData\Local\com.rivantmedia.agentnotch\Claude\usage-probe'
+    $lines = @(
+        (New-FakeClaudeLine @('--version') 'C:\anywhere')
+        (New-FakeClaudeLine $script:ProbeArgv $dir @('CLAUDE_CONFIG_DIR'))
+        (New-FakeClaudeLine $script:ProbeArgv ($dir.ToUpperInvariant().Replace('/', '\') + '\') @())
+        (New-FakeClaudeLine $script:ProbeArgv ('\\?\' + $dir) @())
+    )
+    Assert-Equal @(Test-FakeClaudeLog -Lines $lines -ProbeDir $dir).Count 0 'no problems'
+    Assert-Equal @(Test-FakeClaudeLog -Lines @() -ProbeDir $dir).Count 0 'an empty log is not a problem here'
+}
+
+Test-Case 'the fake claude log: another command, another argument, another folder or a scrubbed variable is named' {
+    $dir = 'C:\s\usage-probe'
+    $problems = @(Test-FakeClaudeLog -ProbeDir $dir -Lines @(
+            (New-FakeClaudeLine @('-p', 'hello') $dir)
+            (New-FakeClaudeLine ($script:ProbeArgv + '--extra') $dir)
+            (New-FakeClaudeLine $script:ProbeArgv 'C:\elsewhere')
+            (New-FakeClaudeLine $script:ProbeArgv $dir @('ANTHROPIC_API_KEY', 'CLAUDE_CODE_ENTRYPOINT', 'claude_pid'))
+            'not json'
+        ))
+    Assert-True ($problems -match 'run 1 is neither the probe nor --version') 'a stray command'
+    Assert-True ($problems -match 'run 2 is neither') 'an extra argument'
+    Assert-True ($problems -match "run 3 \(the probe\) ran in 'C:\\elsewhere'") 'a wrong folder'
+    Assert-True ($problems -match 'run 4 saw the scrubbed variable\(s\) ANTHROPIC_API_KEY, CLAUDE_CODE_ENTRYPOINT, claude_pid') 'the leaked names'
+    Assert-True ($problems -match 'log line 5 is not JSON') 'garbage'
+    $version = @(Test-FakeClaudeLog -ProbeDir $dir -Lines @((New-FakeClaudeLine @('--version') $dir @('CLAUDECODE'))))
+    Assert-True ($version -match 'scrubbed') 'a leak counts on a --version run too'
+}
+
+Test-Case 'the probe argument list is the one of the design, with the settings as one element' {
+    Assert-Equal $script:ProbeArgv.Count 10 'ten arguments'
+    Assert-Equal $script:ProbeArgv[-1] '{"disableAllHooks":true}' 'the settings JSON'
+    Assert-Equal ($script:ProbeArgv -join ' ') '-p --input-format stream-json --output-format stream-json --verbose --no-session-persistence --strict-mcp-config --settings {"disableAllHooks":true}' 'the line'
+    foreach ($name in $script:ScrubSentinels.Keys) { Assert-True (Test-ScrubbedName $name) "$name is one the engine strips" }
+    Assert-True (-not (Test-ScrubbedName 'CLAUDE_CONFIG_DIR')) 'CLAUDE_CONFIG_DIR is set again by the probe for another folder'
+}
+
+# A settings.json as the installer leaves it, built here from its parts.
+function New-InstalledSettings([string]$Command, [string[]]$Arguments = $null, [switch]$NoPermissionTimeout) {
+    $entry = { param($timeout)
+        $h = [ordered]@{ type = 'command'; command = $Command }
+        if ($null -ne $Arguments) { $h['args'] = $Arguments }
+        if ($timeout) { $h['timeout'] = $timeout }
+        $h
+    }
+    $hooks = [ordered]@{ PreToolUse = @([ordered]@{ matcher = 'Bash'; hooks = @([ordered]@{ type = 'command'; command = 'echo foreign-hook' }) }) }
+    foreach ($event in $script:BaselineHookEvents) {
+        $group = [ordered]@{ hooks = @(& $entry $(if ($event -eq 'PermissionRequest' -and -not $NoPermissionTimeout) { 86400 } else { $null })) }
+        if ($event -in 'PreToolUse', 'PostToolUse', 'PermissionRequest', 'Notification') { $group = [ordered]@{ matcher = '*'; hooks = $group['hooks'] } }
+        $hooks[$event] = @(@($hooks[$event]) + $group | Where-Object { $_ })
+    }
+    ([ordered]@{ theme = 'dark'; hooks = $hooks } | ConvertTo-Json -Depth 20 | ConvertFrom-Json -Depth 20)
+}
+
+Test-Case 'our hook entries: the string form with a forward-slash path, in every baseline event, passes' {
+    $exe = 'C:\Users\x\p\.claude\hooks\agentnotch-hook.exe'
+    $settings = New-InstalledSettings -Command 'C:/Users/x/p/.claude/hooks/agentnotch-hook.exe hook'
+    Assert-Equal @(Test-InstalledHooks -Settings $settings -ExpectedExe $exe -ExecFormAllowed $false).Count 0 'string form, exec not allowed'
+    Assert-Equal @(Test-InstalledHooks -Settings $settings -ExpectedExe $exe -ExecFormAllowed $true).Count 0 'string form, exec allowed'
+    $entries = @(Get-HookEntries -Settings $settings)
+    Assert-True ($entries.Count -gt 10) 'every group and the foreign entry are listed'
+    Assert-Equal (@($entries | Where-Object { $_.Event -eq 'PreToolUse' })[0].Command) 'echo foreign-hook' 'the user entry comes first'
+}
+
+Test-Case 'our hook entries: an 8.3 path is compared after it is made long' {
+    $exe = 'C:\Users\John Smith\p\.claude\hooks\agentnotch-hook.exe'
+    $settings = New-InstalledSettings -Command 'C:/Users/JOHNSM~1/p/.claude/hooks/AGENTN~1.EXE hook'
+    $resolve = { param($p) $p.Replace('JOHNSM~1', 'John Smith').Replace('AGENTN~1.EXE', 'agentnotch-hook.exe') }
+    Assert-Equal @(Test-InstalledHooks -Settings $settings -ExpectedExe $exe -ExecFormAllowed $false -Resolve $resolve).Count 0 'resolved'
+    Assert-True (@(Test-InstalledHooks -Settings $settings -ExpectedExe $exe -ExecFormAllowed $false).Count -gt 0) 'unresolved, the entries are nobody''s'
+}
+
+Test-Case 'our hook entries: the exec form needs the facts file to allow it, and exactly hook --exec' {
+    $exe = 'C:\p\.claude\hooks\agentnotch-hook.exe'
+    $settings = New-InstalledSettings -Command $exe -Arguments @('hook', '--exec')
+    Assert-Equal @(Test-InstalledHooks -Settings $settings -ExpectedExe $exe -ExecFormAllowed $true).Count 0 'allowed'
+    $refused = @(Test-InstalledHooks -Settings $settings -ExpectedExe $exe -ExecFormAllowed $false)
+    Assert-True ($refused -match 'exec form was written') 'not allowed'
+    $wrong = New-InstalledSettings -Command $exe -Arguments @('hook')
+    Assert-True (@(Test-InstalledHooks -Settings $wrong -ExpectedExe $exe -ExecFormAllowed $true) -match "args are 'hook'") 'a missing --exec'
+}
+
+Test-Case 'our hook entries: a missing event, a second command, a missing timeout and a foreign path are named' {
+    $exe = 'C:\p\.claude\hooks\agentnotch-hook.exe'
+    $good = 'C:/p/.claude/hooks/agentnotch-hook.exe hook'
+    $noTimeout = New-InstalledSettings -Command $good -NoPermissionTimeout
+    Assert-True (@(Test-InstalledHooks -Settings $noTimeout -ExpectedExe $exe -ExecFormAllowed $false) -match 'PermissionRequest timeout') 'the 86400 s timeout'
+    $other = New-InstalledSettings -Command 'C:/elsewhere/agentnotch-hook.exe hook'
+    $found = @(Test-InstalledHooks -Settings $other -ExpectedExe $exe -ExecFormAllowed $false)
+    Assert-True ($found -match 'no hook entry of ours under PreToolUse') 'a path that is not the folder''s copy is not ours'
+    $partial = New-InstalledSettings -Command $good
+    $partial.hooks.PSObject.Properties.Remove('Stop')
+    Assert-True (@(Test-InstalledHooks -Settings $partial -ExpectedExe $exe -ExecFormAllowed $false) -match 'no hook entry of ours under Stop') 'a missing event'
+    $mixed = New-InstalledSettings -Command $good
+    $mixed.hooks.Stop[0].hooks[0].command = 'C:/p/.claude/hooks/agentnotch-hook.exe statusline'
+    Assert-True (@(Test-InstalledHooks -Settings $mixed -ExpectedExe $exe -ExecFormAllowed $false) -match 'no hook entry of ours under Stop') 'the wrong verb'
+}
+
+Test-Case 'the status line wrapper is recognised by its verb and its path' {
+    $exe = 'C:\p\.claude\hooks\agentnotch-hook.exe'
+    $wrapped = [pscustomobject]@{ Command = 'C:/p/.claude/hooks/agentnotch-hook.exe statusline'; Args = $null }
+    Assert-Equal (Get-OwnForm -Entry $wrapped -ExpectedExe $exe -Verb 'statusline') 'string' 'ours'
+    Assert-Equal $null (Get-OwnForm -Entry $wrapped -ExpectedExe $exe -Verb 'hook') 'not the hook verb'
+    $plain = [pscustomobject]@{ Command = 'echo smoke-status'; Args = $null }
+    Assert-Equal $null (Get-OwnForm -Entry $plain -ExpectedExe $exe -Verb 'statusline') 'the user''s own command'
+}
+
+Test-Case 'settings style: the byte order mark and CRLF must survive, and only the edited keys may change' {
+    $text = '{"theme":"dark","env":{"A":"1"},"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo user"}]}]}}'
+    $crlf = [byte[]](0xEF, 0xBB, 0xBF) + [Text.Encoding]::UTF8.GetBytes(($text -replace ',', ",`r`n"))
+    Assert-Equal @(Test-SettingsStyle -Bytes $crlf).Count 0 'BOM and CRLF'
+    Assert-True (@(Test-SettingsStyle -Bytes ([Text.Encoding]::UTF8.GetBytes($text))) -match 'byte order mark') 'a lost BOM'
+    $lf = [byte[]](0xEF, 0xBB, 0xBF) + [Text.Encoding]::UTF8.GetBytes(($text -replace ',', ",`n"))
+    Assert-True (@(Test-SettingsStyle -Bytes $lf) -match 'bare LF') 'LF endings'
+    $before = ConvertFrom-SettingsBytes -Bytes $crlf
+    Assert-Equal $before.theme 'dark' 'the BOM is skipped when parsing'
+    $after = ConvertFrom-SettingsBytes -Bytes ([Text.Encoding]::UTF8.GetBytes(($text -replace '"dark"', '"light"')))
+    Assert-Equal ((Test-OtherKeysUnchanged -Before $before -After $after) -join '|') "key 'theme' changed" 'a changed key'
+    $gone = ConvertFrom-SettingsBytes -Bytes ([Text.Encoding]::UTF8.GetBytes('{"theme":"dark","extra":1,"hooks":{}}'))
+    Assert-Equal ((Test-OtherKeysUnchanged -Before $before -After $gone) -join '|') "key 'env' is gone|key 'extra' was added" 'a lost and an added key'
+    Assert-Equal @(Test-OtherKeysUnchanged -Before $before -After $gone -Edited @('hooks', 'env', 'extra')).Count 0 'edited keys are not compared'
+}
+
+Test-Case 'the user''s own hooks must still be there after the install' {
+    $before = ConvertFrom-SettingsBytes -Bytes ([Text.Encoding]::UTF8.GetBytes('{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo foreign-hook"}]}]}}'))
+    $kept = New-InstalledSettings -Command 'C:/p/h.exe hook'
+    Assert-Equal @(Test-ForeignHooksKept -Before $before -After $kept).Count 0 'kept'
+    $lost = ConvertFrom-SettingsBytes -Bytes ([Text.Encoding]::UTF8.GetBytes('{"hooks":{"Stop":[]}}'))
+    Assert-Equal (@(Test-ForeignHooksKept -Before $before -After $lost) -join '|') "a PreToolUse hook entry of the user's is gone" 'lost'
+    Assert-Equal @(Test-ForeignHooksKept -Before ([pscustomobject]@{}) -After $lost).Count 0 'a file with no hooks has nothing to keep'
+}
+
+Test-Case 'the exec form is allowed from the first version after the last one that cannot run it' {
+    $facts = '{"schema":1,"versions":[{"version":"2.0.0","hook_exec_form":false},{"version":"2.1.138","hook_exec_form":false},{"version":"2.1.139","hook_exec_form":true},{"version":"2.1.286","hook_exec_form":true}],"exec_form_min":null}' | ConvertFrom-Json
+    Assert-Equal (Get-ExecFormMin -Facts $facts).ToString() '2.1.139' 'derived'
+    Assert-True (Test-ExecFormAllowed -Facts $facts -ClaudeVersion '2.1.282') '2.1.282 is above it'
+    Assert-True (-not (Test-ExecFormAllowed -Facts $facts -ClaudeVersion '2.1.138')) '2.1.138 is below it'
+    Assert-True (-not (Test-ExecFormAllowed -Facts $facts -ClaudeVersion 'garbage')) 'an unknown version is never allowed'
+    $newestUnknown = '{"versions":[{"version":"2.1.139","hook_exec_form":true},{"version":"2.1.286","hook_exec_form":null}]}' | ConvertFrom-Json
+    Assert-Equal (Get-ExecFormMin -Facts $newestUnknown) $null 'nothing is derived unless the newest runs the form'
+    $unknown = '{"versions":[{"version":"2.1.100","hook_exec_form":null},{"version":"2.1.139","hook_exec_form":true}]}' | ConvertFrom-Json
+    Assert-Equal (Get-ExecFormMin -Facts $unknown).ToString() '2.1.139' 'a null (not known) is not support'
+    $allTrue = '{"versions":[{"version":"2.1.100","hook_exec_form":true},{"version":"2.1.139","hook_exec_form":true}]}' | ConvertFrom-Json
+    Assert-Equal (Get-ExecFormMin -Facts $allTrue).ToString() '2.1.100' 'every listed version runs it'
+}
+
+Test-Case 'an explicit exec_form_min wins unless a listed version at or above it says no' {
+    $explicit = '{"exec_form_min":"2.1.200","versions":[{"version":"2.1.100","hook_exec_form":false},{"version":"2.1.286","hook_exec_form":true}]}' | ConvertFrom-Json
+    Assert-Equal (Get-ExecFormMin -Facts $explicit).ToString() '2.1.200' 'explicit'
+    $contradicted = '{"exec_form_min":"2.1.200","versions":[{"version":"2.1.250","hook_exec_form":false},{"version":"2.1.286","hook_exec_form":true}]}' | ConvertFrom-Json
+    Assert-Equal (Get-ExecFormMin -Facts $contradicted).ToString() '2.1.286' 'contradicted, so derived'
+    Assert-Equal (Get-ExecFormMin -Facts ('{}' | ConvertFrom-Json)) $null 'no facts, no exec form'
+}
+
+Test-Case 'the committed facts file, when it is here, can be read by the exec form rule' {
+    $path = Get-FactsPath
+    if (-not (Test-Path -LiteralPath $path)) { return }
+    $facts = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -Depth 50
+    $null = Get-ExecFormMin -Facts $facts
+    Assert-True ($facts.schema -eq 1) 'schema 1'
+}
+
+Test-Case 'the permission answers: each expected output is the proto crate''s own file, for the stdin it was made for' {
+    $cases = @(Get-PermissionCases)
+    Assert-Equal $cases.Count 6 'allow, always, deny, a question chip, approve plan, keep planning'
+    Assert-Equal (($cases | ForEach-Object { $_.Click }) -join ',') 'allow,always,deny,option:0,approve,keep' 'the buttons'
+    Assert-Equal @($cases | Where-Object { $_.Chat }).Count 1 'only Keep planning is answered from the chat'
+    foreach ($case in $cases) {
+        $response = Get-Content -LiteralPath (Join-Path (Get-ProtoFixtureDir) "v1-responses\$($case.Expected).json") -Raw | ConvertFrom-Json -Depth 50
+        Assert-Equal $response.stdin $case.Stdin "the response fixture '$($case.Expected)' was made for $($case.Stdin)"
+        $bytes = Get-ExpectedPermissionBytes -Name $case.Expected
+        $out = [Text.Encoding]::UTF8.GetString($bytes) | ConvertFrom-Json -Depth 50
+        Assert-Equal $out.hookSpecificOutput.hookEventName 'PermissionRequest' "$($case.Name) names the event"
+        Assert-True ($bytes[-1] -ne 10) "$($case.Name) has no trailing newline"
+    }
+    $decision = { param($name) ([Text.Encoding]::UTF8.GetString((Get-ExpectedPermissionBytes -Name $name)) | ConvertFrom-Json -Depth 50).hookSpecificOutput.decision }
+    Assert-Equal (& $decision 'allow').behavior 'allow' 'allow'
+    Assert-Equal (& $decision 'deny').behavior 'deny' 'deny'
+    Assert-Equal (& $decision 'keep_planning').behavior 'deny' 'keep planning is a denial'
+    Assert-True ((& $decision 'keep_planning').message -match 'keep planning') 'with the reason that says so'
+    Assert-Equal (& $decision 'always').updatedPermissions[0].rules[0].ruleContent 'npm run test:*' 'always allow carries the first suggestion'
+    $question = Get-Content -LiteralPath (Join-Path (Get-ProtoFixtureDir) 'stdin\permission_request_question.json') -Raw | ConvertFrom-Json -Depth 50
+    $firstLabel = $question.tool_input.questions[0].options[0].label
+    Assert-Equal ((& $decision 'question').updatedInput.answers.PSObject.Properties.Value) $firstLabel 'the chip is option 0'
+}
+
+Test-Case 'a hook stdin keeps the fixture''s tool input and takes the smoke session''s identity' {
+    $transcript = 'C:\p\.claude\projects\x\5d1e.jsonl'
+    $request = New-HookStdin -Fixture 'permission_request_bash' -SessionId 'sid-1' -Transcript $transcript -Cwd 'C:\smoke\work-app' | ConvertFrom-Json -Depth 50
+    $fixture = Get-Content -LiteralPath (Join-Path (Get-ProtoFixtureDir) 'stdin\permission_request_bash.json') -Raw | ConvertFrom-Json -Depth 50
+    Assert-Equal $request.session_id 'sid-1' 'session'
+    Assert-Equal $request.transcript_path $transcript 'transcript'
+    Assert-Equal $request.cwd 'C:\smoke\work-app' 'cwd'
+    Assert-Equal $request.hook_event_name 'PermissionRequest' 'the event stays'
+    Assert-Equal (ConvertTo-CompactJson $request.tool_input) (ConvertTo-CompactJson $fixture.tool_input) 'the tool input is the fixture''s'
+    Assert-True ($null -ne $request.permission_suggestions) 'the suggestions stay on a request'
+    $pre = New-HookStdin -Fixture 'permission_request_question' -SessionId 'sid-1' -Transcript $transcript -Cwd 'C:\x' -EventName 'PreToolUse' -ToolUseId 'toolu_9' | ConvertFrom-Json -Depth 50
+    Assert-Equal $pre.hook_event_name 'PreToolUse' 'PreToolUse'
+    Assert-Equal $pre.tool_use_id 'toolu_9' 'a PreToolUse has the tool use id'
+    Assert-Equal $pre.tool_name 'AskUserQuestion' 'and the request''s tool'
+    $status = New-HookStdin -Fixture 'status_line' -SessionId 'sid-1' -Transcript $transcript -Cwd 'C:\x' | ConvertFrom-Json -Depth 50
+    Assert-Equal $status.session_id 'sid-1' 'the status line takes the session too'
+    Assert-Equal $status.context_window.used_percentage 37 'and keeps its numbers'
+}
+
+Test-Case 'the status line output is the original command''s, whatever line end the shell used' {
+    Assert-Equal @(Test-StatusLineOutput -Stdout "smoke-status`n" -Expected 'smoke-status').Count 0 'LF'
+    Assert-Equal @(Test-StatusLineOutput -Stdout "smoke-status`r`n" -Expected 'smoke-status').Count 0 'CRLF'
+    Assert-Equal @(Test-StatusLineOutput -Stdout 'smoke-status' -Expected 'smoke-status').Count 0 'none'
+    Assert-Equal @(Test-StatusLineOutput -Stdout '' -Expected 'smoke-status').Count 1 'nothing printed'
+    Assert-Equal @(Test-StatusLineOutput -Stdout 'smoke-status extra' -Expected 'smoke-status').Count 1 'more printed'
+}
+
+Test-Case 'after Turn off the only new files in P are our backups' {
+    $backups = @('added: .claude/settings.json.agentnotch-20261001-120000-123.bak', 'added: .claude/settings.json.agentnotch.original.bak', 'added: .claude-work/settings.json.agentnotch.original.bak')
+    Assert-Equal @(Test-OnlyBackupsAdded -Differences $backups).Count 0 'backups'
+    Assert-Equal @(Test-OnlyBackupsAdded -Differences @()).Count 0 'nothing'
+    $bad = @(Test-OnlyBackupsAdded -Differences ($backups + 'added: .claude/hooks/agentnotch-hook.exe' + 'changed: .claude/settings.json' + 'removed: .claude.json' + 'added: elsewhere/settings.json.agentnotch.original.bak'))
+    Assert-Equal $bad.Count 4 'a hook copy left behind, a changed or removed file and a backup elsewhere are all named'
+}
+
+Test-Case 'the cdp answer is the last line of its output; a failure carries the page''s error' {
+    Assert-Equal (ConvertFrom-CdpOutput -Text "warning`n{`"ok`":true,`"result`":42}`n") 42 'a value'
+    Assert-Equal (ConvertFrom-CdpOutput -Text '{"ok":true,"result":null}') $null 'null'
+    Assert-Throws { ConvertFrom-CdpOutput -Text '{"ok":false,"error":"click: nothing matches [x]"}' } 'click: nothing matches'
+    Assert-Throws { ConvertFrom-CdpOutput -Text '' } 'printed nothing'
+    Assert-Throws { ConvertFrom-CdpOutput -Text 'oops' } 'not JSON'
+}
+
+Test-Case 'the hook runner''s answer is parsed, and a tool that failed to run is an error' {
+    $runs = ConvertFrom-HookRuns -Text '{"runs":[{"source":"PreToolUse[0]","shell":"bash","exit":0,"ms":120,"stdout":"","stdout_b64":""},{"source":"x","skipped":true,"reason":"no bash"}]}'
+    Assert-Equal $runs.Count 2 'two runs'
+    Assert-Equal $runs[0]['ms'] 120 'its time'
+    Assert-True $runs[1].ContainsKey('skipped') 'a skipped shell is visible'
+    Assert-Throws { ConvertFrom-HookRuns -Text '{"error":"nope","runs":[]}' } 'run-hook.mjs: nope'
+    Assert-Throws { ConvertFrom-HookRuns -Text '' } 'printed nothing'
+}
+
+Test-Case 'the selectors are in one table, and the answer selector names the button, the session and skips answered ones' {
+    foreach ($name in 'ConsentTurnOn', 'HooksSwitch', 'HooksSwitchOn', 'Answer', 'OpenChat', 'Back', 'StatusLineAlone', 'OpenSettings') {
+        Assert-True ($script:Ui.ContainsKey($name) -and $script:Ui[$name]) "the table has $name"
+    }
+    $selector = $script:Ui.Answer -f 'option:0', 'sid-1'
+    Assert-Equal $selector '[data-an-action="answer"][data-an-arg="option:0"][data-an-session="sid-1"]:not(.an-answered)' 'the answer selector'
+    Assert-Equal ($script:Ui.OpenChat -f 'sid-1') '[data-an-action="open-chat"][data-an-arg="sid-1"]' 'the chat selector'
+    Assert-True ($script:AnswerGateSeconds -ge 0.35) 'the gate wait is not shorter than the panel''s 0.35 s'
+}
+
+Test-Case 'the page expressions are valid JavaScript (checked with node when it is here)' {
+    $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $node) { return }
+    $armed = Get-ArmedExpression -Selector ($script:Ui.Answer -f 'option:0', "it's")
+    $literal = ConvertTo-JsString "[data-an-x=`"a'b`"]"
+    foreach ($expression in $armed, "!!document.querySelector($literal)") {
+        $file = Join-Path $scratch 'expression.js'
+        Set-Content -LiteralPath $file -Value "new Function('return ' + $(ConvertTo-Json $expression -Compress));"
+        & $node.Source $file
+        Assert-Equal $LASTEXITCODE 0 "node accepts: $expression"
+    }
+}
+
+Test-Case 'a node script is started with exact arguments, read to its end and stopped by handle' {
+    $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $node) { return }
+    $js = Join-Path $scratch 'echo-args.js'
+    Set-Content -LiteralPath $js -Value "console.log(JSON.stringify(process.argv.slice(2)));"
+    $odd = @('--env', 'A=b c', '{"disableAllHooks":true}', 'quote"inside')
+    $run = Wait-NodeScript -Run (Start-NodeScript -Script $js -Arguments $odd)
+    Assert-Equal $run.ExitCode 0 'exit'
+    Assert-Equal ((($run.Stdout.Trim()) | ConvertFrom-Json) -join '|') ($odd -join '|') 'arguments arrive exactly'
+    $slow = Join-Path $scratch 'sleep.js'
+    Set-Content -LiteralPath $slow -Value "setTimeout(() => {}, 60000);"
+    $started = Start-NodeScript -Script $slow
+    Assert-Throws { Wait-NodeScript -Run $started -TimeoutSeconds 1 } 'did not finish within 1 s'
+    Assert-True $started.Process.HasExited 'the slow one was stopped'
+}
+
+Test-Case 'a free port can be bound again right after it is handed out' {
+    $port = Get-FreeTcpPort
+    Assert-True ($port -gt 1023) 'a real port'
+    $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $port)
+    $listener.Start()
+    $listener.Stop()
+}
+
+Test-Case 'phases 5-9 are in the table in order, behind the engine gate, between phase 4 and phase 13' {
+    $table = @(Get-PhaseTable)
+    $numbers = @($table | ForEach-Object { $_.Number })
+    $at = $numbers.IndexOf('5')
+    Assert-Equal (($numbers[$at..($at + 4)]) -join ',') '5,6,7,8,9' 'consecutive'
+    Assert-True ($numbers.IndexOf('4') -lt $at -and $numbers.IndexOf('13') -gt $at + 4) 'between 4 and 13'
+    foreach ($n in '5', '6', '7', '8', '9') {
+        Assert-Equal (@($table | Where-Object { $_.Number -eq $n })[0].Gate) 'engine' "phase $n waits for the engine gate"
+    }
+}
+
+Test-Case 'with the engine gate closed phases 5-9 are reported as waiting and nothing is launched' {
+    $gatesPath = Join-Path (New-Scratch 'gates-engine') 'g.json'
+    Write-GatesFile $gatesPath @{}
+    $gates = Read-Gates -Path $gatesPath
+    foreach ($phase in @(Get-PhaseTable -Gates $gates | Where-Object { $_.Number -in '5', '6', '7', '8', '9' })) {
+        Assert-True (-not (Test-GateOpen -Gates $gates -Name $phase.Gate)) "phase $($phase.Number) is gated"
+        Assert-True ((Get-GateWarning -Gates $gates -Number $phase.Number -Gate $phase.Gate) -match "^::warning::phase $($phase.Number) not run: waiting for ") 'with its warning'
+    }
+}
+
 } finally {
     Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction SilentlyContinue
 }

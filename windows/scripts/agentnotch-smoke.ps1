@@ -16,7 +16,8 @@
     only the processes it started, by their handle (never by image name).
 
     Phases are rows of a table (Get-PhaseTable): a number, a name, an optional gate and a
-    body. The next sub-tasks add phases 4-12 as rows. A gate is a flag in smoke\gates.json: the
+    body. Phases 4-9 are rows too (the real app: before consent, the deep link, Turn on, every hook
+    entry, Turn off); the next sub-task adds 10-12. A gate is a flag in smoke\gates.json: the
     package a phase waits for has not landed, so the phase prints a warning, is listed in the
     step summary and is not run. With -Release any closed gate fails the run before phase 0,
     so no release ships with a phase unrun.
@@ -475,6 +476,13 @@ delegate bool EnumProc(System.IntPtr hwnd, System.IntPtr param);
 [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc proc, System.IntPtr param);
 [DllImport("user32.dll")] static extern bool IsWindowVisible(System.IntPtr hwnd);
 [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(System.IntPtr hwnd, out uint pid);
+[DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern uint GetLongPathNameW(string path, System.Text.StringBuilder buffer, uint size);
+// The long spelling of a path (an 8.3 short path is expanded); null when the path does not exist.
+public static string LongPath(string path) {
+    var buffer = new System.Text.StringBuilder(1024);
+    uint n = GetLongPathNameW(path, buffer, (uint)buffer.Capacity);
+    return n == 0 || n > buffer.Capacity ? null : buffer.ToString();
+}
 public static int Visible(uint pid) {
     int count = 0;
     EnumWindows((h, p) => { uint owner; GetWindowThreadProcessId(h, out owner); if (owner == pid && IsWindowVisible(h)) count++; return true; }, System.IntPtr.Zero);
@@ -863,6 +871,855 @@ function Invoke-SelfTestPhase {
     if ($problems.Count) { throw ("the sealed self-test failed:`n  " + ($problems -join "`n  ")) }
 }
 
+# --- phases 5-9: the real app, before consent, the deep link, Turn on, every hook entry, Turn off --------------------
+
+# Every selector and every page command the UI-driven phases use, in ONE table: the pages
+# (windows/codenotch/ui/agentnotch/*.js, WP10) own these names, so when a page changes, this is
+# the only place to follow it. Page names are the ones cdp.mjs knows (by the file they serve).
+$script:Ui = @{
+    NotchPage       = 'notch'
+    SettingsPage    = 'settings'
+    PanelPage       = 'agentnotch-panel'
+    # A Tauri command, called from the notch page the way the notch itself calls it.
+    OpenSettings    = 'open_settings'
+    # Settings > Claude Code: the consent card's emphasised button, and the hooks switch (a
+    # button with role=switch; data-an-on is "1" while it is on).
+    ConsentTurnOn   = '[data-an-action="consent-on"]'
+    HooksSwitch     = '[data-an-action="hooks-enabled"]'
+    HooksSwitchOn   = '[data-an-action="hooks-enabled"][data-an-on="1"]'
+    # The words Settings shows under a folder whose status line was left alone.
+    StatusLineAlone = 'Status line left alone'
+    # An answering button of the panel (list row or chat bar) for one session; {0} = the
+    # button's data-an-arg (allow, always, deny, option:<n>, approve, keep), {1} = session id.
+    # One that was already answered stays on screen marked an-answered: never picked.
+    Answer          = '[data-an-action="answer"][data-an-arg="{0}"][data-an-session="{1}"]:not(.an-answered)'
+    # The list row's way into the chat ("Review plan"); {0} = session id.
+    OpenChat        = '[data-an-action="open-chat"][data-an-arg="{0}"]'
+    Back            = '[data-an-action="back"]'
+}
+# The panel's AnswerGate arms a button 0.35 s after it is on screen; clicking sooner does
+# nothing, so the script waits longer than that before a click (and for the page to say armed).
+$script:AnswerGateSeconds = 0.35
+
+# --- helpers: node, the DevTools driver, the hook runner ----------------------------------------------------------
+
+function Get-NodePath {
+    $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $node) { throw 'node is not on the PATH: the UI-driven phases need it' }
+    $node.Source
+}
+
+# A node script started with its arguments passed exactly (no shell, no quoting to get wrong),
+# its output collected while it runs. Stop-OwnProcess ends it by handle.
+function Start-NodeScript {
+    param([Parameter(Mandatory)][string]$Script, [string[]]$Arguments = @())
+    $psi = [Diagnostics.ProcessStartInfo]::new((Get-NodePath))
+    $psi.ArgumentList.Add($Script)
+    foreach ($argument in $Arguments) { $psi.ArgumentList.Add($argument) }
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $process = [Diagnostics.Process]::Start($psi)
+    [void](Register-OwnProcess $process)
+    [pscustomobject]@{ Process = $process; Stdout = $process.StandardOutput.ReadToEndAsync(); Stderr = $process.StandardError.ReadToEndAsync() }
+}
+
+function Wait-NodeScript {
+    param([Parameter(Mandatory)]$Run, [int]$TimeoutSeconds = 60)
+    if (-not $Run.Process.WaitForExit($TimeoutSeconds * 1000)) {
+        Stop-OwnProcess -Process $Run.Process
+        throw "node did not finish within $TimeoutSeconds s"
+    }
+    $Run.Process.WaitForExit()
+    [pscustomobject]@{ ExitCode = $Run.Process.ExitCode; Stdout = [string]$Run.Stdout.Result; Stderr = [string]$Run.Stderr.Result }
+}
+
+# The last line of cdp.mjs's output is its answer: {"ok":true,"result":…} or {"ok":false,"error":…}.
+function ConvertFrom-CdpOutput {
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
+    $lines = @($Text -split "`r?`n" | Where-Object { $_.Trim() })
+    if (-not $lines.Count) { throw 'cdp.mjs printed nothing' }
+    try { $answer = $lines[-1] | ConvertFrom-Json -AsHashtable } catch { throw "cdp.mjs printed something that is not JSON: $($lines[-1])" }
+    if ($answer -isnot [System.Collections.IDictionary] -or -not $answer.ContainsKey('ok')) { throw "cdp.mjs answered $($lines[-1])" }
+    if (-not $answer['ok']) { throw "cdp.mjs: $($answer['error'])" }
+    $answer['result']
+}
+
+# One cdp.mjs call against the running app: eval | invoke | click | wait | errors.
+function Invoke-Cdp {
+    param([Parameter(Mandatory)][string[]]$Arguments, [int]$TimeoutSeconds = 60)
+    $tool = Join-Path $PSScriptRoot 'smoke\cdp.mjs'
+    $run = Wait-NodeScript -Run (Start-NodeScript -Script $tool -Arguments (@('--port', [string]$script:CdpPort) + $Arguments)) -TimeoutSeconds $TimeoutSeconds
+    try { ConvertFrom-CdpOutput -Text $run.Stdout } catch { throw "$($_.Exception.Message) (cdp $($Arguments -join ' '); stderr: $($run.Stderr.Trim()))" }
+}
+
+# window.__TAURI__.core.invoke(command, args) in the named page, as the page itself calls it.
+function Invoke-CdpInvoke {
+    param([Parameter(Mandatory)][string]$Page, [Parameter(Mandatory)][string]$Command, $Arguments = @{})
+    Invoke-Cdp -Arguments @('invoke', $Page, $Command, (ConvertTo-Json $Arguments -Depth 10 -Compress))
+}
+
+# The engine's own call (`an_call`), e.g. panel_open.
+function Invoke-CdpCall {
+    param([Parameter(Mandatory)][string]$Page, [Parameter(Mandatory)][string]$Method, $Arguments = @{})
+    Invoke-CdpInvoke -Page $Page -Command 'an_call' -Arguments @{ method = $Method; args = $Arguments }
+}
+
+function ConvertTo-JsString { param([Parameter(Mandatory)][string]$Text) ConvertTo-Json $Text -Compress }
+
+# A real click on the first element the selector matches (waits for it to exist first).
+function Invoke-CdpClick {
+    param([Parameter(Mandatory)][string]$Page, [Parameter(Mandatory)][string]$Selector, [int]$WaitSeconds = 20)
+    $literal = ConvertTo-JsString $Selector
+    [void](Invoke-Cdp -Arguments @('wait', $Page, "!!document.querySelector($literal)", [string]($WaitSeconds * 1000)) -TimeoutSeconds ($WaitSeconds + 15))
+    [void](Invoke-Cdp -Arguments @('click', $Page, $Selector))
+}
+
+# The page's expression for "this button is on screen, armed, and not disabled": the panel marks
+# a button an-unarmed (and aria-disabled) until its AnswerGate has opened.
+function Get-ArmedExpression {
+    param([Parameter(Mandatory)][string]$Selector)
+    $literal = ConvertTo-JsString $Selector
+    "(() => { const b = document.querySelector($literal); return !!b && !b.disabled && !b.classList.contains('an-unarmed') && b.getAttribute('aria-disabled') !== 'true'; })()"
+}
+
+# Waits for the answering button, lets the AnswerGate open, then clicks it. Never sooner.
+function Invoke-CdpAnswerClick {
+    param([Parameter(Mandatory)][string]$Page, [Parameter(Mandatory)][string]$Selector, [int]$WaitSeconds = 30)
+    $literal = ConvertTo-JsString $Selector
+    [void](Invoke-Cdp -Arguments @('wait', $Page, "!!document.querySelector($literal)", [string]($WaitSeconds * 1000)) -TimeoutSeconds ($WaitSeconds + 15))
+    Start-Sleep -Milliseconds ([int](($script:AnswerGateSeconds + 0.15) * 1000))
+    [void](Invoke-Cdp -Arguments @('wait', $Page, (Get-ArmedExpression -Selector $Selector), '10000') -TimeoutSeconds 25)
+    [void](Invoke-Cdp -Arguments @('click', $Page, $Selector))
+}
+
+function Get-FreeTcpPort {
+    $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+    $listener.Start()
+    try { $listener.LocalEndpoint.Port } finally { $listener.Stop() }
+}
+
+# --- helpers: what the app prints and writes ---------------------------------------------------------------------
+
+# `control status` is lines of "key: value"; a "key=value" line is read the same way.
+function ConvertFrom-ControlStatus {
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
+    $status = [ordered]@{}
+    foreach ($line in ($Text -split "`r?`n")) {
+        if ($line -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*[:=]\s*(.*?)\s*$') { $status[$Matches[1]] = $Matches[2] }
+    }
+    $status
+}
+
+# What differs from the expectation (key -> value), one line each. A key the report lacks is named.
+function Test-ControlStatus {
+    param([Parameter(Mandatory)]$Status, [Parameter(Mandatory)][System.Collections.IDictionary]$Expect)
+    foreach ($key in $Expect.Keys) {
+        if (-not $Status.Contains($key)) { "no '$key' line"; continue }
+        if ($Status[$key] -cne [string]$Expect[$key]) { "$key is '$($Status[$key])', expected '$($Expect[$key])'" }
+    }
+}
+
+function Get-ControlStatus {
+    $run = Invoke-Cli -Arguments @('control', 'status') -Environment (Get-AppEnvironment)
+    if ($run.ExitCode -ne 0) { throw "control status exited with $($run.ExitCode): $($run.Text)" }
+    ConvertFrom-ControlStatus -Text $run.Text
+}
+
+# Polls `control status` until it passes the check or the time is up; throws what it last saw.
+function Wait-ControlStatus {
+    param([Parameter(Mandatory)][scriptblock]$Check, [Parameter(Mandatory)][int]$Seconds, [Parameter(Mandatory)][string]$What)
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    $last = $null
+    while ($true) {
+        $last = $null
+        try { $last = Get-ControlStatus } catch { $last = "no status: $($_.Exception.Message)" }
+        if ($last -isnot [string]) {
+            $problems = @(& $Check $last)
+            if (-not $problems.Count) { return $last }
+            $seen = ($problems -join '; ')
+        } else { $seen = $last }
+        if ((Get-Date) -gt $deadline) { throw "timed out after $Seconds s: $What ($seen)" }
+        Start-Sleep -Milliseconds 700
+    }
+}
+
+# A protected DACL naming only the allowed principals (the user and SYSTEM), as SIDs.
+function Test-PrivateAcl {
+    param([Parameter(Mandatory)][bool]$Protected, [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Sids, [Parameter(Mandatory)][string[]]$Allowed)
+    if (-not $Protected) { 'the DACL inherits from the parent (it is not protected)' }
+    foreach ($sid in ($Sids | Select-Object -Unique)) {
+        if ($sid -notin $Allowed) { "the DACL names $sid" }
+    }
+    if (-not $Sids) { 'the DACL is empty' }
+}
+
+function Get-AclProblems {
+    param([Parameter(Mandatory)][string]$Path)
+    $acl = Get-Acl -LiteralPath $Path
+    $sids = @($acl.Access | ForEach-Object { $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value })
+    $me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    Test-PrivateAcl -Protected $acl.AreAccessRulesProtected -Sids $sids -Allowed @($me, 'S-1-5-18')
+}
+
+# The app's support folder: <local app data>\com.rivantmedia.agentnotch\Claude, under the real
+# local app data or the temporary profile's (see Get-DataRoots).
+function Find-SupportDir {
+    param([Parameter(Mandatory)][string]$Profile, [string]$Local = $env:LOCALAPPDATA)
+    foreach ($root in @($Local, (Join-Path $Profile 'AppData\Local'))) {
+        if (-not $root) { continue }
+        $path = Join-Path (Join-Path $root 'com.rivantmedia.agentnotch') 'Claude'
+        if (Test-Path -LiteralPath $path -PathType Container) { return $path }
+    }
+    $null
+}
+
+# The usage probe's argument list, exactly (DESIGN-WIN §4.6): {"disableAllHooks":true} is ONE element.
+$script:ProbeArgv = @('-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
+    '--no-session-persistence', '--strict-mcp-config', '--settings', '{"disableAllHooks":true}')
+# What the engine strips from the child's environment (usage::scrubbed_env). CLAUDE_CONFIG_DIR is
+# in that list too, but the probe sets it again for a folder that is not the default one, so
+# seeing it is no leak; the others, and anything under CLAUDE_CODE_ or CLAUDE_AGENT_SDK_, are.
+$script:ScrubbedNames = @('CLAUDECODE', 'CLAUDE_PID', 'CLAUDE_EFFORT', 'AI_AGENT', 'CLAUDE_SECURESTORAGE_CONFIG_DIR', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN')
+# What phase 5 puts into the app's own environment to see the scrub work: names with a value that
+# can be nothing real.
+$script:ScrubSentinels = @{
+    CLAUDECODE                      = 'smoke-sentinel'
+    CLAUDE_PID                      = '1'
+    CLAUDE_EFFORT                   = 'smoke-sentinel'
+    AI_AGENT                        = 'smoke-sentinel'
+    CLAUDE_SECURESTORAGE_CONFIG_DIR = 'smoke-sentinel'
+    CLAUDE_CODE_ENTRYPOINT          = 'smoke-sentinel'
+    CLAUDE_AGENT_SDK_VERSION        = 'smoke-sentinel'
+    ANTHROPIC_API_KEY               = 'smoke-sentinel'
+    ANTHROPIC_AUTH_TOKEN            = 'smoke-sentinel'
+}
+
+function Test-ScrubbedName {
+    param([Parameter(Mandatory)][string]$Name)
+    $upper = $Name.ToUpperInvariant()
+    ($upper -in $script:ScrubbedNames) -or $upper.StartsWith('CLAUDE_CODE_') -or $upper.StartsWith('CLAUDE_AGENT_SDK_')
+}
+
+function ConvertTo-ComparablePath {
+    param([AllowEmptyString()][string]$Path)
+    $p = $Path
+    if ($p.StartsWith('\\?\')) { $p = $p.Substring(4) }
+    $p.Replace('/', '\').TrimEnd('\').ToLowerInvariant()
+}
+
+# What the fake claude's log (one JSON line per run: argv, cwd, the names of CLAUDE*/ANTHROPIC*
+# variables) says about the app. Before consent the app may run `claude --version` and the
+# usage probe, nothing else; a probe has the exact argument list, runs in <support>\usage-probe
+# and sees none of the scrubbed variables. Returns the problems; an empty log has none (the
+# readings check says whether the probe ran at all).
+function Test-FakeClaudeLog {
+    param([Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Lines, [Parameter(Mandatory)][string]$ProbeDir)
+    $number = 0
+    foreach ($line in $Lines) {
+        $number++
+        if (-not $line.Trim()) { continue }
+        try { $run = $line | ConvertFrom-Json -AsHashtable } catch { "log line ${number} is not JSON"; continue }
+        $argv = @($run['argv'] | ForEach-Object { [string]$_ })
+        $names = @($run['env'] | ForEach-Object { [string]$_ })
+        $leaked = @($names | Where-Object { Test-ScrubbedName $_ })
+        if ($leaked) { "run ${number} saw the scrubbed variable(s) $($leaked -join ', ')" }
+        if ($argv.Count -eq 1 -and $argv[0] -eq '--version') { continue }
+        if (($argv -join "`n") -cne ($script:ProbeArgv -join "`n")) {
+            "run ${number} is neither the probe nor --version: $($argv -join ' ')"
+            continue
+        }
+        if ((ConvertTo-ComparablePath ([string]$run['cwd'])) -ne (ConvertTo-ComparablePath $ProbeDir)) {
+            "run ${number} (the probe) ran in '$($run['cwd'])', not in $ProbeDir"
+        }
+    }
+}
+
+# --- helpers: settings.json as the installer leaves it ------------------------------------------------------------
+
+function Get-Prop {
+    param($Object, [Parameter(Mandatory)][string]$Name)
+    if ($null -eq $Object) { return $null }
+    $property = $Object.PSObject.Properties[$Name]
+    if ($property) { $property.Value } else { $null }
+}
+
+function ConvertFrom-SettingsBytes {
+    param([Parameter(Mandatory)][byte[]]$Bytes)
+    $start = if ($Bytes.Length -ge 3 -and $Bytes[0] -eq 0xEF -and $Bytes[1] -eq 0xBB -and $Bytes[2] -eq 0xBF) { 3 } else { 0 }
+    [Text.UTF8Encoding]::new($false).GetString($Bytes, $start, $Bytes.Length - $start) | ConvertFrom-Json -Depth 50
+}
+
+function Read-Settings { param([Parameter(Mandatory)][string]$Path) ConvertFrom-SettingsBytes -Bytes ([IO.File]::ReadAllBytes($Path)) }
+
+# CRLF and a byte order mark are what Windows editors write; an edit must keep both.
+function Test-SettingsStyle {
+    param([Parameter(Mandatory)][byte[]]$Bytes)
+    if ($Bytes.Length -lt 3 -or $Bytes[0] -ne 0xEF -or $Bytes[1] -ne 0xBB -or $Bytes[2] -ne 0xBF) { 'the byte order mark is gone' }
+    $bare = [regex]::Matches([Text.Encoding]::UTF8.GetString($Bytes), "(?<!`r)`n").Count
+    if ($bare) { "$bare bare LF line ending(s): CRLF was not kept" }
+}
+
+function ConvertTo-CompactJson { param($Value) ConvertTo-Json $Value -Depth 50 -Compress }
+
+# Every top-level key but the ones the installer edits, unchanged (compared as JSON).
+function Test-OtherKeysUnchanged {
+    param([Parameter(Mandatory)]$Before, [Parameter(Mandatory)]$After, [string[]]$Edited = @('hooks', 'statusLine'))
+    foreach ($property in $Before.PSObject.Properties) {
+        if ($property.Name -in $Edited) { continue }
+        $now = $After.PSObject.Properties[$property.Name]
+        if (-not $now) { "key '$($property.Name)' is gone"; continue }
+        if ((ConvertTo-CompactJson $property.Value) -cne (ConvertTo-CompactJson $now.Value)) { "key '$($property.Name)' changed" }
+    }
+    foreach ($property in $After.PSObject.Properties) {
+        if ($property.Name -notin $Edited -and -not $Before.PSObject.Properties[$property.Name]) { "key '$($property.Name)' was added" }
+    }
+}
+
+# Every group of every event the user had is still there after the install (as JSON).
+function Test-ForeignHooksKept {
+    param([Parameter(Mandatory)]$Before, [Parameter(Mandatory)]$After)
+    $was = Get-Prop $Before 'hooks'
+    $now = Get-Prop $After 'hooks'
+    if ($null -eq $was) { return }
+    foreach ($event in $was.PSObject.Properties) {
+        $kept = @(@(Get-Prop $now $event.Name) | ForEach-Object { if ($null -ne $_) { ConvertTo-CompactJson $_ } })
+        foreach ($group in @($event.Value)) {
+            if ((ConvertTo-CompactJson $group) -notin $kept) { "a $($event.Name) hook entry of the user's is gone" }
+        }
+    }
+}
+
+# Every command entry of the file, in order: Event, GroupIndex, Matcher, Command, Args (or $null), Timeout.
+function Get-HookEntries {
+    param([Parameter(Mandatory)]$Settings)
+    $hooks = Get-Prop $Settings 'hooks'
+    if ($null -eq $hooks) { return }
+    foreach ($event in $hooks.PSObject.Properties) {
+        $groupIndex = -1
+        foreach ($group in @($event.Value)) {
+            $groupIndex++
+            foreach ($entry in @(Get-Prop $group 'hooks')) {
+                if ($null -eq $entry) { continue }
+                $arguments = Get-Prop $entry 'args'
+                # Assigned, not an if-expression: a one-element array would be unrolled to a string.
+                $argumentList = $null
+                if ($null -ne $arguments) { $argumentList = [string[]]@($arguments) }
+                [pscustomobject]@{
+                    Event      = $event.Name
+                    GroupIndex = $groupIndex
+                    Matcher    = Get-Prop $group 'matcher'
+                    Command    = [string](Get-Prop $entry 'command')
+                    Args       = $argumentList
+                    Timeout    = Get-Prop $entry 'timeout'
+                }
+            }
+        }
+    }
+}
+
+# Whether a command is ours: a string "<exe> <verb>" (the exe unquoted, / separators, maybe the
+# 8.3 form, so it is resolved) or the exec form. Returns the form ('string' | 'exec') or $null.
+function Get-OwnForm {
+    param(
+        [Parameter(Mandatory)]$Entry, [Parameter(Mandatory)][string]$ExpectedExe,
+        [string]$Verb = 'hook', [scriptblock]$Resolve = { param($p) $p }
+    )
+    $same = { param($a, $b) (ConvertTo-ComparablePath $a) -eq (ConvertTo-ComparablePath $b) }
+    if ($null -ne $Entry.Args) {
+        if ((& $same (& $Resolve $Entry.Command) $ExpectedExe) -and $Entry.Args.Count -ge 1 -and $Entry.Args[0] -eq $Verb) { return 'exec' }
+        return $null
+    }
+    if ($Entry.Command -match '^(?<path>\S+) (?<verb>hook|statusline)$' -and $Matches['verb'] -eq $Verb) {
+        if (& $same (& $Resolve $Matches['path']) $ExpectedExe) { return 'string' }
+    }
+    $null
+}
+
+# The events every build registers (HS§3.5's baseline; newer Claude Code versions add more).
+$script:BaselineHookEvents = @('UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PermissionRequest', 'Notification', 'Stop', 'SubagentStop', 'SessionStart', 'SessionEnd', 'PreCompact')
+
+# Our hook entries in one folder's settings.json, as the installer must leave them.
+function Test-InstalledHooks {
+    param(
+        [Parameter(Mandatory)]$Settings, [Parameter(Mandatory)][string]$ExpectedExe,
+        [Parameter(Mandatory)][bool]$ExecFormAllowed, [scriptblock]$Resolve = { param($p) $p }
+    )
+    $own = @(Get-HookEntries -Settings $Settings | ForEach-Object {
+            $form = Get-OwnForm -Entry $_ -ExpectedExe $ExpectedExe -Resolve $Resolve
+            if ($form) { [pscustomobject]@{ Entry = $_; Form = $form } }
+        })
+    foreach ($event in $script:BaselineHookEvents) {
+        if (-not @($own | Where-Object { $_.Entry.Event -eq $event }).Count) { "no hook entry of ours under $event" }
+    }
+    $commands = @($own | ForEach-Object { "$($_.Entry.Command) $($_.Entry.Args -join ' ')" } | Select-Object -Unique)
+    if ($commands.Count -gt 1) { "our entries do not share one command: $($commands -join ' | ')" }
+    foreach ($item in $own) {
+        if ($item.Form -eq 'exec' -and -not $ExecFormAllowed) { "$($item.Entry.Event): the exec form was written, which the facts file does not allow" }
+        if ($item.Form -eq 'exec' -and ($item.Entry.Args -join ' ') -cne 'hook --exec') { "$($item.Entry.Event): exec form args are '$($item.Entry.Args -join ' ')', expected 'hook --exec'" }
+    }
+    foreach ($item in @($own | Where-Object { $_.Entry.Event -eq 'PermissionRequest' })) {
+        if ($item.Entry.Timeout -ne 86400) { "PermissionRequest timeout is '$($item.Entry.Timeout)', expected 86400" }
+    }
+}
+
+# --- helpers: the facts file ---------------------------------------------------------------------------------------
+
+function ConvertTo-Version { param([string]$Text) $v = $null; if ($Text -and [version]::TryParse($Text, [ref]$v)) { $v } else { $null } }
+
+# The first Claude Code version the exec form is known to work from, as the engine derives it
+# from the committed facts file (DESIGN-WIN §6.2): an explicit exec_form_min unless a listed
+# version at or above it says the form does not run; else the first checked version after the
+# last one not known to run it, but only when the newest checked version does.
+function Get-ExecFormMin {
+    param([Parameter(Mandatory)]$Facts)
+    $listed = @(@(Get-Prop $Facts 'versions') | ForEach-Object {
+            $v = ConvertTo-Version ([string](Get-Prop $_ 'version'))
+            if ($v) { [pscustomobject]@{ Version = $v; Exec = Get-Prop $_ 'hook_exec_form' } }
+        } | Sort-Object Version)
+    $explicit = ConvertTo-Version ([string](Get-Prop $Facts 'exec_form_min'))
+    if ($explicit) {
+        $contradicted = @($listed | Where-Object { $_.Version -ge $explicit -and $_.Exec -eq $false })
+        if (-not $contradicted.Count) { return $explicit }
+    }
+    if (-not $listed.Count -or $listed[-1].Exec -ne $true) { return $null }
+    $lastNo = -1
+    for ($i = 0; $i -lt $listed.Count; $i++) { if ($listed[$i].Exec -ne $true) { $lastNo = $i } }
+    $listed[$lastNo + 1].Version
+}
+
+function Test-ExecFormAllowed {
+    param([Parameter(Mandatory)]$Facts, [Parameter(Mandatory)][string]$ClaudeVersion)
+    $min = Get-ExecFormMin -Facts $Facts
+    $have = ConvertTo-Version $ClaudeVersion
+    [bool]($min -and $have -and $have -ge $min)
+}
+
+# --- helpers: the permission answers ------------------------------------------------------------------------------
+
+# One row per answer the panel can give. Stdin is what Claude Code writes (the proto crate's
+# fixtures), Expected the exact bytes the hook must print for that answer: the .stdout files of
+# agentnotch-proto, which the Mac hook script made. Never taken from the app under test.
+# Click is the data-an-arg of the button; Chat = the answer is given from the chat screen.
+function Get-PermissionCases {
+    @(
+        @{ Name = 'allow';         Stdin = 'permission_request_bash';     Expected = 'allow';        Click = 'allow';    Chat = $false }
+        @{ Name = 'always allow';  Stdin = 'permission_request_bash';     Expected = 'always';       Click = 'always';   Chat = $false }
+        @{ Name = 'deny';          Stdin = 'permission_request_bash';     Expected = 'deny';         Click = 'deny';     Chat = $false }
+        @{ Name = 'question chip'; Stdin = 'permission_request_question'; Expected = 'question';     Click = 'option:0'; Chat = $false }
+        @{ Name = 'approve plan';  Stdin = 'permission_request_plan';     Expected = 'plan';         Click = 'approve';  Chat = $false }
+        @{ Name = 'keep planning'; Stdin = 'permission_request_plan';     Expected = 'keep_planning'; Click = 'keep';     Chat = $true }
+    )
+}
+
+function Get-ProtoFixtureDir {
+    Join-Path (Split-Path -Parent $PSScriptRoot) 'agentnotch-proto\tests\fixtures'
+}
+
+function Get-ExpectedPermissionBytes {
+    param([Parameter(Mandatory)][string]$Name, [string]$Fixtures = (Get-ProtoFixtureDir))
+    [IO.File]::ReadAllBytes((Join-Path $Fixtures "v1-responses\$Name.stdout"))
+}
+
+# A Claude Code stdin from a proto fixture, with the identity of the smoke session: only the
+# session, transcript and folder change, so the tool input (which the hook echoes back) is the
+# fixture's own.
+function New-HookStdin {
+    param(
+        [Parameter(Mandatory)][string]$Fixture, [Parameter(Mandatory)][string]$SessionId,
+        [Parameter(Mandatory)][string]$Transcript, [Parameter(Mandatory)][string]$Cwd,
+        [string]$EventName = '', [string]$ToolUseId = '', [string]$Fixtures = (Get-ProtoFixtureDir)
+    )
+    $stdin = Get-Content -LiteralPath (Join-Path $Fixtures "stdin\$Fixture.json") -Raw | ConvertFrom-Json -Depth 50
+    $stdin.session_id = $SessionId
+    $stdin.transcript_path = $Transcript
+    $stdin.cwd = $Cwd
+    if ($EventName) {
+        $stdin.hook_event_name = $EventName
+        if ($EventName -eq 'PreToolUse') {
+            # A PreToolUse has the request's tool and input, a tool_use_id, and no suggestions.
+            $stdin.PSObject.Properties.Remove('permission_suggestions')
+            $stdin | Add-Member -NotePropertyName tool_use_id -NotePropertyValue $ToolUseId -Force
+        }
+    }
+    ConvertTo-Json $stdin -Depth 50 -Compress
+}
+
+# The wrapped status line's output is the original command's; the shell may change its line end.
+function Test-StatusLineOutput {
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Stdout, [Parameter(Mandatory)][string]$Expected)
+    if ($Stdout.TrimEnd([char[]]@("`r", "`n", ' ')) -cne $Expected) { "printed '$($Stdout.TrimEnd())', expected '$Expected'" }
+}
+
+# What turning the hooks off may leave in P beside the original files: our backups, nothing else.
+function Test-OnlyBackupsAdded {
+    param([Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Differences)
+    foreach ($difference in $Differences) {
+        if ($difference -notmatch '^added: \.claude[^/]*/settings\.json\.agentnotch[^/]*\.bak$') { "unexpected: $difference" }
+    }
+}
+
+# --- phase 5: before consent -----------------------------------------------------------------------------------
+
+$script:CdpPort = 0
+$script:LiveApp = $null
+
+function Stop-LiveApp {
+    if ($script:LiveApp) { Stop-OwnProcess -Process $script:LiveApp; $script:LiveApp = $null }
+}
+
+# The real app's run.log (a copy goes into the artifacts so a red run can be read).
+function Get-LiveRunLogPath { Find-DataFile -Roots $script:DataRoots -Folder 'Agent Notch' -File 'run.log' }
+
+function Save-LiveRunLog {
+    $path = Get-LiveRunLogPath
+    if ($path) { Copy-Item -LiteralPath $path -Destination (Join-Path $script:ArtifactsDir 'live-run.log') -Force -ErrorAction SilentlyContinue }
+}
+
+function Get-LiveRunLogText {
+    $path = Get-LiveRunLogPath
+    if ($path) { [string](Get-Content -LiteralPath $path -Raw) } else { '' }
+}
+
+function Invoke-BeforeConsentPhase {
+    foreach ($root in $script:DataRoots) { Remove-Item -LiteralPath (Join-Path (Join-Path $root 'Agent Notch') 'run.log') -Force -ErrorAction SilentlyContinue }
+    Remove-Item -LiteralPath $script:FakeClaudeLog -Force -ErrorAction SilentlyContinue
+    $script:CdpPort = Get-FreeTcpPort
+    $environment = Merge-Environment @((Get-AppEnvironment), $script:ScrubSentinels, @{ WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$($script:CdpPort)" })
+    $script:LiveApp = Register-OwnProcess (Start-AppProcess -Exe $script:AppExe -Environment $environment)
+    Write-PhaseLog "the real app is running as process $($script:LiveApp.Id), DevTools on port $($script:CdpPort)"
+    Start-Sleep -Seconds 30
+    if ($script:LiveApp.HasExited) { throw "the app exited with $($script:LiveApp.ExitCode) within 30 s" }
+
+    $expect = [ordered]@{ transport = 'listening'; accounts = '2'; hook_consent = 'unasked'; readings = '2' }
+    $status = Wait-ControlStatus -Seconds 60 -What 'control status before consent' -Check ({ param($s) Test-ControlStatus -Status $s -Expect $expect }.GetNewClosure())
+    Write-PhaseLog ("control status: " + (($status.GetEnumerator() | ForEach-Object { "$($_.Key): $($_.Value)" }) -join ', '))
+
+    $changed = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P) -Exclude 'AppData/*')
+    if ($changed) { throw "the app wrote to P before any consent: $($changed -join ', ')" }
+
+    $lines = if (Test-Path -LiteralPath $script:FakeClaudeLog) { @(Get-Content -LiteralPath $script:FakeClaudeLog) } else { @() }
+    $support = Find-SupportDir -Profile $script:P
+    if (-not $support) { throw "no support folder (com.rivantmedia.agentnotch\Claude) under the local app data or P's" }
+    Write-PhaseLog "support folder: $support; fake claude was run $($lines.Count) time(s)"
+    $probes = @($lines | Where-Object { $_ -match '--input-format' })
+    if (-not $probes.Count) { throw 'the fake claude log shows no usage probe' }
+    $logProblems = @(Test-FakeClaudeLog -Lines $lines -ProbeDir (Join-Path $support 'usage-probe'))
+    if ($logProblems) { throw "the fake claude log: $($logProblems -join '; ')" }
+
+    $aclProblems = @(Get-AclProblems -Path $support)
+    if ($aclProblems) { throw "the support folder: $($aclProblems -join '; ')" }
+    $cloud = @(Get-ChildItem -LiteralPath $support -Force -Filter 'cloud-*' -ErrorAction SilentlyContinue)
+    if ($cloud) { throw "the support folder holds $($cloud.Name -join ', ') before sign-in" }
+    if ($null -ne (Get-RunValue)) { throw 'a Run value exists although autostart was never turned on' }
+
+    $runLog = Get-LiveRunLogText
+    Save-LiveRunLog
+    if ($runLog -notmatch '(?m)an: hub started(?! \(sealed\))') { throw 'run.log has no "an: hub started"' }
+    if ($runLog -notmatch '(?m)an: pipe listening') { throw 'run.log has no "an: pipe listening"' }
+}
+
+# --- phase 6: the deep link with nothing pending ------------------------------------------------------------
+
+function Invoke-DeepLinkPhase {
+    if (-not $script:LiveApp -or $script:LiveApp.HasExited) { throw 'the real app is not running' }
+    # The shell starts the registered handler: a second copy that hands the link to the first.
+    Start-Process 'agentnotch://auth-callback?code=smoke'
+    Wait-Until { (Get-LiveRunLogText) -match 'an: deep link ignored \(no sign-in pending\)' } 5 'run.log to say "an: deep link ignored (no sign-in pending)"'
+    Save-LiveRunLog
+    # The second copy must be gone again: one agentnotch.exe, ours.
+    Wait-Until { @(Get-Process -Name agentnotch -ErrorAction SilentlyContinue).Count -le 1 } 10 'the second copy to exit'
+    $running = @(Get-Process -Name agentnotch -ErrorAction SilentlyContinue)
+    if ($running.Count -ne 1 -or $running[0].Id -ne $script:LiveApp.Id) { throw "expected only our agentnotch.exe ($($script:LiveApp.Id)), found: $($running.Id -join ', ')" }
+}
+
+# --- phase 7: Turn on ------------------------------------------------------------------------------------------
+
+$script:RunFolders = @('.claude', '.claude-work')
+
+function Get-Folder { param([Parameter(Mandatory)][string]$Name) Join-Path $script:P $Name }
+
+function Get-ExpectedHookExe { param([Parameter(Mandatory)][string]$Name) Join-Path (Join-Path (Get-Folder $Name) 'hooks') 'agentnotch-hook.exe' }
+
+# A hook command's path as Windows spells it long (an 8.3 path is resolved; on a volume without
+# 8.3 names the path comes back as it was).
+function Resolve-LongPath {
+    param([Parameter(Mandatory)][string]$Path)
+    Add-WindowsHelpers
+    $native = $Path.Replace('/', '\')
+    $long = [AgentNotch.Windows]::LongPath($native)
+    if ($long) { $long } else { $native }
+}
+
+function Get-FactsPath { Join-Path (Split-Path -Parent $PSScriptRoot) 'agentnotch-engine\tests\fixtures\claude-code-facts.json' }
+
+function Get-ExecFormAllowedHere {
+    $path = Get-FactsPath
+    if (-not (Test-Path -LiteralPath $path)) { return $false }
+    $facts = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -Depth 50
+    # The fake claude says 2.1.282 and no other Claude Code is on this profile.
+    Test-ExecFormAllowed -Facts $facts -ClaudeVersion '2.1.282'
+}
+
+# What the installer must have done to one run folder; returns the problems.
+function Get-InstalledFolderProblems {
+    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][bool]$StatusLineWrapped, [Parameter(Mandatory)][bool]$ExecFormAllowed)
+    $folder = Get-Folder $Name
+    $path = Join-Path $folder 'settings.json'
+    $problems = [Collections.Generic.List[string]]::new()
+    $add = { param($lines) foreach ($l in @($lines)) { if ($l) { $problems.Add("${Name}: $l") } } }
+    $bytes = [IO.File]::ReadAllBytes($path)
+    & $add (Test-SettingsStyle -Bytes $bytes)
+    $now = ConvertFrom-SettingsBytes -Bytes $bytes
+    $originalBytes = [IO.File]::ReadAllBytes((Join-Path $script:OriginalsDir "$Name.settings.json"))
+    $before = ConvertFrom-SettingsBytes -Bytes $originalBytes
+    $edited = if ($StatusLineWrapped) { @('hooks', 'statusLine') } else { @('hooks') }
+    & $add (Test-OtherKeysUnchanged -Before $before -After $now -Edited $edited)
+    & $add (Test-ForeignHooksKept -Before $before -After $now)
+    $exe = Get-ExpectedHookExe $Name
+    & $add (Test-InstalledHooks -Settings $now -ExpectedExe $exe -ExecFormAllowed $ExecFormAllowed -Resolve { param($p) Resolve-LongPath -Path $p })
+    if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { $problems.Add("${Name}: $exe does not exist") }
+    elseif ((Get-FileSha256 $exe) -ne (Get-FileSha256 $script:HookExe)) { $problems.Add("${Name}: the hook copy is not a copy of the installed agentnotch-hook.exe") }
+
+    $backups = @(Get-ChildItem -LiteralPath $folder -Force -Filter 'settings.json.agentnotch*.bak' -ErrorAction SilentlyContinue)
+    if (-not $backups) { $problems.Add("${Name}: no settings.json backup beside the file") }
+    foreach ($backup in $backups) { & $add (@(Get-AclProblems -Path $backup.FullName) | ForEach-Object { "$($backup.Name): $_" }) }
+    $original = $backups | Where-Object { $_.Name -eq 'settings.json.agentnotch.original.bak' }
+    if (-not $original) { $problems.Add("${Name}: no settings.json.agentnotch.original.bak") }
+    elseif ((Get-FileSha256 $original.FullName) -ne (Get-FileSha256 (Join-Path $script:OriginalsDir "$Name.settings.json"))) { $problems.Add("${Name}: the original backup is not the original file") }
+
+    $previous = Join-Path (Join-Path $folder 'hooks') 'agentnotch-statusline.previous.json'
+    if ($StatusLineWrapped) {
+        $statusLine = Get-Prop $now 'statusLine'
+        $entry = [pscustomobject]@{ Command = [string](Get-Prop $statusLine 'command'); Args = $null }
+        if ((Get-Prop $statusLine 'type') -ne 'command') { $problems.Add("${Name}: the status line is not a command") }
+        if (-not (Get-OwnForm -Entry $entry -ExpectedExe $exe -Verb 'statusline' -Resolve { param($p) Resolve-LongPath -Path $p })) {
+            $problems.Add("${Name}: the status line is not our wrapper: '$($entry.Command)'")
+        }
+        if (-not (Test-Path -LiteralPath $previous -PathType Leaf)) { $problems.Add("${Name}: no previous.json") }
+        elseif ((Get-Content -LiteralPath $previous -Raw) -notmatch 'echo smoke-status') { $problems.Add("${Name}: previous.json does not hold the original status line") }
+    } else {
+        if ((ConvertTo-CompactJson (Get-Prop $now 'statusLine')) -cne (ConvertTo-CompactJson (Get-Prop $before 'statusLine'))) { $problems.Add("${Name}: the status line was changed") }
+        if (Test-Path -LiteralPath $previous) { $problems.Add("${Name}: a previous.json exists for a status line that was left alone") }
+    }
+    [string[]]$problems.ToArray()
+}
+
+# The files of P as phase 2 made them, kept for byte comparisons: .claude\settings.json and
+# .claude-work\settings.json are copied aside before anything can change them.
+$script:OriginalsDir = $null
+
+function Save-OriginalSettings {
+    if (-not $script:OriginalsDir) { $script:OriginalsDir = Join-Path $script:Temp 'originals' }
+    New-Item -ItemType Directory -Force -Path $script:OriginalsDir | Out-Null
+    foreach ($name in $script:RunFolders) {
+        Copy-Item -LiteralPath (Join-Path (Get-Folder $name) 'settings.json') -Destination (Join-Path $script:OriginalsDir "$name.settings.json") -Force
+    }
+}
+
+function Invoke-TurnOnPhase {
+    if (-not $script:LiveApp -or $script:LiveApp.HasExited) { throw 'the real app is not running' }
+    Save-OriginalSettings
+    $execAllowed = Get-ExecFormAllowedHere
+    Write-PhaseLog "exec form allowed by the facts file: $execAllowed"
+    try {
+        Invoke-CdpInvoke -Page $script:Ui.NotchPage -Command $script:Ui.OpenSettings | Out-Null
+        Invoke-CdpClick -Page $script:Ui.SettingsPage -Selector $script:Ui.ConsentTurnOn
+        $originals = @{}
+        foreach ($name in $script:RunFolders) { $originals[$name] = Get-FileSha256 (Join-Path $script:OriginalsDir "$name.settings.json") }
+        Wait-Until {
+            $done = $true
+            foreach ($name in $script:RunFolders) {
+                $file = Join-Path (Get-Folder $name) 'settings.json'
+                if ((Get-FileSha256 $file) -eq $originals[$name] -or -not (Test-Path (Get-ExpectedHookExe $name))) { $done = $false }
+            }
+            $done -and (Test-Path -LiteralPath (Join-Path (Join-Path (Get-Folder '.claude') 'hooks') 'agentnotch-statusline.previous.json'))
+        } 10 'both run folders to hold our entries'
+        Start-Sleep -Milliseconds 700   # a pass writes its files one after the other; let it finish
+
+        $problems = [Collections.Generic.List[string]]::new()
+        foreach ($line in (Get-InstalledFolderProblems -Name '.claude' -StatusLineWrapped $true -ExecFormAllowed $execAllowed)) { $problems.Add($line) }
+        foreach ($line in (Get-InstalledFolderProblems -Name '.claude-work' -StatusLineWrapped $false -ExecFormAllowed $execAllowed)) { $problems.Add($line) }
+        # Settings says why the status line of .claude-work was left alone.
+        $note = ConvertTo-JsString $script:Ui.StatusLineAlone
+        try { [void](Invoke-Cdp -Arguments @('wait', $script:Ui.SettingsPage, "document.body.innerText.includes($note)", '10000')) }
+        catch { $problems.Add("Settings does not show '$($script:Ui.StatusLineAlone)'") }
+        if ($problems.Count) { throw ("after Turn on:`n  " + ($problems -join "`n  ")) }
+        $form = @(Get-HookEntries -Settings (Read-Settings (Join-Path (Get-Folder '.claude') 'settings.json')) | Where-Object { $_.Event -eq 'PreToolUse' -and $null -ne (Get-OwnForm -Entry $_ -ExpectedExe (Get-ExpectedHookExe '.claude') -Resolve { param($p) Resolve-LongPath -Path $p }) })
+        Write-PhaseLog "installed in both folders, written as: $($form[0].Command) $($form[0].Args -join ' ')"
+    } finally {
+        Save-LiveRunLog
+    }
+}
+
+# --- phase 8: every entry as written, then every answer ---------------------------------------------------------------
+
+$script:SmokeSessionId = '5d1e0a7b-3c21-4f7e-9a0b-1c2d3e4f5a6b'
+
+# A process that lives until it is stopped, standing in for Claude Code (the hooks name it as
+# CLAUDE_PID). Started and stopped by handle.
+function Start-DummyClaude {
+    $shell = (Get-Command powershell -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    $process = Start-Process -FilePath $shell -ArgumentList '-NoProfile', '-Command', 'Start-Sleep 600' -WindowStyle Hidden -PassThru
+    Register-OwnProcess $process
+}
+
+function Get-HookEnvironmentArguments {
+    param([Parameter(Mandatory)][int]$ClaudePid)
+    @('--env', "CLAUDE_PID=$ClaudePid", '--env', "CLAUDE_CONFIG_DIR=$(Get-Folder '.claude')", '--env', 'CLAUDE_CODE_ENTRYPOINT=cli')
+}
+
+# run-hook.mjs's runs, parsed. A tool that fails to run is an error here; what the hooks did is
+# for the caller to judge.
+function ConvertFrom-HookRuns {
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
+    $lines = @($Text -split "`r?`n" | Where-Object { $_.Trim() })
+    if (-not $lines.Count) { throw 'run-hook.mjs printed nothing' }
+    $answer = $lines[-1] | ConvertFrom-Json -AsHashtable
+    if ($answer.ContainsKey('error')) { throw "run-hook.mjs: $($answer['error'])" }
+    @($answer['runs'])
+}
+
+function Start-HookRun {
+    param([Parameter(Mandatory)][string[]]$Arguments)
+    Start-NodeScript -Script (Join-Path $PSScriptRoot 'smoke\run-hook.mjs') -Arguments $Arguments
+}
+
+function Write-StdinFile {
+    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$Json)
+    $path = Join-Path $script:Temp "smoke-$Name.json"
+    [IO.File]::WriteAllText($path, $Json, [Text.UTF8Encoding]::new($false))
+    $path
+}
+
+function Get-SmokeTranscript { Join-Path (Get-Folder '.claude') "projects\C--smoke-work-app\$($script:SmokeSessionId).jsonl" }
+
+# The shells a string-form entry runs under; the exec form has none to choose.
+function Get-ShellsFor { param([Parameter(Mandatory)]$Entry) if ($null -ne $Entry.Args) { @('both') } else { @('bash', 'powershell') } }
+
+function Invoke-EntriesAsWrittenPhase {
+    if (-not $script:LiveApp -or $script:LiveApp.HasExited) { throw 'the real app is not running' }
+    $settingsPath = Join-Path (Get-Folder '.claude') 'settings.json'
+    $settings = Read-Settings $settingsPath
+    $dummy = Start-DummyClaude
+    try {
+        $environment = Get-HookEnvironmentArguments -ClaudePid $dummy.Id
+        Write-PhaseLog "stand-in for Claude Code: process $($dummy.Id)"
+
+        # 1. Every PreToolUse entry of the file as written (the foreign one too), in both shells.
+        $before = Get-ControlStatus
+        $pre = Write-StdinFile -Name 'pretooluse' -Json (New-HookStdin -Fixture 'permission_request_bash' -SessionId $script:SmokeSessionId -Transcript (Get-SmokeTranscript) -Cwd 'C:\smoke\work-app' -EventName 'PreToolUse' -ToolUseId 'toolu_smoke_pre')
+        $entries = @(Get-HookEntries -Settings $settings | Where-Object { $_.Event -eq 'PreToolUse' })
+        if (-not $entries.Count) { throw 'P\.claude\settings.json has no PreToolUse entry' }
+        $ownPre = @(0..($entries.Count - 1) | Where-Object { Get-OwnForm -Entry $entries[$_] -ExpectedExe (Get-ExpectedHookExe '.claude') -Resolve { param($p) Resolve-LongPath -Path $p } })
+        if (-not $ownPre.Count) { throw 'none of the PreToolUse entries is ours' }
+        $attempt = 0
+        $slow = $null
+        while ($true) {
+            $attempt++
+            $runs = ConvertFrom-HookRuns -Text (Wait-NodeScript -Run (Start-HookRun -Arguments (@('--settings', $settingsPath, '--event', 'PreToolUse', '--stdin', $pre, '--timeout', '15000') + $environment))).Stdout
+            $slow = $null
+            foreach ($run in $runs) {
+                if ($run.ContainsKey('skipped')) { throw "a shell is missing: $($run['reason'])" }
+                $label = "$($run['source']) [$($run['shell'])] $($run['command'])"
+                if ($run['timedOut'] -or $run['exit'] -ne 0) { throw "$label exited with $($run['exit'])$(if ($run['timedOut']) { ' (timed out)' }): $($run['stderr'])" }
+                if ($run['ms'] -ge 2000 -and -not $slow) { $slow = "$label took $($run['ms']) ms" }
+                Write-PhaseLog "  $label : exit 0 in $($run['ms']) ms"
+            }
+            # A first start on a busy runner can be slow (the antivirus scans a new file); a hook that is slow every time fails.
+            if (-not $slow -or $attempt -ge 3) { break }
+        }
+        if ($slow) { throw $slow }
+        Wait-ControlStatus -Seconds 10 -What 'control status to count the session' -Check ({ param($s) if ([int]$s['sessions'] -le [int]$before['sessions']) { "sessions is $($s['sessions'])" } }.GetNewClosure()) | Out-Null
+
+        # 2. One PermissionRequest per answer, answered in the panel.
+        Invoke-CdpCall -Page $script:Ui.NotchPage -Method 'panel_open' -Arguments @{ route = 'sessions'; reason = 'ring_click' } | Out-Null
+        $permissionEntries = @(Get-HookEntries -Settings $settings | Where-Object { $_.Event -eq 'PermissionRequest' })
+        $ownPermission = @(0..([math]::Max($permissionEntries.Count, 1) - 1) | Where-Object { $_ -lt $permissionEntries.Count -and (Get-OwnForm -Entry $permissionEntries[$_] -ExpectedExe (Get-ExpectedHookExe '.claude') -Resolve { param($p) Resolve-LongPath -Path $p }) })
+        if (-not $ownPermission.Count) { throw 'P\.claude\settings.json has no PermissionRequest entry of ours' }
+        $permissionIndex = $ownPermission[0]
+        $cases = @(Get-PermissionCases)
+        for ($i = 0; $i -lt $cases.Count; $i++) {
+            $case = $cases[$i]
+            $shells = @(Get-ShellsFor -Entry $permissionEntries[$permissionIndex])
+            $shell = $shells[$i % $shells.Count]
+            $toolUseId = "toolu_smoke_$($i + 1)"
+            $preCase = Write-StdinFile -Name "pre-$($i + 1)" -Json (New-HookStdin -Fixture $case.Stdin -SessionId $script:SmokeSessionId -Transcript (Get-SmokeTranscript) -Cwd 'C:\smoke\work-app' -EventName 'PreToolUse' -ToolUseId $toolUseId)
+            $request = Write-StdinFile -Name "request-$($i + 1)" -Json (New-HookStdin -Fixture $case.Stdin -SessionId $script:SmokeSessionId -Transcript (Get-SmokeTranscript) -Cwd 'C:\smoke\work-app')
+            $first = ConvertFrom-HookRuns -Text (Wait-NodeScript -Run (Start-HookRun -Arguments (@('--settings', $settingsPath, '--event', 'PreToolUse', '--index', [string]$ownPre[0], '--shell', $shell, '--stdin', $preCase, '--timeout', '15000') + $environment))).Stdout
+            foreach ($run in $first) { if ($run['exit'] -ne 0) { throw "the PreToolUse before '$($case.Name)' exited with $($run['exit'])" } }
+
+            $hook = Start-HookRun -Arguments (@('--settings', $settingsPath, '--event', 'PermissionRequest', '--index', [string]$permissionIndex, '--shell', $shell, '--stdin', $request, '--timeout', '90000') + $environment)
+            try {
+                Invoke-CdpCall -Page $script:Ui.NotchPage -Method 'panel_open' -Arguments @{ route = 'sessions'; reason = 'ring_click' } | Out-Null
+                if ($case.Chat) {
+                    Invoke-CdpClick -Page $script:Ui.PanelPage -Selector ($script:Ui.OpenChat -f $script:SmokeSessionId)
+                }
+                Invoke-CdpAnswerClick -Page $script:Ui.PanelPage -Selector ($script:Ui.Answer -f $case.Click, $script:SmokeSessionId)
+                $result = Wait-NodeScript -Run $hook -TimeoutSeconds 30
+            } catch {
+                Stop-OwnProcess -Process $hook.Process
+                throw "answer '$($case.Name)' ($shell): $($_.Exception.Message)"
+            }
+            $run = @(ConvertFrom-HookRuns -Text $result.Stdout)[0]
+            if ($run['timedOut'] -or $run['exit'] -ne 0) { throw "answer '$($case.Name)': the hook exited with $($run['exit'])" }
+            $got = [Convert]::FromBase64String([string]$run['stdout_b64'])
+            $want = Get-ExpectedPermissionBytes -Name $case.Expected
+            if ([Convert]::ToBase64String($got) -cne [Convert]::ToBase64String($want)) {
+                throw "answer '$($case.Name)' ($shell): the hook printed`n  $([Text.Encoding]::UTF8.GetString($got))`nexpected`n  $([Text.Encoding]::UTF8.GetString($want))"
+            }
+            Write-PhaseLog "  answer '$($case.Name)' ($shell): printed the expected $($want.Length) bytes, exit 0"
+            if ($case.Chat) { try { Invoke-CdpClick -Page $script:Ui.PanelPage -Selector $script:Ui.Back -WaitSeconds 3 } catch { <# the chat closes by itself after an answer #> } }
+        }
+
+        # 3. The wrapped status line, as written, with a status JSON.
+        $readings = [int](Get-ControlStatus)['readings']
+        $statusJson = Write-StdinFile -Name 'status' -Json (New-HookStdin -Fixture 'status_line' -SessionId $script:SmokeSessionId -Transcript (Get-SmokeTranscript) -Cwd 'C:\smoke\work-app')
+        $statusRuns = ConvertFrom-HookRuns -Text (Wait-NodeScript -Run (Start-HookRun -Arguments (@('--settings', $settingsPath, '--status-line', '--stdin', $statusJson, '--timeout', '20000') + $environment))).Stdout
+        foreach ($run in $statusRuns) {
+            if ($run.ContainsKey('skipped')) { throw "a shell is missing: $($run['reason'])" }
+            if ($run['exit'] -ne 0) { throw "the status line [$($run['shell'])] exited with $($run['exit'])" }
+            $bad = @(Test-StatusLineOutput -Stdout ([string]$run['stdout']) -Expected 'smoke-status')
+            if ($bad) { throw "the status line [$($run['shell'])] $($bad -join '; ')" }
+            Write-PhaseLog "  status line [$($run['shell'])]: printed the original command's output"
+        }
+        Wait-ControlStatus -Seconds 10 -What 'the readings to stay or grow' -Check ({ param($s) if ([int]$s['readings'] -lt $readings) { "readings fell from $readings to $($s['readings'])" } }.GetNewClosure()) | Out-Null
+    } finally {
+        Stop-OwnProcess -Process $dummy
+        Save-LiveRunLog
+    }
+}
+
+# --- phase 9: Turn off -----------------------------------------------------------------------------------------------
+
+function Invoke-TurnOffPhase {
+    if (-not $script:LiveApp -or $script:LiveApp.HasExited) { throw 'the real app is not running' }
+    try {
+        Invoke-CdpInvoke -Page $script:Ui.NotchPage -Command $script:Ui.OpenSettings | Out-Null
+        Invoke-CdpClick -Page $script:Ui.SettingsPage -Selector $script:Ui.HooksSwitchOn
+        Wait-Until {
+            $same = $true
+            foreach ($name in $script:RunFolders) {
+                if ((Get-FileSha256 (Join-Path (Get-Folder $name) 'settings.json')) -ne $script:ProfileHashes["$name/settings.json"]) { $same = $false }
+            }
+            $same
+        } 15 'every settings.json to be byte-identical to the original'
+        $problems = [Collections.Generic.List[string]]::new()
+        foreach ($name in $script:RunFolders) {
+            $hooks = Join-Path (Get-Folder $name) 'hooks'
+            $left = @(Get-ChildItem -LiteralPath $hooks -Force -Filter 'agentnotch*' -ErrorAction SilentlyContinue)
+            if ($left) { $problems.Add("$name\hooks still holds $($left.Name -join ', ')") }
+        }
+        $differences = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P) -Exclude 'AppData/*')
+        foreach ($line in (Test-OnlyBackupsAdded -Differences $differences)) { $problems.Add($line) }
+        foreach ($line in $differences) { Write-PhaseLog "  P: $line" }
+        if ($problems.Count) { throw ("after Turn off:`n  " + ($problems -join "`n  ")) }
+    } finally {
+        Save-LiveRunLog
+    }
+}
+
 # --- phase 13: a hook with no app --------------------------------------------------------------------------
 
 # One run of the hook the way Claude Code starts it: piped stdin, no window. Seconds is the
@@ -973,7 +1830,7 @@ function Invoke-UninstallPhase {
 # --- the table of phases ------------------------------------------------------------------------------------
 
 # Rows run in order. Gate names a flag of gates.json: while it is closed the phase is reported
-# and not run. Phases 5-12 of the design are added here, between 4 and 13.
+# and not run. Phases 10-12 of the design are added here, between 9 and 13.
 function Get-PhaseTable {
     param($Gates = $null)
     $rows = @(
@@ -983,6 +1840,11 @@ function Get-PhaseTable {
         @{ Number = '3';  Name = 'doctor';                              Body = { Invoke-DoctorPhase } }
         @{ Number = '3b'; Name = 'sealed launch';                       Body = { Invoke-SealedLaunchPhase } }
         @{ Number = '4';  Name = 'sealed self-test and snapshots';      Gate = 'selftest'; Body = { Invoke-SelfTestPhase } }
+        @{ Number = '5';  Name = 'before consent';                      Gate = 'engine'; Body = { Invoke-BeforeConsentPhase } }
+        @{ Number = '6';  Name = 'deep link with nothing pending';      Gate = 'engine'; Body = { Invoke-DeepLinkPhase } }
+        @{ Number = '7';  Name = 'Turn on';                             Gate = 'engine'; Body = { Invoke-TurnOnPhase } }
+        @{ Number = '8';  Name = 'every entry as written, every answer'; Gate = 'engine'; Body = { Invoke-EntriesAsWrittenPhase } }
+        @{ Number = '9';  Name = 'Turn off';                            Gate = 'engine'; Body = { Invoke-TurnOffPhase } }
         @{ Number = '13'; Name = 'the hook fails open';                 Body = { Invoke-FailOpenPhase } }
         @{ Number = '14'; Name = 'autostart on and off';                Gate = 'glue'; Body = { Invoke-AutostartPhase } }
         @{ Number = '15'; Name = 'uninstall with /REMOVEHOOKS';         Body = { Invoke-UninstallPhase } }
