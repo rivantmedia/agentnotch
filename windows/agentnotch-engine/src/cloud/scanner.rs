@@ -445,7 +445,8 @@ fn non_negative(value: Option<&Value>) -> i64 {
     pricing::integer(value).unwrap_or(0).max(0)
 }
 
-fn seconds_of(nanoseconds: i128) -> f64 {
+/// File times as epoch seconds, the way the state keeps them.
+pub fn seconds_of(nanoseconds: i128) -> f64 {
     let whole = nanoseconds.div_euclid(1_000_000_000);
     let rest = nanoseconds.rem_euclid(1_000_000_000);
     whole as f64 + rest as f64 / 1e9

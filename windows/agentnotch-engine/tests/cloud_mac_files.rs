@@ -314,3 +314,69 @@ fn cloud_usage_outbox_json() {
         "cloud-usage-outbox.json",
     );
 }
+
+#[test]
+fn cloud_sync_state_json() {
+    use agentnotch_engine::cloud::pass::{CloudSyncMemory, Contents as SyncState, SYNC_STATE_FILE};
+    use agentnotch_engine::testkit::StdSecureFiles;
+    use std::sync::Arc;
+    let bytes = fixture("cloud-sync-state.json");
+    let state: SyncState = serde_json::from_slice(&bytes).expect("parses");
+    assert_eq!(state.version, SyncState::CURRENT_VERSION);
+    assert_eq!(
+        state.user_id.as_deref(),
+        Some("5b0c1d2e-3f40-4a5b-8c6d-7e8f9a0b1c2d")
+    );
+    assert_eq!(
+        state.website.as_deref(),
+        Some("https://agentnotch.example.com")
+    );
+    assert_eq!(
+        state.dashboard_url.as_deref(),
+        Some("https://agentnotch.example.com/dashboard")
+    );
+    assert_eq!(
+        state.last_sync_at.map(date::to_string).as_deref(),
+        Some("2026-09-25T10:00:30.250Z")
+    );
+    assert_eq!(state.sessions.len(), 3);
+    let personal = "8ca65b0df91fc776aded7f419f011fc1e99e2fd120e893692cfaf83f0fa994c0";
+    let work = "d8485d82cdbceb2582311953e97b1666022b76dcbb98ef283fece56b1b5b8874";
+    let ended = &state.sessions[&format!("0f9e8d7c-6b5a-4493-8271-605f4e3d2c1b|{work}")];
+    assert!(ended.ended);
+    assert_eq!(ended.version, Some(2));
+    assert_eq!(ended.transcript.unwrap().bytes, 48213);
+    assert_eq!(ended.transcript.unwrap().modified, 1790326800.5);
+    assert!(ended.summary.is_some());
+    // Built before there was a payload version, a transcript or a summary:
+    // all three absent, and they stay absent.
+    let old = &state.sessions[&format!("11111111-2222-4333-8444-555555555555|{personal}")];
+    assert!(!old.ended);
+    assert_eq!(old.version, None);
+    assert_eq!(old.transcript, None);
+    assert_eq!(old.summary, None);
+    let written = to_json(&state);
+    assert_equivalent(&bytes, &written, "cloud-sync-state.json");
+    // The Mac's encoder writes exactly this: compact, keys sorted, absent
+    // optionals left out.
+    assert_eq!(written, bytes);
+
+    // Through the memory: read from <support>, written back the same.
+    let support = tempfile::tempdir().unwrap();
+    let file = support.path().join(SYNC_STATE_FILE);
+    std::fs::write(&file, &bytes).unwrap();
+    let kept = CloudSyncMemory::in_support(support.path(), Arc::new(StdSecureFiles), true);
+    assert_eq!(kept.contents(), state);
+    assert_eq!(kept.sent_count(), 3);
+    kept.save_now();
+    assert_eq!(std::fs::read(&file).unwrap(), bytes);
+
+    // Another version starts over.
+    let other = String::from_utf8(bytes)
+        .unwrap()
+        .replace(r#""version":2,"website""#, r#""version":1,"website""#);
+    std::fs::write(&file, other).unwrap();
+    let fresh = CloudSyncMemory::in_support(support.path(), Arc::new(StdSecureFiles), true);
+    assert_eq!(fresh.sent_count(), 0);
+    assert_eq!(fresh.user_id(), None);
+}
