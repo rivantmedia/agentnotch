@@ -1,22 +1,130 @@
 /* Agent Notch's design tokens for the fork's pages (DESIGN-WIN §5.1, UI§1), keyed on upstream's
-   `data-theme` so the fork follows the appearance the user picked for the notch. */
+   `data-theme` so the fork follows the appearance the user picked for the notch. Dark is the
+   default the page holds until Rust says otherwise. Colour, type, metrics and motion all come
+   from here: panel.css, settings.css and the scripts read the variables and never a literal.
+
+   Base colours are the Mac's Codenotch palette (ClaudeControlTheme.codenotchDark). The derived
+   tokens are the base text colour at a fixed alpha, so in light mode they are the same alpha
+   over black instead of white (UI§1.2); each block spells them out so the two themes can be
+   read side by side. */
 :root {
+  /* base colours */
   --an-text: #ffffff;
   --an-text-2: #808080;
   --an-needs-you: #f2ff00;
   --an-review: #00ff88;
+  --an-working: #ffffff;
   --an-critical: #ff3f00;
   --an-track: rgba(255, 255, 255, .188);
+  --an-bar-track: rgba(255, 255, 255, .176);
+  --an-accent: #d97757;
   --an-card: #000000;
+
+  /* derived: the text colour at .30 / .09 / .16 / .05 / .08 / .24 / .95 */
+  --an-text-3: rgba(255, 255, 255, .30);
+  --an-fill: rgba(255, 255, 255, .09);
+  --an-fill-hover: rgba(255, 255, 255, .16);
+  --an-row-hover: rgba(255, 255, 255, .05);
+  --an-row-sel: rgba(255, 255, 255, .08);
+  --an-row-sel-stroke: rgba(255, 255, 255, .24);
+  --an-sep: var(--an-track);
+  --an-primary: rgba(255, 255, 255, .95);
+  --an-on-primary: #000000;
+  --an-accent-fill: rgba(217, 119, 87, .16);
+  /* the gear menu's own surface, one step off the card so it reads as a layer */
+  --an-menu: #1c1c1c;
+  --an-shadow: rgba(0, 0, 0, .4);
+
+  /* account hues (hue(forAccount: colorIndex % 8)), kept clear of the signal colours */
+  --an-hue-0: #5c9efa;
+  --an-hue-1: #b885f5;
+  --an-hue-2: #f573b3;
+  --an-hue-3: #40cccc;
+  --an-hue-4: #858fff;
+  --an-hue-5: #66d1f5;
+  --an-hue-6: #ff949e;
+  --an-hue-7: #d6c29e;
+
+  /* type: the Mac's scale times --an-ui-scale (Segoe renders smaller than SF) */
   --an-font: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --an-mono: "Cascadia Mono", Consolas, monospace;
+  --an-ui-scale: 1.15;
+  --an-fs-title: 15.5px;
+  --an-fs-chat: 14px;
+  --an-fs-row-title: 13px;
+  --an-fs-body: 12px;
+  --an-fs-caption: 11px;
+  --an-fs-mono: 12px;
+  --an-fs-mono-caption: 11px;
+  --an-fw-title: 600;
+  --an-fw-row-title: 500;
+
+  /* metrics */
+  --an-corner: 16px;
+  --an-pad: 12px;
+  --an-block: 7.5px;
+  --an-line-gap: 3.8px;
+  --an-bar-h: 3.9px;
+  --an-hair: 1px;
+  --an-row-corner: 10px;
+  --an-control-h: 20px;
+  --an-chip-h: 18px;
+  --an-ring: 10px;
+  --an-tail-len: 32px;
+  --an-tail-w: 36px;
+
+  /* motion */
+  --an-quick: .12s ease-out;
+  --an-glide: 320ms cubic-bezier(.2, .8, .2, 1);
 }
 :root[data-theme="light"] {
   --an-text: #000000;
   --an-text-2: #6b6b6b;
   --an-needs-you: #b08800;
   --an-review: #00a356;
+  --an-working: #000000;
   --an-critical: #ff3f00;
   --an-track: rgba(0, 0, 0, .16);
+  --an-bar-track: rgba(0, 0, 0, .15);
+  --an-accent: #d97757;
   --an-card: #ffffff;
+
+  --an-text-3: rgba(0, 0, 0, .30);
+  --an-fill: rgba(0, 0, 0, .09);
+  --an-fill-hover: rgba(0, 0, 0, .16);
+  --an-row-hover: rgba(0, 0, 0, .05);
+  --an-row-sel: rgba(0, 0, 0, .08);
+  --an-row-sel-stroke: rgba(0, 0, 0, .24);
+  --an-sep: var(--an-track);
+  --an-primary: rgba(0, 0, 0, .95);
+  --an-on-primary: #ffffff;
+  --an-accent-fill: rgba(217, 119, 87, .16);
+  --an-menu: #f2f2f2;
+  --an-shadow: rgba(0, 0, 0, .25);
+
+  --an-hue-0: #5c9efa;
+  --an-hue-1: #b885f5;
+  --an-hue-2: #f573b3;
+  --an-hue-3: #40cccc;
+  --an-hue-4: #858fff;
+  --an-hue-5: #66d1f5;
+  --an-hue-6: #ff949e;
+  --an-hue-7: #d6c29e;
+}
+
+/* Status marks (agentnotchCommon.statusRing): a working arc turns in 12 steps, not smoothly, to
+   spare the compositor; the needs-you breath is finite (7 half-cycles, ending bright) and
+   restarts when its mark is replaced (the count changed). Nothing loops smoothly anywhere. */
+.an-spin { animation: an-spin 1.4s steps(12) infinite; transform-origin: 50% 50%; }
+.an-breathe { animation: an-breathe .9s ease-in-out 7 alternate both; }
+@keyframes an-spin { to { transform: rotate(360deg); } }
+@keyframes an-breathe { from { opacity: .35; } to { opacity: 1; } }
+
+/* Windows' "Animation effects" off: nothing moves; the arc stays a still arc, the mark bright. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+/* Snapshot scenes (agentnotchCommon.setStatic): the same, and no blinking caret. */
+html.an-static *, html.an-static *::before, html.an-static *::after {
+  animation: none !important; transition: none !important; scroll-behavior: auto !important; caret-color: transparent;
 }
