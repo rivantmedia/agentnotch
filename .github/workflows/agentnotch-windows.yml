@@ -9,7 +9,20 @@ name: Windows
 #
 # The Release workflow calls this with `release: true` and the updater's public
 # key; every other build carries no key and no feed, so a copy built from
-# source never updates itself. No secret is ever read here.
+# source never updates itself. The update seed never comes near this workflow.
+#
+# Code signing (Authenticode, Maintainer decision Q4) is the only secret here,
+# and only in a release build: the WINDOWS_SIGN_* values (a .pfx pair, or the
+# six Azure Artifact Signing values; agentnotch-build.ps1 lists them). They
+# live in the `windows-signing` environment (deployment branches: main only),
+# which the build job selects only when `release` is true: a job that calls a
+# reusable workflow can't name an environment, but the called job can, and its
+# environment's secrets win over any the caller passes (GitHub's rule). The
+# workflow_call secrets below are declared so a caller may pass them too;
+# release.yml passes none, never `secrets: inherit`. Only the "Build the
+# installer" step sees them, and the build script takes them out of its
+# environment before anything compiles. Without them the installer is
+# unsigned and windows-release-info.env says AUTHENTICODE=unsigned.
 #
 # Every branch whose push touches the port runs it: a work package is proven on
 # Windows by this workflow going green on its own branch (DESIGN-WIN §8). `**`
@@ -52,6 +65,16 @@ on:
         description: A release build (no cache, the installer as the only artifact)
         type: boolean
         default: false
+    secrets:
+      WINDOWS_SIGN_PFX_BASE64: { required: false }
+      WINDOWS_SIGN_PFX_PASSWORD: { required: false }
+      WINDOWS_SIGN_TIMESTAMP_URL: { required: false }
+      WINDOWS_SIGN_AZURE_ENDPOINT: { required: false }
+      WINDOWS_SIGN_AZURE_ACCOUNT: { required: false }
+      WINDOWS_SIGN_AZURE_PROFILE: { required: false }
+      WINDOWS_SIGN_AZURE_TENANT_ID: { required: false }
+      WINDOWS_SIGN_AZURE_CLIENT_ID: { required: false }
+      WINDOWS_SIGN_AZURE_CLIENT_SECRET: { required: false }
 
 permissions:
   contents: read
@@ -73,6 +96,9 @@ jobs:
     # Pinned, like Xcode 26.6 for the Mac: an image roll-over must not change a
     # release build.
     runs-on: windows-2025
+    # The code signing secrets' home, in a release build only (an empty name is
+    # no environment).
+    environment: ${{ inputs.release && 'windows-signing' || '' }}
     timeout-minutes: 90
     defaults:
       run:
@@ -185,46 +211,31 @@ jobs:
             exit 1
           fi
 
-      # The hook carries its C runtime (Claude Code may run it where
-      # vcruntime140.dll is missing) and has its own target dir (the bundler
-      # copies resources beside the app in target\release). The overlay pins the
-      # version (VERSION), and in a release build adds the update key and feed.
+      # agentnotch-build.ps1 (DESIGN-WIN §6.1 step 12): VERSION == tauri.conf.json,
+      # the hook with its C runtime in its own target dir, the overlay (the
+      # version; in a release build the update key and feed), the pinned Tauri
+      # CLI (npm ci in windows/tools), compile, then bundle. The signing values
+      # reach only this step, only in a release build, and the script hands them
+      # to the bundling alone. Writes out\windows-release-info.env and the
+      # outputs version, name and authenticode.
       - name: Build the installer
         id: installer
         env:
           UPDATER_PUBKEY: ${{ inputs.updater_pubkey }}
+          WINDOWS_SIGN_PFX_BASE64: ${{ inputs.release && secrets.WINDOWS_SIGN_PFX_BASE64 || '' }}
+          WINDOWS_SIGN_PFX_PASSWORD: ${{ inputs.release && secrets.WINDOWS_SIGN_PFX_PASSWORD || '' }}
+          WINDOWS_SIGN_TIMESTAMP_URL: ${{ inputs.release && secrets.WINDOWS_SIGN_TIMESTAMP_URL || '' }}
+          WINDOWS_SIGN_AZURE_ENDPOINT: ${{ inputs.release && secrets.WINDOWS_SIGN_AZURE_ENDPOINT || '' }}
+          WINDOWS_SIGN_AZURE_ACCOUNT: ${{ inputs.release && secrets.WINDOWS_SIGN_AZURE_ACCOUNT || '' }}
+          WINDOWS_SIGN_AZURE_PROFILE: ${{ inputs.release && secrets.WINDOWS_SIGN_AZURE_PROFILE || '' }}
+          WINDOWS_SIGN_AZURE_TENANT_ID: ${{ inputs.release && secrets.WINDOWS_SIGN_AZURE_TENANT_ID || '' }}
+          WINDOWS_SIGN_AZURE_CLIENT_ID: ${{ inputs.release && secrets.WINDOWS_SIGN_AZURE_CLIENT_ID || '' }}
+          WINDOWS_SIGN_AZURE_CLIENT_SECRET: ${{ inputs.release && secrets.WINDOWS_SIGN_AZURE_CLIENT_SECRET || '' }}
         run: |
-          $V = (Get-Content ..\VERSION -Raw).Trim()
-          $conf = Get-Content codenotch\tauri.conf.json -Raw | ConvertFrom-Json
-          if ($conf.version -ne $V) { throw "tauri.conf.json says $($conf.version), VERSION says $V" }
-          $env:RUSTFLAGS = '-C target-feature=+crt-static'
-          cargo build --release --locked -p agentnotch-hook --bin agentnotch-hook --target-dir target/hook
-          if ($LASTEXITCODE) { exit 1 }
-          Remove-Item Env:RUSTFLAGS
-          $overlay = [ordered]@{ version = $V }
-          if ($env:UPDATER_PUBKEY) {
-            $overlay.plugins = @{ updater = [ordered]@{
-              pubkey = $env:UPDATER_PUBKEY
-              endpoints = @('https://github.com/rivantmedia/agentnotch/releases/latest/download/latest.json')
-              requireSignedVersion = $true
-              windows = @{ installMode = 'passive' } } }
-          }
-          $overlayPath = Join-Path $env:RUNNER_TEMP 'agentnotch.build.json'
-          $overlay | ConvertTo-Json -Depth 6 | Set-Content -Path $overlayPath -Encoding utf8NoBOM
-          Push-Location codenotch
-          npx --yes @tauri-apps/cli@2.11.4 build --config tauri.bundle.conf.json --config $overlayPath -- --locked
-          $built = $LASTEXITCODE
-          Pop-Location
-          if ($built) { exit 1 }
-          $setup = @(Get-ChildItem target\release\bundle\nsis\*-setup.exe)
-          if ($setup.Count -ne 1) { throw "expected one installer, found $($setup.Count)" }
-          New-Item -ItemType Directory -Force out | Out-Null
-          $name = "AgentNotch-$V-Setup.exe"
-          Copy-Item $setup[0].FullName "out\$name"
-          $product = (Get-Item "out\$name").VersionInfo.ProductVersion
-          if (-not $product.StartsWith($V)) { throw "the installer's ProductVersion is $product, not $V" }
-          "version=$V" >> $env:GITHUB_OUTPUT
-          "name=$name" >> $env:GITHUB_OUTPUT
+          $build = @{ Out = 'out' }
+          if ($env:UPDATER_PUBKEY) { $build.UpdaterPubkey = $env:UPDATER_PUBKEY }
+          ./scripts/agentnotch-build.ps1 @build
+          Get-Content out\windows-release-info.env
 
       # What a user gets, on a runner that has never seen Agent Notch: the
       # install, a sealed launch (fixture data only: no Claude folder, no
@@ -320,6 +331,14 @@ jobs:
           Wait-Until { -not (Test-Path "$dir\agentnotch.exe") -and -not (Test-Path $uninstallKey) } 60 'the uninstall'
           if (Test-Path 'HKCU:\Software\Classes\agentnotch') { throw 'the agentnotch: scheme is still registered' }
 
+      # The signing path a release takes once WINDOWS_SIGN_* exist, proven on
+      # every branch with a throwaway self-signed certificate: the same bundling
+      # step and signCommand, then every signature checked. The installer above
+      # stays unsigned; the app and hook bytes are put back afterwards.
+      - name: Code signing path (throwaway certificate)
+        if: ${{ !inputs.release }}
+        run: ./scripts/agentnotch-build.ps1 -CheckSigning
+
       - name: Upload the installer and the smoke test's files
         if: ${{ !inputs.release && always() && steps.installer.outputs.name != '' }}
         uses: actions/upload-artifact@v7
@@ -331,13 +350,16 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
-      # Signed and published by release.yml's own jobs, never here.
+      # The update signature and the publishing are release.yml's own jobs, never
+      # here; the release info says whether the installer is code-signed.
       - name: Hand the installer to the release
         if: ${{ inputs.release }}
         uses: actions/upload-artifact@v7
         with:
           name: windows-unsigned
-          path: windows/out/${{ steps.installer.outputs.name }}
+          path: |
+            windows/out/${{ steps.installer.outputs.name }}
+            windows/out/windows-release-info.env
           retention-days: 3
           if-no-files-found: error
 

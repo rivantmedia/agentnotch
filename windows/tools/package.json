@@ -1,0 +1,9 @@
+{
+  "name": "agentnotch-windows-tools",
+  "private": true,
+  "description": "Pinned build tools for Agent Notch for Windows (DESIGN-WIN §6.5): the Tauri CLI that bundles the NSIS installer. Installed with npm ci, so the lockfile's integrity hashes decide what runs.",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@tauri-apps/cli": "2.11.4"
+  }
+}
