@@ -369,6 +369,8 @@ pub fn session_view(session_id: &str) -> SessionView {
         pending: Vec::new(),
         cost_usd: None,
         transcript_path: None,
+        // The session store's own defaults for the fields it added (WP5).
+        ..SessionView::new(session_id, "/Users/me/code/app", CloudFixture::base())
     }
 }
 
