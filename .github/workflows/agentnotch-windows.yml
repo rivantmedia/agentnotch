@@ -237,99 +237,33 @@ jobs:
           ./scripts/agentnotch-build.ps1 @build
           Get-Content out\windows-release-info.env
 
-      # What a user gets, on a runner that has never seen Agent Notch: the
-      # install, a sealed launch (fixture data only: no Claude folder, no
-      # network, no child process) that stays up and shows its notch, the
-      # doctor, a hook that fails open with no app, and the uninstall. Stops
-      # only its own processes, by id.
+      # What a user gets, on a runner that has never seen Agent Notch (DESIGN-WIN
+      # §7.5): the install, a temporary Claude setup the app is pointed at, the
+      # doctor, a sealed launch, a hook that fails open with no app, autostart and
+      # the uninstall. Phases that wait for a package are gated in
+      # scripts/smoke/gates.json: reported here, never silently skipped, and a
+      # release run refuses a closed gate. Never runs claude (only the fake the
+      # fork's test build made, in target\debug) and stops only its own processes,
+      # by handle.
       - name: Smoke test
         env:
           V: ${{ steps.installer.outputs.version }}
           INSTALLER: out\${{ steps.installer.outputs.name }}
+          UPDATER_PUBKEY: ${{ inputs.updater_pubkey }}
+          EXPECTED_KEY_ID: ${{ inputs.expected_key_id }}
+          RELEASE: ${{ inputs.release }}
         run: |
-          $smoke = New-Item -ItemType Directory -Force out\smoke
-          $dir = Join-Path $env:LOCALAPPDATA 'Agent Notch'
-          $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Agent Notch'
-          $data = Join-Path $env:APPDATA 'Agent Notch'
-          $sealedData = Join-Path $env:APPDATA 'Agent Notch Sealed'
-          function Wait-Until([scriptblock]$ready, [int]$seconds, [string]$what) {
-            $deadline = (Get-Date).AddSeconds($seconds)
-            while (-not (& $ready)) {
-              if ((Get-Date) -gt $deadline) { throw "timed out: $what" }
-              Start-Sleep -Milliseconds 500
-            }
+          $smoke = @{
+            Installer = $env:INSTALLER
+            Version   = $env:V
+            Updates   = $(if ($env:UPDATER_PUBKEY) { 'on' } else { 'off' })
+            Artifacts = 'out\smoke'
+            Bins      = 'target\debug'
           }
-
-          # 1. Install, per user, silently.
-          Start-Process -FilePath $env:INSTALLER -ArgumentList '/S' -Wait
-          Wait-Until { (Test-Path "$dir\agentnotch.exe") -and (Test-Path "$dir\agentnotch-hook.exe") -and (Test-Path "$dir\uninstall.exe") } 60 'the installed files'
-          $key = Get-ItemProperty $uninstallKey
-          if ($key.DisplayName -ne 'Agent Notch') { throw "uninstall key DisplayName is '$($key.DisplayName)'" }
-          if ($key.DisplayVersion -ne $env:V) { throw "uninstall key DisplayVersion is '$($key.DisplayVersion)'" }
-          if ($key.Publisher -ne 'Rivant Media') { throw "uninstall key Publisher is '$($key.Publisher)'" }
-          $open = (Get-ItemProperty 'HKCU:\Software\Classes\agentnotch\shell\open\command').'(default)'
-          if ($open -ne "`"$dir\agentnotch.exe`" `"%1`"") { throw "agentnotch: is registered as '$open'" }
-
-          # 2. A sealed launch stays up for 20 s and shows a window.
-          Remove-Item -Recurse -Force $sealedData -ErrorAction SilentlyContinue
-          $env:AGENTNOTCH_SAFE_MODE = '1'
-          $app = Start-Process -FilePath "$dir\agentnotch.exe" -PassThru
-          Remove-Item Env:AGENTNOTCH_SAFE_MODE
-          Start-Sleep -Seconds 20
-          if ($app.HasExited) { throw "the sealed app exited with $($app.ExitCode)" }
-          Add-Type -Namespace AgentNotch -Name Windows -MemberDefinition @'
-          delegate bool EnumProc(System.IntPtr hwnd, System.IntPtr param);
-          [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc proc, System.IntPtr param);
-          [DllImport("user32.dll")] static extern bool IsWindowVisible(System.IntPtr hwnd);
-          [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(System.IntPtr hwnd, out uint pid);
-          public static int Visible(uint pid) {
-            int count = 0;
-            EnumWindows((h, p) => { uint owner; GetWindowThreadProcessId(h, out owner); if (owner == pid && IsWindowVisible(h)) count++; return true; }, System.IntPtr.Zero);
-            return count;
-          }
-          '@
-          $visible = [AgentNotch.Windows]::Visible([uint32]$app.Id)
-          Stop-Process -Id $app.Id -Force
-          $app.WaitForExit(10000) | Out-Null
-          if ($visible -lt 1) { throw 'the sealed app shows no window' }
-          Copy-Item "$sealedData\run.log" "$smoke\sealed-run.log" -ErrorAction SilentlyContinue
-          $runLog = Get-Content "$sealedData\run.log" -Raw -ErrorAction SilentlyContinue
-          if ($runLog -notmatch 'an: hub started \(sealed\)') { throw "the sealed hub did not start: $runLog" }
-          if (Test-Path $data) { throw "a sealed run wrote to $data" }
-          Remove-Item -Recurse -Force $sealedData -ErrorAction SilentlyContinue
-
-          # 3. The doctor: exit 0, and never a credential or a token in its text.
-          $doctor = Start-Process -FilePath "$dir\agentnotch.exe" -ArgumentList 'doctor' -Wait -PassThru
-          $report = Get-Content "$data\doctor.log" -Raw -ErrorAction SilentlyContinue
-          Set-Content "$smoke\doctor.log" $report
-          $report
-          if ($doctor.ExitCode -ne 0) { throw "doctor exited with $($doctor.ExitCode)" }
-          if (-not $report) { throw 'the doctor wrote no doctor.log' }
-          foreach ($secret in '.credentials.json', 'claudeAiOauth', 'accessToken') {
-            if ($report.Contains($secret)) { throw "the doctor's report names $secret" }
-          }
-
-          # 4. The hook fails open with no app beside it: exit 0, nothing printed.
-          $hook = Join-Path $env:RUNNER_TEMP 'agentnotch-hook.exe'
-          Copy-Item "$dir\agentnotch-hook.exe" $hook
-          foreach ($argv in @('hook', 'hook --exec', 'statusline', 'bogus', '')) {
-            $psi = [Diagnostics.ProcessStartInfo]::new($hook, $argv)
-            $psi.UseShellExecute = $false
-            $psi.RedirectStandardInput = $true
-            $psi.RedirectStandardOutput = $true
-            $run = [Diagnostics.Process]::Start($psi)
-            $run.StandardInput.Write('{ not json')
-            $run.StandardInput.Close()
-            if (-not $run.WaitForExit(3000)) { $run.Kill(); throw "the hook hung ($argv)" }
-            $printed = $run.StandardOutput.ReadToEnd()
-            if ($run.ExitCode -ne 0) { throw "the hook exited with $($run.ExitCode) ($argv)" }
-            if ($printed) { throw "the hook printed '$printed' ($argv)" }
-          }
-
-          # 5. Uninstall; the NSIS uninstaller re-launches itself, so -Wait returns early.
-          Start-Process -FilePath "$dir\uninstall.exe" -ArgumentList '/S' -Wait
-          Wait-Until { -not (Test-Path "$dir\agentnotch.exe") -and -not (Test-Path $uninstallKey) } 60 'the uninstall'
-          if (Test-Path 'HKCU:\Software\Classes\agentnotch') { throw 'the agentnotch: scheme is still registered' }
+          if ($env:EXPECTED_KEY_ID) { $smoke.KeyId = $env:EXPECTED_KEY_ID }
+          if ($env:RELEASE -eq 'true') { $smoke.Release = $true }
+          ./scripts/agentnotch-smoke.ps1 @smoke
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       # The signing path a release takes once WINDOWS_SIGN_* exist, proven on
       # every branch with a throwaway self-signed certificate: the same bundling
