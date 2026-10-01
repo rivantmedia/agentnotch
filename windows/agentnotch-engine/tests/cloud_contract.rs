@@ -158,7 +158,10 @@ fn the_install_secret_is_made_once_and_kept_privately() {
     let first = install_secret::load(root.path(), &files).expect("made");
     assert_eq!(first.len(), 32);
     let file = root.path().join(install_secret::FILE_NAME);
-    assert!(files.is_private(&file).unwrap());
+    if cfg!(unix) {
+        // Plain std can't read an ACL; agentnotch-win's files prove it there.
+        assert!(files.is_private(&file).unwrap());
+    }
     assert_eq!(
         install_secret::load(root.path(), &files),
         Some(first.clone())
@@ -185,7 +188,9 @@ fn the_install_secret_is_made_once_and_kept_privately() {
     let replaced = install_secret::load(root.path(), &files).expect("replaced");
     assert!(replaced.len() == 32 && replaced != first);
     assert_eq!(std::fs::read(&file).unwrap(), replaced);
-    assert!(files.is_private(&file).unwrap());
+    if cfg!(unix) {
+        assert!(files.is_private(&file).unwrap());
+    }
 }
 
 #[test]
@@ -195,9 +200,11 @@ fn the_install_secret_makes_its_folder_and_gives_up_quietly() {
     // A folder that doesn't exist yet is made (private) first.
     let support = root.path().join("Agent Notch").join("Claude");
     let made = install_secret::load(&support, &files).expect("made");
-    assert!(files
-        .is_private(&support.join(install_secret::FILE_NAME))
-        .unwrap());
+    if cfg!(unix) {
+        assert!(files
+            .is_private(&support.join(install_secret::FILE_NAME))
+            .unwrap());
+    }
     assert_eq!(install_secret::load(&support, &files), Some(made));
     // A folder that can't be written: no secret, so the caller keeps one in memory.
     let blocker = root.path().join("a-file");
@@ -230,9 +237,16 @@ fn project_paths_expand_the_home_and_resolve_links() {
     let plain = format!("{}{}", real.display(), std::path::MAIN_SEPARATOR);
     assert_eq!(keys::project_path(&plain, home, &files), resolved_real);
     // A folder that is gone is kept as written, normalized.
+    // (the host's own separators: `\nowhere\at\all` on Windows, which
+    // normalizes the way the engine's `Paths` does)
+    let gone = keys::project_path("/nowhere/at/all/", home, &files);
     assert_eq!(
-        keys::project_path("/nowhere/at/all/", home, &files),
-        "/nowhere/at/all"
+        gone,
+        if cfg!(windows) {
+            r"\nowhere\at\all"
+        } else {
+            "/nowhere/at/all"
+        }
     );
     assert_eq!(
         keys::project_name("/Users/me/code/agentnotch/"),
