@@ -4,12 +4,14 @@
 
 use agentnotch_engine::core::time::from_ms;
 use agentnotch_engine::model::*;
-use agentnotch_engine::platform::{ConsoleInfo, HostApp, HostKind, NotifyPermission};
+use agentnotch_engine::platform::{
+    ConsoleInfo, HostApp, HostKind, NotifyPermission, ProcEntry, ProcessTable,
+};
 use agentnotch_engine::runtime_types::{PanelState, ReactionContext, ToastContext};
 use agentnotch_engine::testkit::TEST_START_MS;
 use serde_json::Value;
 use std::path::PathBuf;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 /// When the test sessions were last active.
 pub fn t0() -> SystemTime {
@@ -236,4 +238,49 @@ pub fn failed_now(id: &str) -> AttentionTransition {
         in_state(view(id), failed("Rate limited", "rate_limit")),
         Some(SessionState::Working),
     )
+}
+
+/// A process that started `offset_secs` after [`t0`] (before it when
+/// negative), with `ppid` as its parent.
+pub fn proc_entry(pid: u32, ppid: u32, exe: &str, offset_secs: i64) -> ProcEntry {
+    let offset = Duration::from_secs(offset_secs.unsigned_abs());
+    let started = if offset_secs < 0 {
+        t0() - offset
+    } else {
+        t0() + offset
+    };
+    ProcEntry {
+        pid,
+        ppid,
+        exe_name: exe.into(),
+        started: Some(started),
+    }
+}
+
+pub fn table(entries: Vec<ProcEntry>) -> ProcessTable {
+    ProcessTable { entries }
+}
+
+/// `view`'s Claude (pid 4242, started at [`t0`]) in PowerShell started from
+/// cmd in a console window Explorer opened, with a child (node, 5000) and a
+/// grandchild (bash, 5001), the grandchild listed first.
+pub fn shell_chain() -> ProcessTable {
+    table(vec![
+        proc_entry(100, 4, "explorer.exe", -1000),
+        proc_entry(5001, 5000, "bash.exe", 20),
+        proc_entry(200, 100, "cmd.exe", -500),
+        proc_entry(300, 200, "pwsh.exe", -400),
+        proc_entry(4242, 300, "claude.exe", 0),
+        proc_entry(5000, 4242, "node.exe", 10),
+    ])
+}
+
+/// [`console`] with these processes attached.
+pub fn console_with(pid: u32, attached: &[u32]) -> ConsoleInfo {
+    ConsoleInfo {
+        processes: std::iter::once(pid)
+            .chain(attached.iter().copied())
+            .collect(),
+        ..console(pid)
+    }
 }

@@ -150,10 +150,18 @@ pub fn block_reason(view: &SessionView, info: &ConsoleInfo, host: &HostApp) -> O
     if !info.processes.contains(&pid) {
         return Some(NOT_CONFIRMED.into());
     }
-    if info.line_input == Some(true) {
-        return Some(NOT_AT_PROMPT.into());
+    input_mode_refusal(info).map(str::to_owned)
+}
+
+/// Claude Code reads its console in raw mode; a shell prompt reads in line
+/// mode. A mode that couldn't be read is not taken for raw mode: Return
+/// could then run the text as a command.
+fn input_mode_refusal(info: &ConsoleInfo) -> Option<&'static str> {
+    match info.line_input {
+        Some(false) => None,
+        Some(true) => Some(NOT_AT_PROMPT),
+        None => Some(NOT_CONFIRMED),
     }
-    None
 }
 
 /// Why typing must wait for Claude, or `None`. A permission, question or
@@ -213,11 +221,13 @@ pub fn availability(
     info: &ConsoleInfo,
     host: &HostApp,
 ) -> Result<(), String> {
-    if !type_replies {
-        return Err(TYPING_OFF.into());
-    }
+    // Sealed first, as on the Mac: sample sessions have no terminal, whatever
+    // the setting says.
     if sealed {
         return Err(SEALED.into());
+    }
+    if !type_replies {
+        return Err(TYPING_OFF.into());
     }
     let Some(view) = view else {
         return Err(SESSION_ENDED.into());
@@ -293,10 +303,25 @@ fn descendants(table: &ProcessTable, root: u32) -> BTreeSet<u32> {
 /// Claude, its descendants and the shells that launched it. A shell that
 /// reads the same console at its own prompt (Claude started in the
 /// background of it) would run the reply as a command.
+///
+/// The helper is told to expect the console window `info` names.
 pub fn console_target(
     view: &SessionView,
     info: &ConsoleInfo,
     table: &ProcessTable,
+) -> Result<ConsoleTarget, String> {
+    console_target_with(view, info, table, None)
+}
+
+/// [`console_target`] for a session whose console window was recorded
+/// earlier (when the session was first seen): `info` must still name that
+/// window, the Windows counterpart of the Mac's "the process's TTY is the
+/// session's". The helper is then told to expect the recorded window.
+pub fn console_target_with(
+    view: &SessionView,
+    info: &ConsoleInfo,
+    table: &ProcessTable,
+    recorded_window: Option<u64>,
 ) -> Result<ConsoleTarget, String> {
     let pid = view.pid.ok_or(PROCESS_UNKNOWN)?;
     if info.elevated_target {
@@ -305,12 +330,21 @@ pub fn console_target(
     if !info.attached {
         return Err(NO_CONSOLE.into());
     }
+    if recorded_window.is_some() && info.window != recorded_window {
+        return Err(NOT_CONFIRMED.into());
+    }
     // The start time pairs with the pid everywhere: Windows reuses pids.
     let claude_started = view
         .pid_started
         .or_else(|| table.get(pid).and_then(|entry| entry.started))
         .ok_or(NOT_CONFIRMED)?;
-    if !info.processes.contains(&pid) {
+    // The table's process under that pid must be the session's own, or its
+    // parents and children are some other program's.
+    let reused = table
+        .get(pid)
+        .and_then(|entry| entry.started)
+        .is_some_and(|started| started != claude_started);
+    if reused || !info.processes.contains(&pid) {
         return Err(NOT_CONFIRMED.into());
     }
     let allowed_shells = allowed_shells(table, pid);
@@ -322,13 +356,13 @@ pub fn console_target(
     if stranger {
         return Err(OTHER_READER.into());
     }
-    if info.line_input == Some(true) {
-        return Err(NOT_AT_PROMPT.into());
+    if let Some(refusal) = input_mode_refusal(info) {
+        return Err(refusal.into());
     }
     Ok(ConsoleTarget {
         claude_pid: pid,
         claude_started,
-        expected_window: info.window,
+        expected_window: recorded_window.or(info.window),
         allowed_shells,
     })
 }
@@ -342,3 +376,24 @@ pub fn outcome_reply(outcome: &TypeOutcome) -> (&'static str, Option<String>) {
         TypeOutcome::Failed(reason) => ("failed", Some(reason.clone())),
     }
 }
+
+/// What the chat shows under the composer after a send, `None` once it was
+/// delivered (ChatComposerCopy on the Mac). Reasons carry no final stop
+/// here; the helper's own may, and it is dropped so the copy reads once.
+pub fn outcome_note(outcome: &TypeOutcome) -> Option<String> {
+    let bare = |reason: &str| reason.trim_end().trim_end_matches('.').to_owned();
+    match outcome {
+        TypeOutcome::Delivered => None,
+        TypeOutcome::Refused(reason) => {
+            Some(format!("Not sent: {}. Your message is kept.", bare(reason)))
+        }
+        TypeOutcome::TypedNotSubmitted(reason) => Some(format!(
+            "Typed but not submitted: {}. Press Enter in the terminal when it's safe.",
+            bare(reason)
+        )),
+        TypeOutcome::Failed(_) => Some(FAILED_NOTE.to_owned()),
+    }
+}
+
+/// The helper couldn't be started or the console couldn't be reached.
+pub const FAILED_NOTE: &str = "Couldn't reach the session's console. Type in the terminal instead.";
