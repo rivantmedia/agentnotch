@@ -7,7 +7,8 @@
 use crate::core::time::IsoSeconds;
 use crate::model::{AccountUsage, ExtraUsage, IdentityId, UsageReading, UsageSource, UsageWindow};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::time::{Duration, SystemTime};
 
 pub const FILE_NAME: &str = "usage-state.json";
 pub const VERSION: u32 = 1;
@@ -166,7 +167,47 @@ pub struct PersistedReading {
     pub not_before: Option<IsoSeconds>,
 }
 
+impl PersistedUsageAccount {
+    /// Nothing worth keeping.
+    pub fn is_empty(&self) -> bool {
+        self.last_probe_at.is_none()
+            && self.failure_count == 0
+            && self.next_attempt_at.is_none()
+            && self.last_full_reading.is_none()
+            && self.status_lines.as_ref().is_none_or(Vec::is_empty)
+    }
+}
+
 impl UsageStateFile {
+    /// Readings older than this aren't worth restoring: every window they
+    /// describe has reset since.
+    pub const MAX_RESTORED_READING_AGE: Duration = Duration::from_secs(8 * 24 * 60 * 60);
+
+    /// The state as a new run should start from it: accounts that are gone
+    /// dropped (when `known_account_ids` is given), and readings too old to
+    /// describe any current window dropped.
+    pub fn restored(
+        &self,
+        known_account_ids: Option<&BTreeSet<String>>,
+        now: SystemTime,
+    ) -> UsageStateFile {
+        let mut copy = self.clone();
+        if let Some(known) = known_account_ids {
+            copy.accounts.retain(|id, _| known.contains(id));
+        }
+        for account in copy.accounts.values_mut() {
+            let ancient = account.last_full_reading.as_ref().is_some_and(|reading| {
+                now.duration_since(reading.updated_at.0)
+                    .is_ok_and(|age| age > Self::MAX_RESTORED_READING_AGE)
+            });
+            if ancient {
+                account.last_full_reading = None;
+            }
+        }
+        copy.accounts.retain(|_, account| !account.is_empty());
+        copy
+    }
+
     /// `None` when it doesn't parse or is from a newer version: it is only a
     /// cache, the store starts fresh.
     pub fn parse(bytes: &[u8]) -> Option<UsageStateFile> {
