@@ -15,7 +15,8 @@
 //! - what `console-info` says about the reader's console;
 //! - every refusal before a key is written: another window, another start time, a process that
 //!   is gone, another program on the console, a parent on the console that is not one of the
-//!   session's shells, and a console that reads lines (a shell's prompt, not Claude Code's).
+//!   session's shells, and a console that reads lines (a shell's prompt, not Claude Code's);
+//! - a reply holding a control key (Ctrl+C, Escape, a tab) is not typed at all.
 
 #![cfg(windows)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -49,6 +50,7 @@ const PROCESS_ENDED: &str = "The session's process has ended";
 const OTHER_CONSOLE: &str = "The session's terminal can't be confirmed";
 const OTHER_PROGRAM: &str = "Another program is reading this console";
 const NOT_AT_PROMPT: &str = "The terminal isn't at Claude Code's prompt";
+const CONTROL_KEY: &str = "A reply can't hold control keys";
 
 /// How long the reader, the helper or a file of theirs may take to show up.
 const WAIT: Duration = Duration::from_secs(15);
@@ -582,5 +584,22 @@ fn a_console_that_reads_lines_is_refused() {
     // A shell's prompt reads whole lines; a line typed there would be run as a command.
     let reader = Reader::start(ConsoleHost::Hidden, "cooked");
     assert_refused(&reader.target(), NOT_AT_PROMPT);
+    assert_eq!(reader.stop(), Got::nothing());
+}
+
+/// A reply holding a key that acts on arrival (Ctrl+C interrupts Claude, Escape cancels it) is
+/// never typed, not even its plain part, and the engine is not asked anything. The engine drops
+/// such characters itself; this is the helper's own guard should one get through.
+#[test]
+fn a_reply_with_a_control_key_types_nothing() {
+    let _guard = begin("a_reply_with_a_control_key_types_nothing");
+    let reader = Reader::start(ConsoleHost::Hidden, "raw");
+    for text in ["stop\u{3}", "\u{1b}", "yes\tplease"] {
+        assert_eq!(
+            type_reply(&reader.target(), text, true),
+            (TypeOutcome::Failed(CONTROL_KEY.to_owned()), 0),
+            "{text:?}"
+        );
+    }
     assert_eq!(reader.stop(), Got::nothing());
 }

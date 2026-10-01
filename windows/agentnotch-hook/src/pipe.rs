@@ -10,11 +10,15 @@
 //!   so another local user can create the name first; what a hook sends are tool inputs, and what
 //!   it reads back approves tools. Reading the pipe object rather than the server process works
 //!   whatever the two integrity levels are.
+//! - When every instance is busy, the open waits for the next one and tries again, for as long
+//!   as the caller's budget lasts: a burst of hooks (parallel tool calls) all get through.
 //! - The handle is synchronous: a write blocks while the server does not read. The watchdog
 //!   bounds that, not this module.
 //!
 //! "No app" is the common case on a PC where Agent Notch is not running, and the cheapest: one
 //! failed open.
+
+use std::time::Duration;
 
 /// Why no pipe was opened. The hook does nothing in every case; the trace tells them apart.
 // Only Windows has a pipe to be busy or someone else's; elsewhere every run is `NoApp`.
@@ -57,6 +61,16 @@ pub fn send(pipe: &mut Pipe, json: &[u8]) -> bool {
 /// decision") or the frame was cut or too large.
 pub fn receive(pipe: &mut Pipe, max: usize) -> Option<Vec<u8>> {
     agentnotch_proto::read_frame(pipe, max).ok()
+}
+
+/// How long a client that found every instance of the pipe busy waits for the next one
+/// (`WaitNamedPipeW`): what is left of its budget, in whole milliseconds; `None` once that is
+/// spent, and the client gives up. Never 0, which Windows reads as "the server's default wait".
+// Only Windows has a pipe to be busy; the rule is tested on every system.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn busy_wait_ms(budget: Duration, elapsed: Duration) -> Option<u32> {
+    let left = budget.checked_sub(elapsed)?.as_millis();
+    (left > 0).then(|| left.min(60_000) as u32)
 }
 
 #[cfg(windows)]
@@ -110,7 +124,6 @@ mod windows_impl {
     }
 
     fn open(name: &[u16], budget: Duration, started: Instant) -> Result<Handle, Refusal> {
-        let mut waited = false;
         loop {
             // SAFETY: `name` is NUL-terminated and outlives the call; no security attributes and
             // no template file are passed.
@@ -131,19 +144,23 @@ mod windows_impl {
             }
             match win::last_error() {
                 ERROR_FILE_NOT_FOUND => return Err(Refusal::NoApp),
-                // Every instance is taken this instant: the server makes a new one as soon as it
-                // accepts a connection, so wait for it once.
-                ERROR_PIPE_BUSY if !waited => {
-                    waited = true;
-                    let left = budget.saturating_sub(started.elapsed()).as_millis();
-                    // 0 would mean "the server's default wait", not "don't wait".
-                    let left = left.clamp(1, 60_000) as u32;
-                    // SAFETY: `name` is NUL-terminated and outlives the call.
-                    if unsafe { WaitNamedPipeW(name.as_ptr(), left) } == 0 {
+                // Every instance is taken this instant. The server makes a new one as soon as it
+                // accepts a connection, but every client waiting wakes when it comes and only
+                // one gets it: the hooks of parallel tool calls arrive together. So the others
+                // wait again, for as long as the budget lasts (`busy_wait_ms`).
+                ERROR_PIPE_BUSY => {
+                    let Some(wait) = super::busy_wait_ms(budget, started.elapsed()) else {
                         return Err(Refusal::Busy);
+                    };
+                    // SAFETY: `name` is NUL-terminated and outlives the call.
+                    if unsafe { WaitNamedPipeW(name.as_ptr(), wait) } == 0 {
+                        return Err(match win::last_error() {
+                            // The app went away meanwhile.
+                            ERROR_FILE_NOT_FOUND => Refusal::NoApp,
+                            _ => Refusal::Busy,
+                        });
                     }
                 }
-                ERROR_PIPE_BUSY => return Err(Refusal::Busy),
                 _ => return Err(Refusal::Failed),
             }
         }
@@ -340,5 +357,41 @@ mod other_impl {
         fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
             match self.0 {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MS: Duration = Duration::from_millis(1);
+
+    #[test]
+    fn a_busy_pipe_is_waited_for_while_the_budget_lasts() {
+        let budget = Duration::from_millis(1200);
+        assert_eq!(busy_wait_ms(budget, Duration::ZERO), Some(1200));
+        assert_eq!(busy_wait_ms(budget, 450 * MS), Some(750));
+        assert_eq!(busy_wait_ms(budget, 1199 * MS), Some(1));
+        // The status line's budget, the same way.
+        let send = Duration::from_millis(300);
+        assert_eq!(busy_wait_ms(send, 120 * MS), Some(180));
+    }
+
+    #[test]
+    fn a_spent_budget_gives_up_and_never_asks_for_the_default_wait() {
+        let budget = Duration::from_millis(1200);
+        // Less than a whole millisecond left would be a wait of 0: the server's default.
+        assert_eq!(
+            busy_wait_ms(budget, budget - Duration::from_micros(400)),
+            None
+        );
+        assert_eq!(busy_wait_ms(budget, budget), None);
+        assert_eq!(busy_wait_ms(budget, budget + 5 * MS), None);
+        assert_eq!(busy_wait_ms(Duration::ZERO, Duration::ZERO), None);
+        // A budget of minutes still waits at most one minute at a time.
+        assert_eq!(
+            busy_wait_ms(Duration::from_secs(600), Duration::ZERO),
+            Some(60_000)
+        );
     }
 }

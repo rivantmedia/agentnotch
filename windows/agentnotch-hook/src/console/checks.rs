@@ -26,6 +26,7 @@ pub const TYPED_NOT_SENT: &str =
     "Claude asked for something while your reply was typed; it's in the terminal, not sent.";
 pub const NO_REQUEST: &str = "No reply was given to type";
 pub const NOT_ONE_LINE: &str = "A reply is typed as one line";
+pub const CONTROL_KEY: &str = "A reply can't hold control keys";
 pub const NOT_TYPED: &str = "The console didn't take the reply";
 pub const PARTLY_TYPED: &str =
     "Only part of your reply could be typed; it's in the terminal, not sent.";
@@ -173,6 +174,11 @@ pub fn return_records() -> [KeyRecord; 2] {
 /// The engine already made the text one line; a line break that got here anyway would submit
 /// the reply before the engine's re-check, so it is refused rather than dropped. An empty text
 /// is refused too: all it would do is press Return.
+///
+/// So is any other control character. Each is a key that acts the moment Claude Code reads it,
+/// before that re-check too: Ctrl+C interrupts the session, Escape cancels what it is doing,
+/// Ctrl+D ends its input. The engine's text rule (the Mac's `TerminalScript.singleLine`) turns
+/// tabs into blanks and drops the rest, so only a fault upstream of this would send one.
 pub fn parse_request(line: &[u8]) -> Result<String, &'static str> {
     let request: TypeRequest = serde_json::from_slice(line).map_err(|_| NO_REQUEST)?;
     if request.text.is_empty() {
@@ -180,6 +186,9 @@ pub fn parse_request(line: &[u8]) -> Result<String, &'static str> {
     }
     if request.text.contains(['\r', '\n']) {
         return Err(NOT_ONE_LINE);
+    }
+    if request.text.chars().any(char::is_control) {
+        return Err(CONTROL_KEY);
     }
     Ok(request.text)
 }
@@ -568,6 +577,33 @@ mod tests {
             br#"{"text":"\n"}"#,
         ] {
             assert_eq!(parse_request(line), Err(NOT_ONE_LINE));
+        }
+    }
+
+    #[test]
+    fn a_control_key_is_never_typed() {
+        // Ctrl+C, Escape, Ctrl+D, a tab, NUL, DEL and a C1 control: each acts on arrival.
+        for text in [
+            "stop\u{3}",
+            "\u{1b}[A",
+            "done\u{4}",
+            "a\tb",
+            "a\u{0}b",
+            "x\u{7f}",
+            "x\u{9b}2J",
+        ] {
+            let line = serde_json::to_vec(&serde_json::json!({ "text": text })).unwrap();
+            assert_eq!(parse_request(&line), Err(CONTROL_KEY), "{text:?}");
+        }
+        // What the engine's text rule leaves is typed as it is: blanks, punctuation, text in
+        // any script, emoji with their joiners.
+        for text in [
+            "yes, go ahead",
+            "  spaced  out  ",
+            "caf\u{e9} \u{4e2d}\u{6587} \u{1F468}\u{200D}\u{1F4BB} \"quoted\" \\ $HOME %PATH%",
+        ] {
+            let line = serde_json::to_vec(&serde_json::json!({ "text": text })).unwrap();
+            assert_eq!(parse_request(&line), Ok(text.to_owned()), "{text:?}");
         }
     }
 
