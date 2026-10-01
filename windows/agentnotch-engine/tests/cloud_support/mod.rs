@@ -522,3 +522,345 @@ impl Lines {
         }
     }
 }
+
+// ---- The sync service's harness (the Mac's `CloudSyncTests.Harness`) ----
+
+use agentnotch_engine::cloud::auth::{FileSessionStore, SessionStore};
+use agentnotch_engine::cloud::service::CloudSync;
+use agentnotch_engine::cloud::website;
+use agentnotch_engine::model::{BackfillFolder, RunFolder, UsageSource};
+use agentnotch_engine::platform::{Browser, HttpRequest, Platform};
+use agentnotch_engine::runtime_types::{
+    ClaudeBinary, CloudConfig, CloudDeps, LiveBatch, UsageObservation,
+};
+use agentnotch_engine::testkit::http::path_of;
+use agentnotch_engine::testkit::{platform, TestHandles};
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
+fn locked<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// The engine as the cloud sees it (the Mac's `FakeCloudEnvironment`): the
+/// accounts it hands over, folder logins, the summary folder, and every
+/// switch the cloud asked `an-core` to write.
+pub struct FakeCloudDeps {
+    pub accounts: Mutex<Vec<CloudAccount>>,
+    pub folder_logins: Mutex<Option<BTreeMap<String, String>>>,
+    pub backfill_folders: Mutex<Vec<BackfillFolder>>,
+    pub five_hour: Mutex<BTreeMap<IdentityId, f64>>,
+    pub summary_folder: Mutex<Option<RunFolder>>,
+    pub summary_folder_still_runs: AtomicBool,
+    pub launching_claude: AtomicBool,
+    pub claude_binary: Mutex<Option<ClaudeBinary>>,
+    pub settings: Mutex<Vec<(String, Value)>>,
+}
+
+impl FakeCloudDeps {
+    pub fn new(accounts: Vec<CloudAccount>) -> Self {
+        FakeCloudDeps {
+            accounts: Mutex::new(accounts),
+            folder_logins: Mutex::new(None),
+            backfill_folders: Mutex::new(Vec::new()),
+            five_hour: Mutex::new(BTreeMap::new()),
+            summary_folder: Mutex::new(None),
+            summary_folder_still_runs: AtomicBool::new(true),
+            launching_claude: AtomicBool::new(false),
+            claude_binary: Mutex::new(Some(ClaudeBinary {
+                program: PathBuf::from(r"C:\Users\me\.local\bin\claude.exe"),
+                prefix_args: Vec::new(),
+                version: Some("2.1.282".into()),
+                shim: false,
+            })),
+            settings: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// What the cloud asked to write, in order.
+    pub fn written(&self) -> Vec<(String, Value)> {
+        locked(&self.settings).clone()
+    }
+
+    /// The last value asked for `key`.
+    pub fn setting(&self, key: &str) -> Option<Value> {
+        locked(&self.settings)
+            .iter()
+            .rev()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+    }
+}
+
+impl CloudDeps for FakeCloudDeps {
+    fn accounts(&self) -> Vec<CloudAccount> {
+        locked(&self.accounts).clone()
+    }
+
+    fn folder_logins(&self) -> Option<BTreeMap<String, String>> {
+        locked(&self.folder_logins).clone()
+    }
+
+    fn backfill_folders(&self) -> Vec<BackfillFolder> {
+        locked(&self.backfill_folders).clone()
+    }
+
+    fn five_hour(&self, identity: &IdentityId) -> Option<f64> {
+        locked(&self.five_hour).get(identity).copied()
+    }
+
+    fn summary_folder(&self, _identity: &IdentityId) -> Option<RunFolder> {
+        locked(&self.summary_folder).clone()
+    }
+
+    fn summary_folder_still_runs(&self, _folder: &RunFolder, _identity: &IdentityId) -> bool {
+        self.summary_folder_still_runs.load(Ordering::SeqCst)
+    }
+
+    fn is_launching_claude(&self) -> bool {
+        self.launching_claude.load(Ordering::SeqCst)
+    }
+
+    fn claude_binary(&self) -> Option<ClaudeBinary> {
+        locked(&self.claude_binary).clone()
+    }
+
+    fn set_setting(&self, key: &str, value: Value) {
+        locked(&self.settings).push((key.to_owned(), value));
+    }
+}
+
+/// The stand-in website: config, Supabase's token and logout, me, sync.
+pub fn website_answer(request: &HttpRequest) -> HttpResponse {
+    match path_of(request).as_str() {
+        "/api/app/v1/config" => json_response(200, contract_fixture("config.json")),
+        "/auth/v1/token" => AuthFixture::token_answer("access-2", "refresh-2"),
+        "/auth/v1/logout" => json_response(204, ""),
+        "/api/app/v1/me" => json_response(200, contract_fixture("me.json")),
+        "/api/app/v1/sync" => json_response(200, contract_fixture("sync-response.json")),
+        _ => json_response(
+            404,
+            r#"{"error":{"code":"BAD_REQUEST","message":"no such route"}}"#,
+        ),
+    }
+}
+
+/// How a [`Harness`] starts. Defaults as the Mac's: signed in to
+/// https://agentnotch.example.com, sync on, summaries off.
+pub struct HarnessOptions {
+    pub signed_in: bool,
+    pub sync_on: bool,
+    pub summaries_on: bool,
+    pub sealed: bool,
+    /// The build's website (`app-config.json`).
+    pub website: Option<String>,
+    /// `AGENTNOTCH_WEB_URL`.
+    pub website_override: Option<String>,
+    pub browser: Option<Arc<dyn Browser>>,
+}
+
+impl Default for HarnessOptions {
+    fn default() -> Self {
+        HarnessOptions {
+            signed_in: true,
+            sync_on: true,
+            summaries_on: false,
+            sealed: false,
+            website: Some(AuthFixture::WEBSITE.into()),
+            website_override: None,
+            browser: None,
+        }
+    }
+}
+
+/// The sync service over a temporary support folder, the testkit platform
+/// (a fixed clock an hour after [`CloudFixture::base`], the stand-in
+/// website on [`FixtureHttp`](agentnotch_engine::testkit::http::FixtureHttp),
+/// a recording browser) and [`FakeCloudDeps`].
+pub struct Harness {
+    pub root: tempfile::TempDir,
+    pub platform: Platform,
+    pub handles: TestHandles,
+    pub deps: Arc<FakeCloudDeps>,
+    pub options: HarnessOptions,
+    pub service: Arc<CloudSync>,
+}
+
+impl Harness {
+    pub fn new() -> Harness {
+        Self::with(HarnessOptions::default())
+    }
+
+    pub fn with(options: HarnessOptions) -> Harness {
+        let root = tempfile::tempdir().expect("a temporary folder");
+        let (mut platform, handles) = platform(root.path());
+        if let Some(browser) = &options.browser {
+            platform.browser = browser.clone();
+        }
+        handles.clock.set(CloudFixture::at(3600.0));
+        handles
+            .http
+            .set_handler(|request| Ok(website_answer(request)));
+        let deps = Arc::new(FakeCloudDeps::new(vec![CloudFixture::account()]));
+        let mut harness = Harness {
+            service: Arc::new(CloudSync::new(
+                Self::config_for(root.path(), &handles, &options),
+                deps.clone(),
+                &platform,
+            )),
+            root,
+            platform,
+            handles,
+            deps,
+            options,
+        };
+        // A sealed run has no files at all: nothing is saved for it.
+        if harness.options.signed_in && !harness.options.sealed {
+            harness.save_session(AuthFixture::session(7 * 24 * 3600, harness.now()));
+        }
+        harness.service = harness.make_service();
+        harness
+    }
+
+    fn config_for(
+        root: &std::path::Path,
+        handles: &TestHandles,
+        options: &HarnessOptions,
+    ) -> CloudConfig {
+        let (website, overridden) = website::effective(
+            options.website.as_deref(),
+            options.website_override.as_deref(),
+            options.sealed,
+        );
+        CloudConfig {
+            support: root.join("support"),
+            website,
+            website_is_overridden: overridden,
+            app_version: "9.9".into(),
+            device_name: "TEST-PC".into(),
+            device_id: "00000000-0000-4000-8000-000000000001".into(),
+            sync_enabled: options.sync_on,
+            summaries_enabled: options.summaries_on,
+            summaries_allowed_by_default: true,
+            sealed: options.sealed,
+            system_users: None,
+            home: handles.roots.home.clone(),
+        }
+    }
+
+    /// The config `an-core` hands the cloud now (switches as last written).
+    pub fn config(&self) -> CloudConfig {
+        let mut cfg = Self::config_for(self.root.path(), &self.handles, &self.options);
+        if let Some(Value::Bool(on)) = self.deps.setting("cloudSyncEnabled") {
+            cfg.sync_enabled = on;
+        }
+        if let Some(Value::Bool(on)) = self.deps.setting("cloudSummariesEnabled") {
+            cfg.summaries_enabled = on;
+        }
+        cfg
+    }
+
+    fn make_service(&self) -> Arc<CloudSync> {
+        Arc::new(CloudSync::new(
+            self.config(),
+            self.deps.clone(),
+            &self.platform,
+        ))
+    }
+
+    pub fn support(&self) -> PathBuf {
+        self.root.path().join("support")
+    }
+
+    pub fn now(&self) -> SystemTime {
+        agentnotch_engine::platform::Clock::now(&*self.handles.clock)
+    }
+
+    pub fn advance(&self, by: Duration) {
+        self.handles.clock.advance(by);
+    }
+
+    pub fn start(&self) {
+        self.service.start(self.now());
+    }
+
+    /// Quit and open the app again: the same files and saved sign-in, with
+    /// the website as `options` say now.
+    pub fn relaunch(&mut self) {
+        self.service.stop(self.now());
+        self.service = self.make_service();
+        self.start();
+    }
+
+    fn session_store(&self) -> FileSessionStore {
+        FileSessionStore::new(&self.support(), self.handles.files.clone(), true)
+    }
+
+    pub fn save_session(&self, session: AuthSession) {
+        self.session_store()
+            .save(&session)
+            .expect("save the session");
+    }
+
+    /// The sign-in saved in `cloud-session.json`, if any.
+    pub fn saved_session(&self) -> Option<AuthSession> {
+        self.session_store().load()
+    }
+
+    pub fn requests(&self) -> Vec<HttpRequest> {
+        self.handles.http.requests()
+    }
+
+    pub fn paths(&self) -> Vec<String> {
+        self.requests().iter().map(path_of).collect()
+    }
+
+    pub fn requests_to(&self, path: &str) -> Vec<HttpRequest> {
+        self.handles.http.requests_to(path)
+    }
+
+    pub fn opened(&self) -> Vec<String> {
+        self.handles.browser.opened()
+    }
+
+    /// Signs in through the browser and the callback, as a user would.
+    pub fn sign_in(&self) -> agentnotch_engine::hub::DeepLinkOutcome {
+        self.service
+            .sign_in(self.now())
+            .expect("the sign-in starts");
+        self.service
+            .deep_link("agentnotch://auth-callback?code=the-code", self.now())
+    }
+
+    /// A running session of the fixture's account, as the hub batches it.
+    pub fn live(&self, session_id: &str) -> LiveBatch {
+        LiveBatch {
+            attributed: vec![live(session_id).active(20.0).build()],
+            unsure: BTreeSet::new(),
+            waiting: BTreeSet::new(),
+            live_ids: ids(&[session_id]),
+            at: self.now(),
+        }
+    }
+
+    /// A reading of the fixture's account (Claude Desktop's, 42 %).
+    pub fn usage(&self) -> UsageObservation {
+        UsageObservation {
+            identity: IdentityId::from(CloudFixture::IDENTITY_ID),
+            source: UsageSource::Desktop,
+            observed_at: CloudFixture::at(600.0),
+            windows: vec![("session".into(), 42.0, Some(CloudFixture::at(9000.0)))],
+        }
+    }
+
+    pub fn ledger_count(&self) -> usize {
+        self.service.stores().map_or(0, |s| s.ledger.count())
+    }
+
+    pub fn pending_usage(&self) -> usize {
+        self.service
+            .stores()
+            .map_or(0, |s| s.recorder.pending_count())
+    }
+}
