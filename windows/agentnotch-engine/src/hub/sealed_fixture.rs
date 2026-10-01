@@ -16,7 +16,6 @@ use super::api::*;
 use crate::core::settings::ControlSettings;
 use crate::core::time;
 use crate::model::*;
-use crate::persist::settings::SettingsFile;
 use crate::platform::Clock;
 use crate::runtime_types::{AnswerResult, PanelState};
 use agentnotch_proto::ControlStatus;
@@ -342,22 +341,30 @@ impl SealedFixture {
                 (ok(json!({})), events)
             }
             Call::Account { action } => self.account(&mut state, action),
-            Call::SetSetting { key, value } => match apply_setting(&state.control, &key, value) {
-                Ok(next) => {
-                    state.control = next;
-                    state.snapshot.ui = state.control.ui();
-                    state.settings.usage.interval_minutes =
-                        state.control.usage_probe_interval_minutes;
-                    state.settings.usage.desktop_cache = state.control.reads_desktop_usage_cache;
-                    state.settings.notifications.notify_needs_input =
-                        state.control.notify_needs_input;
-                    state.settings.notifications.notify_ready_for_review =
-                        state.control.notify_ready_for_review;
-                    let events = self.changed(&mut state);
-                    (ok(json!({})), events)
+            Call::SetSetting { key, value } => {
+                match state.control.validated_from_page(&key, &value) {
+                    Ok(next) => {
+                        state.control = next;
+                        // What the hot key service reported stays as it was.
+                        let hotkey_ok = state.snapshot.ui.hotkey_ok;
+                        let hotkey_message = state.snapshot.ui.hotkey_message.take();
+                        state.snapshot.ui = state.control.ui();
+                        state.snapshot.ui.hotkey_ok = hotkey_ok;
+                        state.snapshot.ui.hotkey_message = hotkey_message;
+                        state.settings.usage.interval_minutes =
+                            state.control.usage_probe_interval_minutes;
+                        state.settings.usage.desktop_cache =
+                            state.control.reads_desktop_usage_cache;
+                        state.settings.notifications.notify_needs_input =
+                            state.control.notify_needs_input;
+                        state.settings.notifications.notify_ready_for_review =
+                            state.control.notify_ready_for_review;
+                        let events = self.changed(&mut state);
+                        (ok(json!({})), events)
+                    }
+                    Err(error) => (Err(error), Vec::new()),
                 }
-                Err(error) => (Err(error), Vec::new()),
-            },
+            }
             Call::ChooseClaudeBinary { .. } => {
                 (to_value(&VersionReply { version: None }), Vec::new())
             }
@@ -701,28 +708,6 @@ fn control_from_ui(ui: &UiSettings, settings: &SettingsSnapshot) -> ControlSetti
         type_replies: ui.type_replies,
         ..ControlSettings::default()
     }
-}
-
-/// `set_setting` through the file's own per-key rules: an unknown key or a
-/// value the file would not keep is refused.
-fn apply_setting(
-    current: &ControlSettings,
-    key: &str,
-    value: Value,
-) -> Result<ControlSettings, CallError> {
-    let mut file = SettingsFile::default();
-    file.apply(current);
-    if key == "version" || !file.values.contains_key(key) {
-        return Err(CallError::invalid(format!("Unknown setting {key}.")));
-    }
-    file.values.insert(key.to_owned(), value.clone());
-    let next = file.settings();
-    let mut check = SettingsFile::default();
-    check.apply(&next);
-    if check.values.get(key) != Some(&value) {
-        return Err(CallError::invalid(format!("{key} can't be {value}.")));
-    }
-    Ok(next)
 }
 
 fn become_working(row: &mut SessionRow) {

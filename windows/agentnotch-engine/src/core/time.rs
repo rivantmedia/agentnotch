@@ -16,8 +16,21 @@ pub fn to_ms(t: SystemTime) -> u64 {
         .map_or(0, |d| d.as_millis().min(u64::MAX as u128) as u64)
 }
 
+/// The last millisecond the engine writes as a date: 9999-12-31T23:59:59.999Z.
+/// Windows' `SystemTime` ends in the year 30828 and chrono's range is wider
+/// still, so a value from a file or the WebView (`u64::MAX`, a timestamp in
+/// microseconds) is held here rather than panicking in an addition.
+pub const MAX_MS: u64 = 253_402_300_799_999;
+
+/// The first second the engine writes as a date: 1601-01-01T00:00:00Z, where
+/// Windows' clock starts (an earlier `SystemTime` exists on the Mac).
+const MIN_SECS: i64 = -(FILETIME_UNIX_OFFSET_S as i64);
+const MAX_SECS: i64 = (MAX_MS / 1000) as i64;
+
+/// Epoch milliseconds as a time. Total: past [`MAX_MS`] it is the time at
+/// `MAX_MS`.
 pub fn from_ms(ms: u64) -> SystemTime {
-    UNIX_EPOCH + Duration::from_millis(ms)
+    UNIX_EPOCH + Duration::from_millis(ms.min(MAX_MS))
 }
 
 /// Epoch seconds, negative before 1970.
@@ -54,8 +67,13 @@ pub fn from_filetime(filetime: u64) -> SystemTime {
     let since_1601 = Duration::from_nanos(filetime.saturating_mul(100));
     let offset = Duration::from_secs(FILETIME_UNIX_OFFSET_S);
     match since_1601.checked_sub(offset) {
-        Some(after) => UNIX_EPOCH + after,
-        None => UNIX_EPOCH - (offset - since_1601),
+        // A FILETIME near u64::MAX is year 60056: no clock holds it.
+        Some(after) => UNIX_EPOCH
+            .checked_add(after)
+            .unwrap_or_else(|| from_ms(MAX_MS)),
+        None => UNIX_EPOCH
+            .checked_sub(offset - since_1601)
+            .unwrap_or(UNIX_EPOCH),
     }
 }
 
@@ -64,23 +82,37 @@ pub fn to_filetime(t: SystemTime) -> u64 {
     (ns.max(0) / 100) as u64
 }
 
+/// `t` as a UTC date, held to 1601-01-01 .. 9999-12-31 so formatting is
+/// total: chrono's own conversion panics outside its range, and a date past
+/// 9999 would print with a sign and a fifth digit that no reader accepts.
 fn utc(t: SystemTime) -> DateTime<Utc> {
-    DateTime::<Utc>::from(t)
+    let ns = to_ns(t);
+    let secs = ns.div_euclid(1_000_000_000);
+    if secs < i128::from(MIN_SECS) {
+        return DateTime::from_timestamp(MIN_SECS, 0).unwrap_or_default();
+    }
+    if secs > i128::from(MAX_SECS) {
+        return DateTime::from_timestamp(MAX_SECS, 999_999_999).unwrap_or_default();
+    }
+    let nanos = ns.rem_euclid(1_000_000_000) as u32;
+    DateTime::from_timestamp(secs as i64, nanos).unwrap_or_default()
 }
 
 /// `2026-09-28T12:34:56Z`: whole seconds, as the Mac writes `accounts.json`
-/// and `usage-state.json` (sub-second parts are dropped).
+/// and `usage-state.json` (sub-second parts are dropped). Total: a time
+/// outside 1601..9999 is written as the nearest end of that range.
 pub fn iso8601(t: SystemTime) -> String {
     utc(t).to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
 /// `2026-09-28T12:34:56.120Z`: rounded to the millisecond, as the cloud
-/// contract writes dates (CloudJSON).
+/// contract writes dates (CloudJSON). Total, as [`iso8601`] is.
 pub fn iso8601_ms(t: SystemTime) -> String {
-    utc(from_ms(
-        to_ms(t) + u64::from(to_ns(t).rem_euclid(1_000_000) >= 500_000),
-    ))
-    .to_rfc3339_opts(SecondsFormat::Millis, true)
+    let ms = (to_ns(t) + 500_000).div_euclid(1_000_000);
+    let ms = ms.clamp(i128::from(MIN_SECS) * 1000, i128::from(MAX_MS)) as i64;
+    DateTime::from_timestamp_millis(ms)
+        .unwrap_or_default()
+        .to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 /// ISO 8601 with or without fractional seconds, `Z` or an offset; no zone

@@ -102,6 +102,49 @@
     }
   },
   {
+    "event": "an:panel",
+    "payload": {
+      "route": "sessions",
+      "ring_id": "claude-acct-8a7b6c5d4e3f",
+      "highlight": null,
+      "reason": "ring_click",
+      "edge": "right",
+      "floating": false,
+      "width": 400.0,
+      "tail_offset": -12.5
+    }
+  },
+  {
+    "event": "an:panel_place",
+    "payload": {
+      "edge": "bottom",
+      "floating": false,
+      "width": 520.0,
+      "tail_offset": 36.0
+    }
+  },
+  {
+    "event": "an:panel_place",
+    "payload": {
+      "edge": null,
+      "floating": true,
+      "width": 520.0,
+      "tail_offset": 0.0
+    }
+  },
+  {
+    "event": "an:panel_state",
+    "payload": {
+      "open": true,
+      "route": "session:needs-permission",
+      "ring_id": "claude-acct-8a7b6c5d4e3f",
+      "reason": "notification",
+      "engaged": false,
+      "focused": true,
+      "pinned": false
+    }
+  },
+  {
     "event": "an:peek",
     "payload": {
       "ring_id": "claude-acct-5f3e1d2c0b9a",

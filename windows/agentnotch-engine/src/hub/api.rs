@@ -462,6 +462,12 @@ pub enum HubEvent {
 
 /// The glue's own event: the panel's keyboard focus was confirmed (or lost).
 pub const PANEL_FOCUS_EVENT: &str = "an:panel_focus";
+/// The glue's own event: an open panel moved or changed width (a [`PanelPlace`]).
+///
+/// [`PanelPlace`]: crate::model::PanelPlace
+pub const PANEL_PLACE_EVENT: &str = "an:panel_place";
+/// The glue's own event: the panel window's state (a `PanelState`), to the notch's page.
+pub const PANEL_STATE_EVENT: &str = "an:panel_state";
 
 impl HubEvent {
     /// The Tauri event the glue emits for it, when it is one.

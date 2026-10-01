@@ -165,7 +165,9 @@
     "peek_seconds": 5,
     "type_replies": false,
     "sound": true,
-    "tray_badge": true
+    "tray_badge": true,
+    "hotkey_ok": true,
+    "hotkey_message": null
   },
   "notifications": {
     "notify_needs_input": true,

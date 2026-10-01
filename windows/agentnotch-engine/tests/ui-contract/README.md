@@ -22,3 +22,11 @@ the `CallError` code.
 
 Made by WP0 (the data follows the Mac's `SampleSessions`); WP7 maintains
 them, and its sealed demo's snapshot must equal `snapshot.json`.
+
+`events.json` also holds the glue's own events, which the hub never emits:
+`an:panel_place` (a `model::PanelPlace`: where an open panel moved to, `edge`
+null when it floats), `an:panel_state` (a `PanelState`, to the notch's page),
+and an `an:panel` whose request carries those four placement fields beside its
+own (`edge`, `floating`, `width`, `tail_offset`). `settings.json` and
+`snapshot.json` carry `attention.hotkey_ok` / `hotkey_message` (the hot key
+service's report; `hotkey_ok` reads `true` when a payload lacks it).
