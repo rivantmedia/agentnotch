@@ -15,12 +15,14 @@
 //! - `store_review`: the review queue and attention transitions;
 //! - `store_transcript`: transcript syncs, chat, interrupts.
 
+use crate::attention::tracker::AttentionTracker;
 use crate::core::paths::{PathStyle, Paths};
 use crate::model::{
     AccountId, AccountSighting, ChatHistory, DesktopCandidate, HookEvent, NeedsInputReason,
     PermissionContext, Phase, SessionId, SessionView, StatusLineMessage,
 };
 use crate::platform::Processes;
+use crate::review::ReviewStore;
 use crate::runtime_types::{IngestContext, Release, SessionEffects, SessionInput};
 use crate::sessions::attention;
 use crate::sessions::background;
@@ -33,7 +35,7 @@ use crate::sessions::store_turns::QuickRescan;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Claude Code's user message after an automatic compaction; a Stop right
 /// after it is not a finished task.
@@ -95,6 +97,16 @@ pub struct SessionStore {
     /// finished a turn while the app was down.
     pub(super) started_at: Option<SystemTime>,
     pub(super) previous_run_alive_at: Option<SystemTime>,
+    /// The review queue (`review-state.json`) and what follows the session
+    /// list into attention transitions.
+    pub(super) review: ReviewStore,
+    pub(super) tracker: AttentionTracker,
+    /// When the hub handed over the review file (`load_review`): from then
+    /// on the store asks for it to be written. A store never given one
+    /// writes nothing and sets no deadline for it.
+    pub(super) review_loaded_at: Option<SystemTime>,
+    /// When the review file is next due to be written.
+    pub(super) review_persist_due: Option<SystemTime>,
     pub(super) effects: SessionEffects,
 }
 
@@ -126,6 +138,11 @@ impl SessionStore {
             last_check: None,
             started_at: None,
             previous_run_alive_at: None,
+            review: ReviewStore::empty(),
+            // No launch time known: no completion counts as older than it.
+            tracker: AttentionTracker::new(UNIX_EPOCH),
+            review_loaded_at: None,
+            review_persist_due: None,
             effects: SessionEffects::default(),
         }
     }
@@ -165,6 +182,7 @@ impl SessionStore {
     ) {
         self.started_at = Some(started_at);
         self.previous_run_alive_at = previous_run_alive_at;
+        self.tracker.set_launched_at(started_at);
     }
 
     /// The identities a Claude Desktop-hosted session may belong to.
@@ -216,7 +234,9 @@ impl SessionStore {
     /// PostToolUse).
     pub fn apply(&mut self, input: SessionInput, now: SystemTime) -> SessionEffects {
         let before = self.views();
+        let review_before = self.review_snapshots();
         self.effects = SessionEffects::default();
+        let is_tick = matches!(input, SessionInput::Tick);
         match input {
             SessionInput::Hook { event, ctx } => self.process_hook(event, Some(&ctx), now),
             SessionInput::Held(held) => {
@@ -260,8 +280,17 @@ impl SessionStore {
         } else if self.last_check.is_none() {
             self.last_check = Some(now);
         }
+        self.persist_review_changes(review_before, now);
+        if is_tick {
+            self.flush_review(now);
+        }
+        // The tracker follows the list from the first input; the baseline
+        // keeps its changes quiet.
+        self.tracker.start(now);
+        let after = self.views();
+        self.effects.transitions = self.tracker.update(&after, now);
         let mut effects = std::mem::take(&mut self.effects);
-        effects.changed = effects.changed || before != self.views();
+        effects.changed = effects.changed || before != after;
         effects
     }
 

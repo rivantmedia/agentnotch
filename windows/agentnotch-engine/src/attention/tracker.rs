@@ -37,6 +37,9 @@ pub struct AttentionTracker {
     launched_at: SystemTime,
     started_at: Option<SystemTime>,
     baseline_ends_at: Option<SystemTime>,
+    /// A list was recorded after the baseline ended: nothing is left to wait
+    /// for.
+    baseline_closed: bool,
 }
 
 impl AttentionTracker {
@@ -46,11 +49,17 @@ impl AttentionTracker {
             launched_at,
             started_at: None,
             baseline_ends_at: None,
+            baseline_closed: false,
         }
     }
 
     pub fn launched_at(&self) -> SystemTime {
         self.launched_at
+    }
+
+    /// The launch time moves (the hub learns it after the tracker was made).
+    pub fn set_launched_at(&mut self, launched_at: SystemTime) {
+        self.launched_at = launched_at;
     }
 
     /// The tracker begins following the session list. Idempotent.
@@ -64,6 +73,7 @@ impl AttentionTracker {
     pub fn stop(&mut self) {
         self.started_at = None;
         self.baseline_ends_at = None;
+        self.baseline_closed = false;
     }
 
     /// Every account's session registry has been read once.
@@ -76,6 +86,19 @@ impl AttentionTracker {
     /// The state of a session as last seen by the tracker.
     pub fn attention(&self, id: &SessionId) -> Option<&SessionState> {
         self.last.get(id)
+    }
+
+    /// When the launch baseline ends, while it is open and the tracker is
+    /// following: the store wakes then so the list is recorded once more
+    /// with the baseline closed. `None` before `start` and after the end.
+    pub fn baseline_deadline(&self) -> Option<SystemTime> {
+        if self.baseline_closed {
+            return None;
+        }
+        self.baseline_ends_at.or_else(|| {
+            self.started_at
+                .map(|started| started + MAX_BASELINE_INTERVAL)
+        })
     }
 
     /// Whether changes are still recorded as the launch baseline.
@@ -112,6 +135,7 @@ impl AttentionTracker {
         if self.is_in_baseline(now) {
             return Vec::new();
         }
+        self.baseline_closed = true;
         changes.retain(|change| news::is_news(change, Some(self.launched_at)));
         changes
     }

@@ -612,7 +612,8 @@ impl SessionStore {
 
     /// When the clock alone next changes an answer: a pending completion's
     /// fallback or timeout, the end of a background wait, a quick registry
-    /// read after a Stop, the 3 s check. The runtime sends `Tick` then; a
+    /// read after a Stop, the 3 s check, the review file's write and heartbeat
+    /// and the end of the attention baseline. The runtime sends `Tick` then; a
     /// time in the past means now. `None` when nothing waits.
     pub fn next_deadline(&self) -> Option<SystemTime> {
         let mut deadlines: Vec<SystemTime> = Vec::new();
@@ -641,6 +642,7 @@ impl SessionStore {
         if let (Some(last), false) = (self.last_check, self.sessions.is_empty()) {
             deadlines.push(last + SCAN_INTERVAL);
         }
+        deadlines.extend(self.review_deadline());
         deadlines.into_iter().min()
     }
 }
