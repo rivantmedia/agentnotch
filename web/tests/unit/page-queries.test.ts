@@ -16,6 +16,14 @@ import {
   dashboardProjectsInput,
 } from "~/app/dashboard/queries";
 import {
+  asksForAccounts,
+  combinedUsageInput,
+  USAGE_PROJECTS_LIMIT,
+  usageProjectsInput,
+  usageTimelineInput,
+} from "~/app/usage/queries";
+import { selectionFromParam } from "~/lib/account-selection";
+import {
   accountProjectHref,
   allProjectsInput,
   isProjectId,
@@ -166,5 +174,50 @@ describe("usage by project queries", () => {
     expect(isProjectId("a b")).toBe(false);
     expect(isProjectId("../accounts")).toBe(false);
     expect(isProjectId("x".repeat(129))).toBe(false);
+  });
+});
+
+describe("usage page queries", () => {
+  const K2 = "d8485d82cdbceb2582311953e97b1666022b76dcbb98ef283fece56b1b5b8874";
+
+  it("ask about every account without a selection: no keys at all, not an undefined list", () => {
+    expect(combinedUsageInput("7d", null)).toEqual({ period: "7d" });
+    expect(Object.keys(combinedUsageInput("7d", null))).toEqual(["period"]);
+    expect(usageProjectsInput("all", null)).toEqual({
+      period: "all",
+      limit: USAGE_PROJECTS_LIMIT,
+    });
+    expect(usageTimelineInput("30d", null, "Asia/Kolkata")).toEqual({
+      period: "30d",
+      timeZone: "Asia/Kolkata",
+    });
+  });
+
+  it("build the same input from the address bar on the server and in the browser", () => {
+    // The server reads `?accounts=` from its search params, the browser from useSearchParams:
+    // both through selectionFromParam, so the keys arrive in one order.
+    const fromServer = selectionFromParam(`${K2},${KEY}`);
+    const fromBrowser = selectionFromParam(
+      new URLSearchParams(`accounts=${KEY}%2C${K2}`).get("accounts"),
+    );
+    expect(combinedUsageInput("30d", fromServer)).toEqual(
+      combinedUsageInput("30d", fromBrowser),
+    );
+    expect(combinedUsageInput("30d", fromServer)).toEqual({
+      period: "30d",
+      accountKeys: [KEY, K2],
+    });
+    expect(usageProjectsInput("7d", [K2])).toEqual({
+      period: "7d",
+      accountKeys: [K2],
+      limit: USAGE_PROJECTS_LIMIT,
+    });
+  });
+
+  it("ask nothing for a selection of no accounts", () => {
+    expect(asksForAccounts(null)).toBe(true);
+    expect(asksForAccounts([KEY])).toBe(true);
+    expect(asksForAccounts([])).toBe(false);
+    expect(asksForAccounts(selectionFromParam(""))).toBe(false);
   });
 });
