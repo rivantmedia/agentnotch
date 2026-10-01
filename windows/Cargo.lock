@@ -38,6 +38,7 @@ dependencies = [
  "agentnotch-engine",
  "agentnotch-proto",
  "agentnotch-win",
+ "crossbeam-channel",
  "serde_json",
  "windows-sys 0.61.2",
 ]

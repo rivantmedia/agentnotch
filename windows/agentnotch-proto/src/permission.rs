@@ -57,6 +57,58 @@ impl PermissionResponse {
         }
     }
 
+    /// "Always allow": allow, and hand Claude Code back one of the request's
+    /// own `permission_suggestions`, verbatim.
+    pub fn always_allow(suggestion: Value) -> Self {
+        PermissionResponse {
+            updated_permissions: Some(vec![suggestion]),
+            ..PermissionResponse::allow()
+        }
+    }
+
+    /// An AskUserQuestion answered: allow with `{"answers": {question text,
+    /// exactly as it was asked: the chosen label or labels}}`, which the
+    /// hook merges onto the original input.
+    pub fn answers<Q, A>(answers: impl IntoIterator<Item = (Q, A)>) -> Self
+    where
+        Q: Into<String>,
+        A: Into<String>,
+    {
+        let answers: Map<String, Value> = answers
+            .into_iter()
+            .map(|(question, answer)| (question.into(), Value::String(answer.into())))
+            .collect();
+        let mut input = Map::new();
+        input.insert("answers".into(), Value::Object(answers));
+        PermissionResponse {
+            updated_input: Some(input),
+            ..PermissionResponse::allow()
+        }
+    }
+
+    /// An ExitPlanMode approved. A plain allow is ignored for tools that need
+    /// the user, so the original input is echoed: an empty update.
+    pub fn approve_plan() -> Self {
+        PermissionResponse {
+            updated_input: Some(Map::new()),
+            ..PermissionResponse::allow()
+        }
+    }
+
+    /// "Keep planning" on an ExitPlanMode: a deny that tells Claude why.
+    pub fn keep_planning() -> Self {
+        PermissionResponse::deny(Some(KEEP_PLANNING_REASON.into()))
+    }
+
+    /// No decision: the hook prints nothing and Claude Code's own prompt
+    /// decides. Closing the connection without a frame says the same.
+    pub fn ask() -> Self {
+        PermissionResponse {
+            decision: Decision::Ask,
+            ..PermissionResponse::allow()
+        }
+    }
+
     /// The frame's bytes.
     pub fn to_json(&self) -> Vec<u8> {
         serde_json::to_vec(self).unwrap_or_default()

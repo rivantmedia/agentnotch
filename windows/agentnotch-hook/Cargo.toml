@@ -23,6 +23,11 @@ name = "console-reader"         # test-only reader for console_type.rs; never bu
 path = "tests/bin/console-reader.rs"
 test = false
 
+[[bin]]
+name = "relay"                  # test-only parent process for hook_hygiene.rs (copied as claude.exe / code.exe); never bundled
+path = "tests/bin/relay.rs"
+test = false
+
 [dependencies]                  # no argument parser, ever (§1.8); check-seams.sh rejects clap/argh/pico-args/lexopt here
 agentnotch-proto = { path = "../agentnotch-proto" }
 serde_json = "1"
@@ -36,6 +41,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage
 [dev-dependencies]
 agentnotch-win = { path = "../agentnotch-win" }
 agentnotch-engine = { path = "../agentnotch-engine", features = ["testkit"] }
+crossbeam-channel = "0.5"     # the transport's event channel, for tests/common (the engine and agentnotch-win use the same)
 
 [lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
