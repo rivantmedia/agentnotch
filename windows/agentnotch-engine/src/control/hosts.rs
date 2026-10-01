@@ -243,7 +243,9 @@ pub struct ConsoleWindow {
 
 /// The front-most window of the process tree's host; without a known host,
 /// the console host's own window when the shell has one, else the window of
-/// the outermost ancestor that has any (the app the terminal lives in).
+/// the outermost process of the chain (Claude last) that has any: the app the
+/// terminal lives in, or a classic console window, which the console reports
+/// as owned by its first client (`ConsoleSetWindowOwner`), a shell or Claude.
 fn tree_window<'a>(
     matched: &HostMatch,
     table: &ProcessTable,
@@ -267,6 +269,7 @@ fn tree_window<'a>(
             .chain
             .iter()
             .rev()
+            .chain(std::iter::once(&claude_pid))
             .find_map(|pid| windows.iter().find(|window| window.pid == *pid))
     })
 }
@@ -317,7 +320,12 @@ pub fn resolve(
     let window = tree_window(&matched, table, claude_pid, windows);
     match (&matched.kind, window) {
         (HostKind::Unknown, Some(window)) => {
-            let kind = if is_console_host(&window.exe_name) {
+            // A shell or Claude itself has a top-level window only as the
+            // owner the console names for its classic console window.
+            let console_window = is_console_host(&window.exe_name)
+                || is_shell(&window.exe_name)
+                || window.pid == claude_pid;
+            let kind = if console_window {
                 HostKind::Conhost
             } else {
                 HostKind::OtherConsoleHost {
