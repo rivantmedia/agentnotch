@@ -51,6 +51,11 @@ async function open(request, edit, options) {
   }, options));
 }
 
+/** The glue confirms the panel has the keyboard (an:panel_focus): only then do keys act, Esc included. */
+function keyboard(page, on) {
+  page.emit('an:panel_focus', { focused: on !== false });
+}
+
 /** No page error and no call the contract or the window gate would refuse. */
 function clean(page) {
   assert.deepEqual(page.errors.map(String), []);
@@ -510,8 +515,13 @@ test('a click outside closes the menu, a click on the gear toggles it, and Esc c
   assert.equal(page.$('.an-menu'), null, 'the gear toggles');
   page.click(gear(page));
   page.hub.clear();
+  // A click opens the menu whoever has the keyboard; its keys wait for the glue's word.
+  const shut = page.key({ key: 'Escape' });
+  assert.ok(page.$('.an-menu') !== null, 'Esc while the keyboard gate is shut does nothing');
+  assert.equal(shut.defaultPrevented, false);
+  keyboard(page);
   const esc = page.key({ key: 'Escape' });
-  assert.equal(page.$('.an-menu'), null);
+  assert.ok(page.$('.an-menu') === null);
   assert.equal(esc.defaultPrevented, true);
   assert.deepEqual(page.hub.calls, [], 'Esc with a menu open only closes the menu');
   clean(page);
@@ -522,7 +532,16 @@ test('arrow keys move through the menu items and skip a disabled one', async () 
   page.click(gear(page));
   const items = page.$$('.an-mi').filter((m) => !m.hasAttribute('disabled'));
   assert.equal(items.length, 6);
-  assert.equal(page.document.activeElement, items[0], 'the first item has focus');
+  assert.ok(page.document.activeElement === items[0], 'the first item has focus');
+  // While the keyboard gate is shut the menu takes no key: no move, and Enter or Space on the
+  // focused item clicks nothing (the browser's own click is cancelled on both).
+  page.key({ key: 'ArrowDown' });
+  assert.ok(page.document.activeElement === items[0], 'no move while the gate is shut');
+  for (const key of ['Enter', ' ']) {
+    assert.equal(page.key({ key }).defaultPrevented, true, `${JSON.stringify(key)} down`);
+    assert.equal(page.fire(items[0], 'keyup', { key }).defaultPrevented, true, `${JSON.stringify(key)} up`);
+  }
+  keyboard(page);
   page.key({ key: 'ArrowDown' });
   assert.equal(page.document.activeElement, items[1]);
   page.key({ key: 'End' });
@@ -611,6 +630,11 @@ test('Esc steps out one level at a time: menu, chat, list, panel (B_PanelStateTe
   assert.equal(state(page).route, 'session:needs-permission');
   assert.equal(state(page).selected, 'needs-permission');
   page.hub.clear();
+  // Esc is behind the keyboard gate like every other key (DESIGN-WIN §5.3).
+  page.key({ key: 'Escape' });
+  assert.equal(state(page).route, 'session:needs-permission', 'nothing while the gate is shut');
+  assert.deepEqual(page.hub.calls, []);
+  keyboard(page);
   page.key({ key: 'Escape' });
   assert.equal(state(page).route, 'sessions', 'the chat goes back to the list');
   assert.equal(state(page).filter, WORK, 'keeping the ring filter');
@@ -627,6 +651,7 @@ test('Esc steps out one level at a time: menu, chat, list, panel (B_PanelStateTe
 
 test('Esc that something else already handled does nothing here', async () => {
   const page = await open({ route: 'sessions' });
+  keyboard(page);
   // a composer's own Esc handling sits below the document in the event path
   page.document.body.addEventListener('keydown', (e) => e.preventDefault());
   page.hub.clear();

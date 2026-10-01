@@ -1270,6 +1270,15 @@
   function onKeyDown(event) {
     // WebView2's own shortcuts (reload, print, find, downloads) never reach the panel.
     if (C.isBrowserAccelerator(event)) event.preventDefault();
+    guardButtonKey(event);
+    // THE KEYBOARD GATE. Until the glue confirms this window is the foreground one, keys here
+    // may be keys the user is typing into a terminal: nothing acts on them (Esc and the gear
+    // menu's keys included, DESIGN-WIN §5.3) and no field takes them. They are dropped, not
+    // remembered.
+    if (!state.focused) {
+      if (isTextField(event.target)) event.preventDefault();
+      return;
+    }
     if (event.defaultPrevented && event.key === 'Escape') return;
     if (event.key === 'Escape') {
       event.preventDefault();
@@ -1287,14 +1296,6 @@
       return;
     }
     if (state.menuOpen) return;
-    guardButtonKey(event);
-    // THE KEYBOARD GATE. Until the glue confirms this window is the foreground one, keys here
-    // may be keys the user is typing into a terminal: nothing acts on them and no field takes
-    // them. They are dropped, not remembered.
-    if (!state.focused) {
-      if (isTextField(event.target)) event.preventDefault();
-      return;
-    }
     // The Windows key is never part of a panel shortcut.
     if (event.metaKey) return;
     var key = C.routerKey(event);
@@ -1334,8 +1335,9 @@
 
   /**
    * Enter and Space on a focused button are clicks the browser makes up. While the gate is shut
-   * no key may click anything; and Enter never clicks a button that answers a request or turns
-   * the hooks on (`data-an-noenter`): "a bare Enter never approves anything".
+   * no key may click anything, a gear menu item included; and Enter never clicks a button that
+   * answers a request or turns the hooks on (`data-an-noenter`): "a bare Enter never approves
+   * anything".
    */
   function guardButtonKey(event) {
     if (event.key !== 'Enter' && event.key !== ' ' && event.key !== 'Spacebar') return;
@@ -1345,7 +1347,7 @@
   }
 
   function onKeyUp(event) {
-    if (!state.menuOpen) guardButtonKey(event);
+    guardButtonKey(event);
   }
 
   /** While the gate is shut a field takes no text, however it arrives (a key, a paste, an IME). */

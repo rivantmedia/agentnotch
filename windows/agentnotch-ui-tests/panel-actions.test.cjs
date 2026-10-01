@@ -758,10 +758,31 @@ test('Ctrl+J shows the terminal, Ctrl+R marks reviewed or dismisses a failure, C
   clean(page);
 });
 
-test('Esc closes the panel from the list whether or not the keyboard gate is open', async () => {
+test('Esc is behind the keyboard gate too (DESIGN-WIN §5.3): nothing while it is shut, the panel closes once it is open', async () => {
   const page = await open();
+  page.tick(1000);
+  const shut = page.key({ key: 'Escape' });
+  assert.equal(shut.defaultPrevented, false, 'not swallowed: the page did nothing with it');
+  page.run("agentnotchPanel.navigate('session:needs-permission')");
+  page.hub.clear();
+  page.key({ key: 'Escape' });
+  assert.equal(state(page).route, 'session:needs-permission', 'a chat stays a chat while the gate is shut');
+  silent(page);
+  focus(page, false);
+  page.emit('an:panel_focus', {});
+  page.key({ key: 'Escape' });
+  silent(page, 'anything but focused:true keeps Esc shut out');
+  focus(page);
+  page.key({ key: 'Escape' });
+  assert.equal(state(page).route, 'sessions');
+  page.hub.clear();
   page.key({ key: 'Escape' });
   assert.deepEqual(plain(page.hub.calls), [{ method: 'panel_close', args: null }]);
+  focus(page, false);
+  page.hub.clear();
+  page.key({ key: 'Escape' });
+  silent(page, 'shut again');
+  clean(page);
 });
 
 test('in a chat the list\'s bars are gone: keys answer only what the chat says it shows', async () => {
