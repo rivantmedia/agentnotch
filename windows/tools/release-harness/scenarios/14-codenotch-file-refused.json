@@ -1,0 +1,30 @@
+{
+  "name": "publish refuses a file named Codenotch",
+  "previous": {
+    "version": "1.0.1"
+  },
+  "mac": {
+    "dmg": "Codenotch-1.1.0.dmg"
+  },
+  "expect": {
+    "jobs": {
+      "publish": "failure"
+    },
+    "annotations": [
+      {
+        "level": "error",
+        "job": "publish",
+        "contains": "Codenotch-1.1.0.dmg must not be published"
+      }
+    ],
+    "gh": {
+      "notCalled": [
+        "release create"
+      ]
+    },
+    "noRelease": [
+      "agentnotch-v1.1.0"
+    ],
+    "website": false
+  }
+}

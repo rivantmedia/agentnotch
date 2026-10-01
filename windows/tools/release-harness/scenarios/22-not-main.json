@@ -1,0 +1,27 @@
+{
+  "name": "a run from another branch stops at once, dry run or not",
+  "event": "workflow_dispatch",
+  "inputs": {
+    "dry_run": true
+  },
+  "ref": "refs/heads/wp11",
+  "previous": {
+    "version": "1.0.1"
+  },
+  "expect": {
+    "jobs": {
+      "plan": "failure",
+      "mac": "skipped",
+      "keys": "skipped",
+      "publish": "skipped"
+    },
+    "annotations": [
+      {
+        "level": "error",
+        "job": "plan",
+        "contains": "run from main only"
+      }
+    ],
+    "website": false
+  }
+}

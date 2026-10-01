@@ -1,0 +1,39 @@
+{
+  "name": "Scripts/tauri-update-public-key.txt pins the derived key: ok",
+  "previous": {
+    "version": "1.0.1",
+    "feed": "test-key"
+  },
+  "pin": "same",
+  "expect": {
+    "jobs": {
+      "plan": "success",
+      "release-tool": "success",
+      "keys": "success",
+      "mac": "success",
+      "windows": "success",
+      "sign-windows": "success",
+      "publish": "success"
+    },
+    "noAnnotations": [
+      "error",
+      "warning"
+    ],
+    "release": {
+      "tag": "agentnotch-v1.1.0",
+      "isDraft": false,
+      "isLatest": true,
+      "assets": [
+        "AgentNotch-1.1.0.dmg",
+        "AgentNotch-1.1.0.zip",
+        "appcast.xml",
+        "AgentNotch-1.1.0-Setup.exe",
+        "AgentNotch-1.1.0-Setup.exe.sig",
+        "latest.json"
+      ],
+      "name": "Agent Notch 1.1.0",
+      "targetCommitish": "c0ffeec0ffeec0ffeec0ffeec0ffeec0ffeeabcd",
+      "generateNotes": true
+    }
+  }
+}

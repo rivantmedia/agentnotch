@@ -1,0 +1,28 @@
+{
+  "name": "the Windows build says another version: sign-windows refuses it",
+  "previous": {
+    "version": "1.0.1"
+  },
+  "windows": {
+    "version": "1.0.9"
+  },
+  "expect": {
+    "jobs": {
+      "sign-windows": "failure",
+      "publish": "skipped"
+    },
+    "annotations": [
+      {
+        "level": "error",
+        "job": "sign-windows",
+        "contains": "is version '1.0.9', not 1.1.0"
+      }
+    ],
+    "gh": {
+      "notCalled": [
+        "release create"
+      ]
+    },
+    "website": false
+  }
+}

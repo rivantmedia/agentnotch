@@ -1,0 +1,21 @@
+{
+  "name": "the committed Mac key changed since the latest release: plan stops",
+  "previous": {
+    "version": "1.0.1",
+    "macKey": "other"
+  },
+  "expect": {
+    "jobs": {
+      "plan": "failure",
+      "publish": "skipped"
+    },
+    "annotations": [
+      {
+        "level": "error",
+        "job": "plan",
+        "contains": "is not the one agentnotch-v1.0.1 was built with"
+      }
+    ],
+    "website": false
+  }
+}

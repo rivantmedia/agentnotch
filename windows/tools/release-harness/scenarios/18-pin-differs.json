@@ -1,0 +1,29 @@
+{
+  "name": "the pin names another key: keys stops, even in a dry run",
+  "event": "workflow_dispatch",
+  "inputs": {
+    "dry_run": true
+  },
+  "previous": {
+    "version": "1.0.1"
+  },
+  "pin": "other",
+  "expect": {
+    "jobs": {
+      "keys": "failure",
+      "windows": "skipped",
+      "publish": "skipped"
+    },
+    "annotations": [
+      {
+        "level": "error",
+        "job": "keys",
+        "contains": "is not the one Scripts/tauri-update-public-key.txt pins"
+      }
+    ],
+    "artifacts": {
+      "AgentNotch-1.1.0-dry-run": null
+    },
+    "website": false
+  }
+}

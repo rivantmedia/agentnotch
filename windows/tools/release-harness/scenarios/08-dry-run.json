@@ -1,0 +1,70 @@
+{
+  "name": "dry run with problems: only warnings, the six files kept as an artifact, nothing published",
+  "event": "workflow_dispatch",
+  "inputs": {
+    "dry_run": true
+  },
+  "previous": {
+    "version": "1.0.1",
+    "feed": "other-key",
+    "macKey": "other"
+  },
+  "draft": "foreign",
+  "expect": {
+    "jobs": {
+      "plan": "success",
+      "release-tool": "success",
+      "keys": "success",
+      "mac": "success",
+      "windows": "success",
+      "sign-windows": "success",
+      "publish": "success"
+    },
+    "noAnnotations": [
+      "error"
+    ],
+    "annotations": [
+      {
+        "level": "warning",
+        "job": "plan",
+        "contains": "A draft release for agentnotch-v1.1.0 exists that this workflow did not make"
+      },
+      {
+        "level": "warning",
+        "job": "plan",
+        "contains": "The update key in Scripts/sparkle-public-ed-key.txt"
+      },
+      {
+        "level": "warning",
+        "job": "keys",
+        "contains": "(a real run would stop here)"
+      }
+    ],
+    "steps": {
+      "publish": {
+        "Keep the files (dry run)": "success",
+        "Publish the release": "skipped",
+        "Check the feeds installs read": "skipped"
+      }
+    },
+    "gh": {
+      "notCalled": [
+        "release create",
+        "release delete",
+        "release edit"
+      ]
+    },
+    "artifacts": {
+      "AgentNotch-1.1.0-dry-run": [
+        "AgentNotch-1.1.0.dmg",
+        "AgentNotch-1.1.0.zip",
+        "appcast.xml",
+        "AgentNotch-1.1.0-Setup.exe",
+        "AgentNotch-1.1.0-Setup.exe.sig",
+        "latest.json"
+      ]
+    },
+    "curl": 0,
+    "website": false
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "name": "the draft holds a seventh file: it stays unpublished",
+  "previous": {
+    "version": "1.0.1"
+  },
+  "faults": {
+    "uploadExtra": "Codenotch.dmg"
+  },
+  "expect": {
+    "jobs": {
+      "publish": "failure"
+    },
+    "annotations": [
+      {
+        "level": "error",
+        "job": "publish",
+        "contains": "it stays unpublished"
+      }
+    ],
+    "gh": {
+      "notCalled": [
+        "release edit"
+      ]
+    },
+    "release": {
+      "tag": "agentnotch-v1.1.0",
+      "isDraft": true
+    },
+    "website": false
+  }
+}

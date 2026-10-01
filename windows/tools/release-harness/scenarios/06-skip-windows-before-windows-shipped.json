@@ -1,0 +1,42 @@
+{
+  "name": "skip_windows before Windows ever shipped: a notice, the Mac alone",
+  "event": "workflow_dispatch",
+  "inputs": {
+    "skip_windows": true
+  },
+  "previous": {
+    "version": "1.0.1"
+  },
+  "expect": {
+    "jobs": {
+      "plan": "success",
+      "keys": "skipped",
+      "publish": "success"
+    },
+    "annotations": [
+      {
+        "level": "notice",
+        "job": "plan",
+        "contains": "Publishing without the Windows build (skip_windows)"
+      }
+    ],
+    "noAnnotations": [
+      "error",
+      "warning"
+    ],
+    "release": {
+      "tag": "agentnotch-v1.1.0",
+      "isDraft": false,
+      "isLatest": true,
+      "assets": [
+        "AgentNotch-1.1.0.dmg",
+        "AgentNotch-1.1.0.zip",
+        "appcast.xml"
+      ],
+      "name": "Agent Notch 1.1.0",
+      "targetCommitish": "c0ffeec0ffeec0ffeec0ffeec0ffeec0ffeeabcd",
+      "generateNotes": true
+    },
+    "website": true
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "name": "another key with rotate_update_key ticked: a warning, then published",
+  "event": "workflow_dispatch",
+  "inputs": {
+    "rotate_update_key": true
+  },
+  "previous": {
+    "version": "1.0.1",
+    "feed": "other-key"
+  },
+  "expect": {
+    "jobs": {
+      "plan": "success",
+      "release-tool": "success",
+      "keys": "success",
+      "mac": "success",
+      "windows": "success",
+      "sign-windows": "success",
+      "publish": "success"
+    },
+    "noAnnotations": [
+      "error"
+    ],
+    "annotations": [
+      {
+        "level": "warning",
+        "job": "keys",
+        "contains": "was told to publish anyway"
+      }
+    ],
+    "release": {
+      "tag": "agentnotch-v1.1.0",
+      "isDraft": false,
+      "isLatest": true,
+      "assets": [
+        "AgentNotch-1.1.0.dmg",
+        "AgentNotch-1.1.0.zip",
+        "appcast.xml",
+        "AgentNotch-1.1.0-Setup.exe",
+        "AgentNotch-1.1.0-Setup.exe.sig",
+        "latest.json"
+      ],
+      "name": "Agent Notch 1.1.0",
+      "targetCommitish": "c0ffeec0ffeec0ffeec0ffeec0ffeec0ffeeabcd",
+      "generateNotes": true
+    },
+    "website": true
+  }
+}
