@@ -134,11 +134,16 @@ const FOCUS_SEEN: &str = r#"(function () {
   return s.focus.slice(s.focusMark || 0).indexOf(true) >= 0;
 })()"#;
 
-/// The generic invariant of every page: no text is cut off by its box. How many are.
+/// The generic invariant of every page: no text is cut off by its box. How many are. Text cut
+/// on purpose (a path or a name the pages mark `data-an-clip` and draw with an ellipsis, the
+/// rule of their own `layoutReport()`) isn't cut off.
 const TEXT_OVERFLOWS: &str = r#"(function () {
   var all = document.querySelectorAll("[data-an-text]"), cut = 0;
   for (var i = 0; i < all.length; i++) {
-    if (all[i].scrollWidth > all[i].clientWidth) { cut++; }
+    var el = all[i];
+    if (el.scrollWidth <= el.clientWidth) { continue; }
+    if (el.hasAttribute("data-an-clip") && getComputedStyle(el).textOverflow === "ellipsis") { continue; }
+    cut++;
   }
   return cut;
 })()"#;
@@ -703,6 +708,14 @@ impl Run<'_> {
                 }
             }
         }
+        if let Ok(Some(answers)) = &hook {
+            if answers.get("layout") == Some(&false) {
+                let failures = webview::eval(&page, &layout_failures(global), QUICK);
+                super::log(&format!(
+                    "self-test: {label} {name}: the page's layout report: {failures:?}"
+                ));
+            }
+        }
         if let Err(e) = hook {
             self.fail(format!("{label}: the page's selfTest hook failed: {e}"));
         }
@@ -987,8 +1000,8 @@ fn describe(edge: Option<&str>) -> String {
     }
 }
 
-/// Calls the page's `selfTest({edge, width})` when it has one: its answers, or `None` for a
-/// page without a hook.
+/// Calls the page's `selfTest({edge, width})` when it has one, else its `layoutReport()` (the
+/// name the UI package gives the same check): its answers, or `None` for a page without a hook.
 fn page_hook(
     page: &WebviewWindow,
     global: &str,
@@ -1005,13 +1018,27 @@ fn page_hook(
 }
 
 /// The expression that calls a page's hook. `global` is one of [`HOOKS`]' names; the arguments
-/// go in as JSON.
+/// go in as JSON. A page with only `layoutReport()` (`{ok, failures, ...}`) answers one
+/// invariant, `layout`, which holds when its report is ok.
 fn hook_call(global: &str, edge: &str, width: f64) -> String {
     let arguments = json!({ "edge": edge, "width": width });
     format!(
         "(function () {{ var o = window.{global}; \
-         if (!o || typeof o.selfTest !== \"function\") {{ return null; }} \
-         return o.selfTest({arguments}); }})()"
+         if (!o) {{ return null; }} \
+         if (typeof o.selfTest === \"function\") {{ return o.selfTest({arguments}); }} \
+         if (typeof o.layoutReport !== \"function\") {{ return null; }} \
+         var r = o.layoutReport(); \
+         return {{ layout: !!r && r.ok === true }}; }})()"
+    )
+}
+
+/// What a page's `layoutReport()` names as broken, for the run log.
+fn layout_failures(global: &str) -> String {
+    format!(
+        "(function () {{ var o = window.{global}; \
+         if (!o || typeof o.layoutReport !== \"function\") {{ return null; }} \
+         var r = o.layoutReport(); \
+         return r && r.failures ? r.failures.slice(0, 20) : null; }})()"
     )
 }
 
@@ -1025,8 +1052,12 @@ mod tests {
         assert_eq!(
             hook_call("agentnotchPanel", "top", 520.0),
             "(function () { var o = window.agentnotchPanel; \
-             if (!o || typeof o.selfTest !== \"function\") { return null; } \
-             return o.selfTest({\"edge\":\"top\",\"width\":520.0}); })()"
+             if (!o) { return null; } \
+             if (typeof o.selfTest === \"function\") { \
+             return o.selfTest({\"edge\":\"top\",\"width\":520.0}); } \
+             if (typeof o.layoutReport !== \"function\") { return null; } \
+             var r = o.layoutReport(); \
+             return { layout: !!r && r.ok === true }; })()"
         );
         // Whatever the edge's text, it arrives as a string and nothing else.
         let odd = hook_call("agentnotch", "\"); alert(1); (\"", 0.0);
