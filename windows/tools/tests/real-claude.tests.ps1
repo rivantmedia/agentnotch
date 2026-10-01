@@ -57,6 +57,26 @@ Test-Case 'the gate: closed says what it waits for and that nothing runs; open s
     Assert-Equal (Get-RealClaudeGate -Gates (Read-Gates -Path $open)).Open $true 'Open'
 }
 
+Test-Case 'real Claude Code runs only on a GitHub-hosted Windows runner, whatever the gate says' {
+    $hosted = @{ GITHUB_ACTIONS = 'true'; RUNNER_ENVIRONMENT = 'github-hosted'; RUNNER_TEMP = 'D:\a\_temp' }
+    Assert-Equal (Get-RunnerRefusal -OnWindows $true -Environment $hosted) $null 'a GitHub-hosted Windows runner'
+    Assert-True ((Get-RunnerRefusal -OnWindows $false -Environment $hosted) -match 'Windows CI runner only') 'not Windows'
+    Assert-True ((Get-RunnerRefusal -OnWindows $true -Environment @{ RUNNER_ENVIRONMENT = 'github-hosted'; RUNNER_TEMP = 'x' }) -match 'GitHub Actions only') 'a PC'
+    Assert-True ((Get-RunnerRefusal -OnWindows $true -Environment @{ GITHUB_ACTIONS = 'true'; RUNNER_ENVIRONMENT = 'self-hosted'; RUNNER_TEMP = 'x' }) -match "not 'self-hosted'") 'a self-hosted runner'
+    Assert-True ((Get-RunnerRefusal -OnWindows $true -Environment @{ GITHUB_ACTIONS = 'true'; RUNNER_ENVIRONMENT = 'github-hosted' }) -match 'RUNNER_TEMP') 'no RUNNER_TEMP'
+
+    # The script itself, with the gate open, on this machine: refused before anything is set up.
+    $open = Join-Path $scratch 'open-run.json'
+    Write-GatesFile $open $true
+    $pwsh = (Get-Process -Id $PID).Path
+    $artifacts = Join-Path $scratch 'rc-out'
+    $output = & $pwsh -NoProfile -NonInteractive -File (Join-Path $windowsDir 'scripts/smoke/real-claude.ps1') `
+        -Installer (Join-Path $scratch 'none.exe') -Artifacts $artifacts -GatesFile $open 2>&1 | Out-String
+    Assert-Equal $LASTEXITCODE 1 'exit code'
+    Assert-True ($output -match 'Windows CI runner only|GitHub Actions only|GitHub-hosted runner only') "the refusal: $output"
+    Assert-True (-not (Test-Path -LiteralPath $artifacts)) 'nothing was set up'
+}
+
 Test-Case 'the committed gates file is readable and names realClaude' {
     $gate = Get-RealClaudeGate -Gates (Read-Gates -Path (Join-Path $windowsDir 'scripts/smoke/gates.json'))
     Assert-True ($gate.Open -is [bool]) 'a boolean gate'

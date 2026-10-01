@@ -119,6 +119,25 @@ function Get-RealClaudeGate {
     [pscustomobject]@{ Open = $open; Message = $message }
 }
 
+# Where real Claude Code may run: a GitHub-hosted Windows runner, thrown away after the job.
+# Never a developer's PC or a self-hosted runner (whose profile and logins are real), whatever
+# the gate says. Answers why not, or $null.
+function Get-RunnerRefusal {
+    param([bool]$OnWindows = $IsWindows, [System.Collections.IDictionary]$Environment = $null)
+    if ($null -eq $Environment) {
+        $Environment = @{
+            GITHUB_ACTIONS     = $env:GITHUB_ACTIONS
+            RUNNER_ENVIRONMENT = $env:RUNNER_ENVIRONMENT
+            RUNNER_TEMP        = $env:RUNNER_TEMP
+        }
+    }
+    if (-not $OnWindows) { return 'the hermetic Claude Code job runs on the Windows CI runner only, never on this machine' }
+    if ($Environment['GITHUB_ACTIONS'] -ne 'true') { return 'the hermetic Claude Code job runs in GitHub Actions only (GITHUB_ACTIONS is not true)' }
+    if ($Environment['RUNNER_ENVIRONMENT'] -ne 'github-hosted') { return "the hermetic Claude Code job runs on a GitHub-hosted runner only, not '$($Environment['RUNNER_ENVIRONMENT'])'" }
+    if (-not $Environment['RUNNER_TEMP']) { return "the hermetic Claude Code job needs the runner's RUNNER_TEMP" }
+    $null
+}
+
 # --- pure helpers (tested on any machine by windows/tools/tests/real-claude.tests.ps1) ----------------
 
 # Names never handed to Claude Code from the runner: anything that could select another account,
@@ -942,7 +961,8 @@ if ($RcOptions.GateOnly) { exit 0 }
 
 $ok = $false
 try {
-    if (-not $IsWindows) { throw 'the hermetic Claude Code job runs on the Windows runner only' }
+    $refusal = Get-RunnerRefusal
+    if ($refusal) { throw $refusal }
     if (-not $RcOptions.Installer) { throw '-Installer is required' }
     Initialize-RealClaudeContext -Installer $RcOptions.Installer -Artifacts $RcOptions.Artifacts
     $elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
