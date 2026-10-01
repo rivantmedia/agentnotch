@@ -6,7 +6,8 @@
 //! planner, probe, locator, environment scrub, versions and the
 //! `.claude.json` reader and Claude Desktop's cache reader (re-exported below
 //! under their §3.4 paths) and the [`UsageStore`]: status lines, caches, Claude
-//! Desktop, persistence and the ring reading (its probe half is `store_probes`).
+//! Desktop, persistence and the ring reading; its probe half (what is probed
+//! when, requested refreshes, finishing a probe) is `store_probes`.
 
 pub mod claude_json;
 pub mod desktop;
@@ -19,6 +20,7 @@ pub mod probe;
 pub mod ring_windows;
 pub mod schedule;
 pub mod store;
+pub mod store_probes;
 pub mod versions;
 
 pub use desktop::{desktop_cache_format, read_desktop_cache};
@@ -27,3 +29,4 @@ pub use locator::locate_claude;
 pub use planner::probe_folder;
 pub use probe::run_probe;
 pub use store::{UsageStore, UsageStoreConfig};
+pub use store_probes::{ProbeEnvironment, RefreshRequest};

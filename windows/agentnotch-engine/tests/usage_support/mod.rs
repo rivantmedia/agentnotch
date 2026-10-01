@@ -152,3 +152,87 @@ pub fn expected(
         organization_scope: organization_scope.map(str::to_owned),
     }
 }
+
+// ---- times and status lines (the store's tests) ----
+
+use agentnotch_engine::model::{Attribution, SessionId, StatusLineMessage, UsageWindow};
+use agentnotch_engine::runtime_types::{IngestContext, UsageObservation};
+use agentnotch_engine::usage::UsageStore;
+use std::time::{Duration, UNIX_EPOCH};
+
+/// Whole seconds from the epoch (negative: before it).
+pub fn t(seconds: i64) -> std::time::SystemTime {
+    if seconds >= 0 {
+        UNIX_EPOCH + Duration::from_secs(seconds as u64)
+    } else {
+        UNIX_EPOCH - Duration::from_secs(seconds.unsigned_abs())
+    }
+}
+
+/// The fixtures' "now": the Swift `UsageFixture.now`.
+pub fn now() -> std::time::SystemTime {
+    t(1_800_000_000)
+}
+
+pub fn ago(seconds: i64) -> std::time::SystemTime {
+    t(1_800_000_000 - seconds)
+}
+
+pub fn plus(base: std::time::SystemTime, seconds: f64) -> std::time::SystemTime {
+    base + Duration::from_secs_f64(seconds)
+}
+
+/// One status line update, like the Swift `line(...)`.
+pub struct Line {
+    pub five: Option<UsageWindow>,
+    pub weekly: Option<UsageWindow>,
+    pub process: u32,
+    pub session: String,
+    pub at: std::time::SystemTime,
+    /// The kernel's start time of the process.
+    pub start: Option<std::time::SystemTime>,
+    pub folder: String,
+    pub attribution: Attribution,
+}
+
+impl Line {
+    pub fn started(mut self, start: std::time::SystemTime) -> Line {
+        self.start = Some(start);
+        self
+    }
+
+    pub fn session(mut self, session: &str) -> Line {
+        self.session = session.to_owned();
+        self
+    }
+}
+
+/// Hands the store a status line the way the hub does: the pid is trusted.
+pub fn feed(store: &mut UsageStore, l: Line) -> Option<UsageObservation> {
+    let message = StatusLineMessage {
+        session_id: SessionId::from(l.session.as_str()),
+        cwd: None,
+        transcript_path: None,
+        config_dir_env: Some(l.folder.clone()),
+        account_id: Some(l.folder.as_str().into()),
+        received_at: l.at,
+        rate_limits: None,
+        five_hour: l.five.clone(),
+        seven_day: l.weekly.clone(),
+        context_used_percent: None,
+        context_window_size: None,
+        model_id: None,
+        model_display_name: None,
+        cost_usd: None,
+        session_name: None,
+        claude_code_version: None,
+        pid: Some(l.process),
+    };
+    let ctx = IngestContext {
+        attribution: l.attribution.clone(),
+        account: None,
+        trusted_pid: Some(l.process),
+        pid_started: l.start,
+    };
+    store.ingest_status_line(&message, ctx, l.at)
+}

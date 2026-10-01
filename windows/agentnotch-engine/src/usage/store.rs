@@ -10,7 +10,7 @@
 //! 3. Claude Desktop's HTTP cache, with the "Also read Claude Desktop's
 //!    cached usage" setting on, for accounts whose claude.ai organization is
 //!    known: at most once a minute, every 5 minutes after a miss;
-//! 4. the usage probe (`store_probes.rs`, wp4-8).
+//! 4. the usage probe (`store_probes.rs`).
 //!
 //! Per window the most current reading wins (`merge`). The Swift store is a
 //! main-actor object with timers; this one is plain data driven with an
@@ -21,8 +21,9 @@
 //! and writes `usage-state.json` whenever `save_due_at` has passed
 //! (`take_state_to_save`). Nothing here reads a file, a clock or a process.
 //!
-//! The probe half is a second `impl UsageStore` in `store_probes.rs`: the
-//! fields it needs are `pub(super)`.
+//! The probe half (what to probe and when, requested refreshes, finishing a
+//! probe) is a second `impl UsageStore` in `store_probes.rs`: the fields it
+//! needs are `pub(super)`.
 
 use crate::core::paths::Paths;
 use crate::core::time::IsoSeconds;
@@ -36,14 +37,15 @@ use crate::persist::usage::{
     PersistedUsageAccount, UsageStateFile,
 };
 use crate::runtime_types::{
-    ClaudeJsonRead, IngestContext, ProbePlan, ProbeResult, RingReading, UsageObservation,
+    ClaudeJsonRead, IngestContext, RefreshReason, RingReading, UsageObservation,
 };
 use crate::usage::merge::{self, StatusWindow};
 use crate::usage::ring_windows::{self, SESSION_ID, WEEKLY_ID};
 use crate::usage::schedule;
-use std::collections::{BTreeMap, BTreeSet};
+use crate::usage::store_probes::{PendingRefresh, ProbeEnvironment};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// What the store is told once, and what the settings change.
 #[derive(Debug, Clone)]
@@ -53,6 +55,9 @@ pub struct UsageStoreConfig {
     /// Probes run on their own schedule (off when sealed, and in dev runs
     /// unless `AGENTNOTCH_USAGE_PROBE=1`; `DevFlags::probes_allowed`).
     pub probes_allowed: bool,
+    /// Claude Code is never launched, not even for a requested refresh
+    /// (a sealed run); the account then reads "Usage probes are off".
+    pub probes_disabled: bool,
     /// `usageProbeIntervalMinutes`: 0 turns the probe off.
     pub probe_interval_minutes: u32,
     /// "Also read Claude Desktop's cached usage".
@@ -67,6 +72,7 @@ impl Default for UsageStoreConfig {
         UsageStoreConfig {
             home: PathBuf::new(),
             probes_allowed: true,
+            probes_disabled: false,
             probe_interval_minutes: 5,
             reads_desktop: true,
             mirrors_default: false,
@@ -117,6 +123,28 @@ pub struct UsageStore {
     /// Between `start` and `stop`: saves are only scheduled while running.
     pub(super) started: bool,
     pub(super) save_due_at: Option<SystemTime>,
+    // ---- the probe half (store_probes.rs) ----
+    /// The registry's folders as last told (`set_accounts`): a probe plan
+    /// needs the run folders' paths, kinds and activity.
+    pub(super) folders: Vec<RunFolder>,
+    /// When each folder's `.claude.json` last changed, as the hub's reads
+    /// stamped it (a `Paths::key`): a sign of Claude Code running there.
+    pub(super) config_mtime: BTreeMap<String, SystemTime>,
+    /// Requested probes, first in first out.
+    pub(super) forced_queue: VecDeque<(IdentityId, RefreshReason)>,
+    /// The identity a probe is running for (one at a time).
+    pub(super) probing: Option<IdentityId>,
+    /// The `claude` file that probe was planned with, remembered if it works.
+    pub(super) probing_binary: Option<PathBuf>,
+    /// Requests waiting for Claude Desktop's cache to be read (deciding
+    /// whether to ask Claude Code comes after).
+    pub(super) pending_refresh: BTreeMap<IdentityId, PendingRefresh>,
+    /// `stop()` was called: nothing is probed any more.
+    pub(super) stopped: bool,
+    pub(super) probe_env: Option<ProbeEnvironment>,
+    /// The `claude` that last answered a probe, tried right after the
+    /// Settings choice.
+    pub(super) remembered_binary: Option<PathBuf>,
 }
 
 impl Default for UsageStore {
@@ -153,6 +181,15 @@ impl UsageStore {
             external_misses: BTreeSet::new(),
             started: false,
             save_due_at: None,
+            folders: Vec::new(),
+            config_mtime: BTreeMap::new(),
+            forced_queue: VecDeque::new(),
+            probing: None,
+            probing_binary: None,
+            pending_refresh: BTreeMap::new(),
+            stopped: false,
+            probe_env: None,
+            remembered_binary: None,
         }
     }
 
@@ -161,12 +198,20 @@ impl UsageStore {
     /// The store runs: changes schedule a save from now on.
     pub fn start(&mut self) {
         self.started = true;
+        self.stopped = false;
     }
 
-    /// The store stops (quitting): no more saves are scheduled. The caller
-    /// writes [`UsageStore::save_now`] once.
+    /// The store stops (quitting): no more saves are scheduled and nothing
+    /// is probed any more, not even a request queued behind the probe that
+    /// is still running (which still finishes through `finish_probe`). The
+    /// caller writes [`UsageStore::save_now`] once.
     pub fn stop(&mut self) {
         self.started = false;
+        self.stopped = true;
+        self.pending_refresh.clear();
+        for (id, _) in std::mem::take(&mut self.forced_queue) {
+            self.forget_request(&id);
+        }
     }
 
     /// The settings the store was built with, as they stand.
@@ -190,10 +235,12 @@ impl UsageStore {
     }
 
     /// The identities whose ring is switched off: no probe and no Claude
-    /// Desktop read runs for them until they are back. (Dropping the probe
-    /// requests still queued for them is the probe half's, `store_probes.rs`.)
+    /// Desktop read runs for them until they are back. Requests still queued
+    /// for them are dropped, and with them their "checking..." state (the
+    /// one being probed finishes).
     pub fn set_paused(&mut self, ids: BTreeSet<IdentityId>) {
         self.paused = ids;
+        self.drop_requests_of_paused();
     }
 
     /// Whether an identity's ring is switched off.
@@ -321,8 +368,9 @@ impl UsageStore {
     /// takes the status lines it gave its old account with it. A first call
     /// with the launch's registry prunes what was fed before it, so call it
     /// before feeding anything.
-    pub fn set_accounts(&mut self, accounts: &[Account], _folders: &[RunFolder], now: SystemTime) {
+    pub fn set_accounts(&mut self, accounts: &[Account], folders: &[RunFolder], now: SystemTime) {
         self.accounts = accounts.to_vec();
+        self.folders = folders.to_vec();
         self.adopt_folder_keyed_state();
         let known: BTreeSet<IdentityId> = self
             .accounts
@@ -357,7 +405,7 @@ impl UsageStore {
             .find(|account| account.identity_id == *id)
     }
 
-    fn is_identity(&self, id: &IdentityId) -> bool {
+    pub(super) fn is_identity(&self, id: &IdentityId) -> bool {
         self.account(id).is_some()
     }
 
@@ -724,6 +772,17 @@ impl UsageStore {
     ) -> Vec<UsageObservation> {
         let wants_organizations = self.config.reads_desktop;
         let mut observations = Vec::new();
+        for read in reads {
+            let key = self.paths.key(read.folder.as_str());
+            match read.stamp {
+                Some((mtime_ns, _)) => {
+                    self.config_mtime.insert(key, time_of_ns(mtime_ns));
+                }
+                None => {
+                    self.config_mtime.remove(&key);
+                }
+            }
+        }
         let accounts = self.accounts.clone();
         for account in &accounts {
             let id = &account.identity_id;
@@ -874,6 +933,7 @@ impl UsageStore {
         reading: &DesktopReading,
         now: SystemTime,
     ) -> Option<UsageObservation> {
+        self.note_desktop_answered(id);
         if let DesktopReading::Reading {
             windows,
             observed_at,
@@ -1097,23 +1157,15 @@ impl UsageStore {
             }
         }
     }
+}
 
-    // ---- the probe half (store_probes.rs, wp4-8) ----
-
-    /// The probe due now, if any. Not built yet: wp4-8.
-    pub fn due_probe(&mut self, now: SystemTime) -> Option<ProbePlan> {
-        let _ = now;
-        None
-    }
-
-    /// A probe's result. Not built yet: wp4-8.
-    pub fn finish_probe(&mut self, r: ProbeResult, now: SystemTime) {
-        let _ = (r, now);
-    }
-
-    /// A probe is running now. Not built yet: wp4-8.
-    pub fn is_probing(&self) -> bool {
-        false
+/// A file's modification stamp (nanoseconds since the epoch) as a time.
+fn time_of_ns(ns: i128) -> SystemTime {
+    let magnitude = Duration::from_nanos(ns.unsigned_abs().min(u128::from(u64::MAX)) as u64);
+    if ns >= 0 {
+        UNIX_EPOCH + magnitude
+    } else {
+        UNIX_EPOCH - magnitude
     }
 }
 

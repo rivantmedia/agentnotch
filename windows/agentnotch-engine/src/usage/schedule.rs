@@ -49,6 +49,9 @@ pub const STATUS_LINE_RETENTION: Duration = Duration::from_secs(UsageWindow::WEE
 /// A requested refresh re-reads the caches first (they cost nothing) and
 /// decides about asking Claude Code once they are in, or after this long.
 pub const REFRESH_READ_WAIT: Duration = Duration::from_secs(5);
+/// A requested refresh is waited for until the probe answered, or this long
+/// at most (the owner honours the deadline `UsageStore::refresh` returns).
+pub const REFRESH_WAIT_LIMIT: Duration = Duration::from_secs(20);
 
 /// Shown for accounts whose `.claude.json` has no claude.ai login.
 pub const NOT_SIGNED_IN_TEXT: &str = "Not signed in to Claude";
