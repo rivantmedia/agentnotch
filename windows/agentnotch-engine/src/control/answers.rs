@@ -16,15 +16,31 @@ const NOT_A_QUESTION: &str = "That request isn't a question.";
 const NOT_A_PLAN: &str = "That request isn't a plan.";
 const NO_ANSWERS: &str = "No answer was chosen.";
 
-fn is_question(req: &PendingRequest) -> bool {
-    req.tool_name == "AskUserQuestion" || req.kind == RequestKind::Question
+/// The Mac keys every rule on the tool name alone (`ClaudeSessionMonitor`):
+/// only AskUserQuestion takes answers.
+const QUESTION_TOOL: &str = "AskUserQuestion";
+/// Tools with `requiresUserInteraction` besides AskUserQuestion: Claude Code
+/// takes their decision only with `updatedInput`, and an empty update makes
+/// the hook echo the original input back.
+const INPUT_ECHO_TOOLS: [&str; 1] = ["ExitPlanMode"];
+
+/// Whether answers may be sent: by tool name only, so a request whose kind
+/// disagrees with its tool never gets answers merged into its input.
+fn takes_answers(req: &PendingRequest) -> bool {
+    req.tool_name == QUESTION_TOOL
 }
 
-/// Tools that require user interaction ignore a plain allow: Claude Code
-/// takes the decision only with `updatedInput`, and an empty update makes
-/// the hook echo the original input back.
+/// Whether a plain allow must be refused. Wider than [`takes_answers`] on
+/// purpose: a request shown as a question is never allowed without its
+/// answers, whatever its tool says.
+fn refuses_plain_allow(req: &PendingRequest) -> bool {
+    takes_answers(req) || req.kind == RequestKind::Question
+}
+
+/// Whether an allow echoes the original input (and plan answers apply): by
+/// tool name only, so no other tool's input is ever echoed back.
 fn needs_input_echo(req: &PendingRequest) -> bool {
-    req.tool_name == "ExitPlanMode" || req.kind == RequestKind::Plan
+    INPUT_ECHO_TOOLS.contains(&req.tool_name.as_str())
 }
 
 /// The response frame for answering `req` with `a`, or why that answer
@@ -43,7 +59,7 @@ fn needs_input_echo(req: &PendingRequest) -> bool {
 pub fn permission_response(req: &PendingRequest, a: &Answer) -> Result<PermissionResponse, String> {
     match a {
         Answer::Allow { always } => {
-            if is_question(req) {
+            if refuses_plain_allow(req) {
                 return Err(QUESTION_NEEDS_ANSWERS.into());
             }
             let mut response = PermissionResponse::allow();
@@ -62,7 +78,7 @@ pub fn permission_response(req: &PendingRequest, a: &Answer) -> Result<Permissio
             reason.clone().filter(|reason| !reason.trim().is_empty()),
         )),
         Answer::Questions { answers } => {
-            if !is_question(req) {
+            if !takes_answers(req) {
                 return Err(NOT_A_QUESTION.into());
             }
             if answers.is_empty() {

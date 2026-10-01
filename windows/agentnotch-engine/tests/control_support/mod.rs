@@ -84,6 +84,26 @@ pub fn request(session: &str, tool: &str, input: Value, suggestions: &[Value]) -
     }
 }
 
+/// A held request with every field the answer rules read given outright,
+/// so a test can make the kind disagree with the tool. `always` is the
+/// suggestion "Always allow" sends back, if any.
+pub fn pending(
+    tool: &str,
+    kind: RequestKind,
+    input: Value,
+    always: Option<Value>,
+) -> PendingRequest {
+    PendingRequest {
+        kind,
+        always: always.map(|suggestion| AlwaysRule {
+            description: "Don't ask again".into(),
+            suggestion,
+            inline: true,
+        }),
+        ..request("s1", tool, input, &[])
+    }
+}
+
 /// `view`, waiting on a request for `tool`.
 pub fn waiting_on(mut view: SessionView, tool: &str, input: Value) -> SessionView {
     view.state = SessionState::NeedsYou(NeedsInputReason::for_approval(tool));
