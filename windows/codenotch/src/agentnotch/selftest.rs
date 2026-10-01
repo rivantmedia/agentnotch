@@ -36,7 +36,7 @@ use std::time::{Duration, Instant};
 use agentnotch_engine::geometry::panel::{PanelEdge, PxRect};
 use agentnotch_win::window;
 use serde_json::{json, Value};
-use tauri::{AppHandle, Listener, Manager, WebviewWindow};
+use tauri::{AppHandle, Listener, Manager, PhysicalSize, WebviewWindow};
 
 use super::panel_window::{self, Placed};
 use super::selftest_report::{
@@ -477,6 +477,9 @@ impl Run<'_> {
         };
         // Before the reload below, so the page loads at the scale it is then checked at.
         if let Some(scale) = self.scale {
+            if label == SETTINGS {
+                self.size_for_scale(&page, scale);
+            }
             match webview::set_scale(&page, scale) {
                 Ok(now) => super::log(&format!(
                     "self-test: {label} asked to draw at {scale}, WebView2 says {now}"
@@ -488,6 +491,30 @@ impl Run<'_> {
             Ok(()) => super::log(&format!("self-test: collector in {label}")),
             Err(e) => self.fail(format!(
                 "{label}: the collector could not be installed: {e}"
+            )),
+        }
+    }
+
+    /// At a forced scale the settings page keeps the CSS size upstream gives its window (680 x
+    /// 520, not resizable): a monitor really at that scale sizes the window by it, so the page
+    /// is never narrower. Left at the runner's own scale it would get 680 / scale CSS px, a width
+    /// the app never shows (the panel is placed for the forced scale the same way).
+    fn size_for_scale(&mut self, page: &WebviewWindow, scale: f64) {
+        let (Ok(size), Ok(own)) = (page.inner_size(), page.scale_factor()) else {
+            return self.fail("settings: the window's size could not be read".into());
+        };
+        let factor = scale / own;
+        let wanted = PhysicalSize::new(
+            (f64::from(size.width) * factor).round() as u32,
+            (f64::from(size.height) * factor).round() as u32,
+        );
+        match page.set_size(wanted) {
+            Ok(()) => super::log(&format!(
+                "self-test: settings sized for {scale}: {}x{} -> {}x{} px",
+                size.width, size.height, wanted.width, wanted.height
+            )),
+            Err(e) => self.fail(format!(
+                "settings: the window could not be sized for {scale}: {e}"
             )),
         }
     }
