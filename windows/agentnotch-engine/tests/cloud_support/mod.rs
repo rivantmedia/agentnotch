@@ -1087,3 +1087,90 @@ impl FirstOnly {
         !self.0.swap(true, Ordering::SeqCst)
     }
 }
+
+/// A session seen running, synced once (so its totals are known), then gone
+/// for good: ended (the Mac's `CloudSyncTests.endedSession`).
+pub fn ended_session(h: &Harness) {
+    h.write_session(CloudFixture::SESSION_A, 0);
+    h.observe_one(h.observation(CloudFixture::SESSION_A));
+    h.sync_now();
+    h.observe(Vec::new(), &[], &[]);
+    h.advance(Duration::from_secs(61));
+    h.tick();
+    assert!(h
+        .service
+        .stores()
+        .unwrap()
+        .ledger
+        .entry(CloudFixture::SESSION_A)
+        .and_then(|e| e.ended_at)
+        .is_some());
+}
+
+/// A `claude` that runs until it is killed.
+pub struct HangingRunner {
+    started: crossbeam_channel::Sender<()>,
+    killed: Arc<AtomicBool>,
+}
+
+impl HangingRunner {
+    pub fn new(started: crossbeam_channel::Sender<()>) -> Self {
+        HangingRunner {
+            started,
+            killed: Default::default(),
+        }
+    }
+
+    pub fn killed(&self) -> bool {
+        self.killed.load(Ordering::SeqCst)
+    }
+}
+
+impl agentnotch_engine::platform::CommandRunner for HangingRunner {
+    fn spawn(
+        &self,
+        _spec: agentnotch_engine::platform::CommandSpec,
+    ) -> std::io::Result<Box<dyn agentnotch_engine::platform::RunningCommand>> {
+        let _ = self.started.try_send(());
+        Ok(Box::new(HangingCommand {
+            killed: self.killed.clone(),
+        }))
+    }
+}
+
+struct HangingCommand {
+    killed: Arc<AtomicBool>,
+}
+
+impl agentnotch_engine::platform::RunningCommand for HangingCommand {
+    fn pid(&self) -> u32 {
+        41_000
+    }
+
+    fn take_stdin(&mut self) -> Option<Box<dyn std::io::Write + Send>> {
+        Some(Box::new(std::io::sink()))
+    }
+
+    fn take_stdout(&mut self) -> Option<Box<dyn std::io::Read + Send>> {
+        Some(Box::new(std::io::empty()))
+    }
+
+    fn take_stderr(&mut self) -> Option<Box<dyn std::io::Read + Send>> {
+        Some(Box::new(std::io::empty()))
+    }
+
+    fn wait_timeout(
+        &mut self,
+        wait: Duration,
+    ) -> std::io::Result<Option<agentnotch_engine::platform::Exit>> {
+        if self.killed.load(Ordering::SeqCst) {
+            return Ok(Some(agentnotch_engine::platform::Exit::Killed));
+        }
+        std::thread::sleep(wait.min(Duration::from_millis(20)));
+        Ok(None)
+    }
+
+    fn kill_tree(&mut self) {
+        self.killed.store(true, Ordering::SeqCst);
+    }
+}
