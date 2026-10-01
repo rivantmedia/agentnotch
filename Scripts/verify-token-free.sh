@@ -161,6 +161,8 @@ done
 is_allowed_line() {
     local line="$1" allowed
     line="${line#"${line%%[![:space:]]*}"}"
+    # .ps1 files are checked out with CRLF (.gitattributes): the line end is not the line.
+    line="${line%$'\r'}"
     for allowed in "${ALLOWED_LINES[@]}"; do [[ "$line" == "$allowed" ]] && return 0; done
     return 1
 }
