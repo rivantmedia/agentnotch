@@ -766,6 +766,13 @@ impl AttentionTransition {
     pub fn became_ready_for_review(&self) -> bool {
         self.to == SessionState::ReadyForReview && self.from != Some(SessionState::ReadyForReview)
     }
+
+    /// The turn failed (rate limit, overload, sign-in, billing): blocked on
+    /// the user, but with nothing to answer. Worth a different sound and
+    /// banner, and one banner per account rather than one per session.
+    pub fn is_failure(&self) -> bool {
+        self.to.reason().is_some_and(NeedsInputReason::is_error)
+    }
 }
 
 /// A known identity as Claude Desktop's folders name it, for finding whose
