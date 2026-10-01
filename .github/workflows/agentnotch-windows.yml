@@ -247,15 +247,6 @@ jobs:
           ./scripts/agentnotch-build.ps1 @build
           Get-Content out\windows-release-info.env
 
-      # The built app, sealed (fixture data only), before anything is installed:
-      # its self-test at 100, 125 and 150 % and one snapshot run. The script
-      # stops only its own processes, by id. Its reports, run logs and PNGs are
-      # uploaded with the smoke test's files.
-      - name: Sealed self-test and snapshots (M1)
-        run: |
-          scripts\agentnotch-selftest.ps1 -Exe target\release\agentnotch.exe -Out out\smoke\selftest
-          if ($LASTEXITCODE) { exit 1 }
-
       # What a user gets, on a runner that has never seen Agent Notch (DESIGN-WIN
       # §7.5): the install, a temporary Claude setup the app is pointed at, the
       # doctor, a sealed launch, a hook that fails open with no app, autostart and
@@ -283,6 +274,18 @@ jobs:
           if ($env:RELEASE -eq 'true') { $smoke.Release = $true }
           ./scripts/agentnotch-smoke.ps1 @smoke
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      # The built app, sealed (fixture data only): its self-test at 100, 125 and
+      # 150 % and one snapshot run. After the smoke test, which needs a runner
+      # that has never run Agent Notch: even a sealed run leaves WebView2's data
+      # folder (%LOCALAPPDATA%\com.rivantmedia.agentnotch), which the smoke
+      # test's preflight refuses. The script stops only its own processes, by
+      # id. Its reports, run logs and PNGs are uploaded with the smoke test's
+      # files.
+      - name: Sealed self-test and snapshots (M1)
+        run: |
+          scripts\agentnotch-selftest.ps1 -Exe target\release\agentnotch.exe -Out out\smoke\selftest
+          if ($LASTEXITCODE) { exit 1 }
 
       # The signing path a release takes once WINDOWS_SIGN_* exist, proven on
       # every branch with a throwaway self-signed certificate: the same bundling
