@@ -53,6 +53,11 @@ pub fn view(id: &str) -> SessionView {
         pending: Vec::new(),
         cost_usd: None,
         transcript_path: None,
+        // A hook-titled session shows its title outside the panel too.
+        public_title: "Refactor the parser".into(),
+        // The fields the session store added after these tests were written
+        // keep the store's own defaults.
+        ..SessionView::new(id, r"C:\Users\me\code\app", t0())
     }
 }
 
