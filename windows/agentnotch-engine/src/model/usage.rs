@@ -215,10 +215,13 @@ pub fn distant_future() -> SystemTime {
     UNIX_EPOCH + Duration::from_secs(64_092_211_200) // 4001-01-01
 }
 
-/// The distant past, for "never".
+/// The distant past, for "never". Windows' `SystemTime` starts at 1601, so
+/// the year 1 of the Mac's `distantPast` is out of range there: 1900 is the
+/// fallback, still before any date a reading can carry.
 pub fn distant_past() -> SystemTime {
     UNIX_EPOCH
         .checked_sub(Duration::from_secs(62_135_596_800)) // 0001-01-01
+        .or_else(|| UNIX_EPOCH.checked_sub(Duration::from_secs(2_208_988_800))) // 1900-01-01
         .unwrap_or(UNIX_EPOCH)
 }
 
