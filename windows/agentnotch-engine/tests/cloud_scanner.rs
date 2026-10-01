@@ -103,13 +103,20 @@ fn link_dir(link: &Path, target: &Path) {
     std::os::unix::fs::symlink(target, link).expect("linked");
     #[cfg(not(unix))]
     {
+        // `cmd` reads a `/` in a path as a switch: rebuild both from their
+        // components so every separator is a backslash.
         let status = std::process::Command::new("cmd")
             .args(["/C", "mklink", "/J"])
-            .arg(link)
-            .arg(target)
+            .arg(link.components().collect::<PathBuf>())
+            .arg(target.components().collect::<PathBuf>())
             .output()
             .expect("cmd runs");
-        assert!(status.status.success(), "mklink /J failed");
+        assert!(
+            status.status.success(),
+            "mklink /J failed: {}{}",
+            String::from_utf8_lossy(&status.stdout),
+            String::from_utf8_lossy(&status.stderr)
+        );
     }
 }
 
