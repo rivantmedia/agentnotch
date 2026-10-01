@@ -13,7 +13,11 @@
 //!   hook).
 //! - [`observation`]: a running session as the ledger captures it. The title
 //!   is the session's own title, never the prompt, and only when it was not
-//!   derived from the folder name.
+//!   derived from the folder name. This leans on how the hub fills the view:
+//!   `title` is the panel's title, which falls back to the first prompt, and
+//!   `title_from_folder` is true whenever the session has no title or
+//!   summary of its own (WP5's `Session::title_from_folder`), so the
+//!   fallback is never sent.
 //! - [`live_batch`]: the three lists and every running id.
 
 use super::contract::is_desktop_hosted;

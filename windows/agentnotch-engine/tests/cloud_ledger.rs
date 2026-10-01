@@ -1212,6 +1212,16 @@ fn a_running_session_is_captured_with_its_title_never_its_prompt() {
             .title,
         None
     );
+    // The hub's `title` is the panel's: with no title of the session's own
+    // (`title_from_folder`), it falls back to the first prompt, which never
+    // leaves this PC.
+    view.title = "MY SECRET PROMPT: fix the login for jane@example.com".to_owned();
+    assert_eq!(
+        feed::observation(&view, &identity, account_key)
+            .unwrap()
+            .title,
+        None
+    );
     view.title_from_folder = false;
     view.title = "  Fix the notch ".to_owned();
     assert_eq!(

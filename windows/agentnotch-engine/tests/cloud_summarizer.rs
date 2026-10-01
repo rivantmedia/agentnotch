@@ -36,9 +36,13 @@ fn env(pairs: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
         .collect()
 }
 
+// The programs are joined to their folders so `Path::parent` gives the folder
+// on every host (on a Unix host a backslash is no separator, and `parent` of
+// one Windows-looking string would be empty): the binary's folder is what
+// `usage::scrubbed_env` puts first on the child's PATH.
 fn claude_exe() -> ClaudeBinary {
     ClaudeBinary {
-        program: PathBuf::from(r"C:\Users\me\.local\bin\claude.exe"),
+        program: PathBuf::from(r"C:\Users\me\.local\bin").join("claude.exe"),
         prefix_args: Vec::new(),
         version: Some("2.1.282".into()),
         shim: false,
@@ -47,7 +51,7 @@ fn claude_exe() -> ClaudeBinary {
 
 fn node_binary() -> ClaudeBinary {
     ClaudeBinary {
-        program: PathBuf::from(r"C:\Program Files\nodejs\node.exe"),
+        program: PathBuf::from(r"C:\Program Files\nodejs").join("node.exe"),
         prefix_args: os(&[
             r"C:\Users\me\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\cli.js",
         ]),

@@ -437,6 +437,51 @@ fn a_path_that_names_a_home_a_drive_or_a_share_loses_its_name() {
     );
 }
 
+/// Windows lets a profile folder hold an apostrophe (`Jane O'Neil`), and XP's
+/// `Documents and Settings` still links to `Users`: neither lets a user's
+/// name through, and quotes around a path or in prose stay as written.
+#[test]
+fn an_apostrophe_or_the_legacy_profile_root_keeps_no_name() {
+    check_all(&[
+        (r"Opened C:\Users\Jane O'Neil\y.txt", "Opened y.txt"),
+        (r"Opened C:\Users\Jane O'Neil now", "Opened ~ now"),
+        (r"Opened C:\Users\o'neil\src\a.rs", "Opened a.rs"),
+        (r"Saw \\fs\users\d'angelo\b.md", "Saw b.md"),
+        (r"Opened /home/o'neil/x.log", "Opened x.log"),
+        (r"Wrote C:\Documents and Settings\jane\x.txt", "Wrote x.txt"),
+        (r"Opened C:\Documents and Settings\jane", "Opened ~"),
+        (
+            r"Opened c:/documents and settings/Jane Doe/x.txt now",
+            "Opened x.txt now",
+        ),
+        (
+            r"Listed D:\Documents and Settings.",
+            "Listed Documents and Settings.",
+        ),
+        // Quotes around a path, a possessive, and prose apostrophes are
+        // untouched.
+        (r"Opened 'C:\Users\jane\a b.txt'", "Opened 'a b.txt'"),
+        (r"Listed C:\Users\jane's files", "Listed ~'s files"),
+        (
+            r"Edited C:\proj\api.ts's handler",
+            "Edited api.ts's handler",
+        ),
+        (
+            "It's the client's fix, don't revert.",
+            "It's the client's fix, don't revert.",
+        ),
+        (
+            "My Documents and Settings page wasn't changed.",
+            "My Documents and Settings page wasn't changed.",
+        ),
+    ]);
+    let all = s(r"C:\Users\Jane O'Neil\a, C:\Documents and Settings\jdoe\b and \\s\Users\o'brien");
+    for name in ["Neil", "jdoe", "brien"] {
+        assert!(!all.contains(name), "{name}: {all}");
+    }
+    assert_eq!(s(&all), all);
+}
+
 #[test]
 fn the_words_after_a_windows_path_stay_words() {
     check_all(&[

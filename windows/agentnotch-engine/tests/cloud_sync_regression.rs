@@ -418,6 +418,57 @@ fn turning_sync_off_stops_a_pass_in_flight() {
     assert_eq!(h.sync_requests().len(), 1);
 }
 
+/// Quitting during a pass (`CloudHandle::stop` halts the service before it
+/// waits for the cloud thread): as on the Mac, whose `stop` clears
+/// `started`, the pass sends nothing after the request it has out, and that
+/// request's answer is kept. Quitting never waits for the rest of a pass.
+#[test]
+fn stopping_ends_a_pass_after_the_request_it_has_out() {
+    let h = started();
+    // 600 readings: two requests.
+    for index in 0..600u32 {
+        h.service.record_usage(UsageObservation {
+            identity: IdentityId::from(CloudFixture::IDENTITY_ID),
+            source: agentnotch_engine::model::UsageSource::Probe,
+            observed_at: CloudFixture::at(f64::from(index)),
+            windows: vec![("session".into(), f64::from(index % 100) + 0.5, None)],
+        });
+    }
+    let gate = Arc::new(Gate::default());
+    let first = Arc::new(FirstOnly::default());
+    let (held, once) = (gate.clone(), first.clone());
+    h.handles.http.set_handler(move |request| {
+        if path_of(request) == "/api/app/v1/sync" && once.take() {
+            held.wait();
+        }
+        Ok(website_answer(request))
+    });
+    let (service, now) = (h.service.clone(), h.now());
+    let pass = std::thread::spawn(move || service.sync_now(now, true));
+    assert!(
+        eventually(secs(30), || h.sync_requests().len() == 1),
+        "the first request went out"
+    );
+    h.service.halt();
+    assert!(!h.service.can_upload());
+    gate.open();
+    pass.join().expect("the pass ended");
+    assert_eq!(h.sync_requests().len(), 1);
+    // The first request's readings left the outbox; the rest wait for the
+    // next run.
+    let sent = agentnotch_engine::testkit::http::body_json(&h.sync_requests()[0])["usage"]
+        .as_array()
+        .map_or(0, Vec::len);
+    assert!(sent > 0 && sent < 600, "{sent}");
+    assert_eq!(h.pending_usage(), 600 - sent);
+    // A tick after the halt sends nothing either, and the stop that follows
+    // saves what the pass kept.
+    h.service.tick(h.now());
+    assert_eq!(h.sync_requests().len(), 1);
+    h.service.stop(h.now());
+    h.service.stop(h.now());
+}
+
 #[test]
 fn summaries_turned_off_during_a_pass_are_left_out() {
     let session = SyncSession {

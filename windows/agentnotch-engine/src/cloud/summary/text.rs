@@ -151,6 +151,17 @@ impl Mode {
 /// private-use character: never a path's own).
 const NAME_JOINER: char = '\u{E000}';
 
+/// Stands for an apostrophe inside a name while the path is shortened (see
+/// `joining_apostrophes`): a Windows profile folder may be named
+/// `Jane O'Neil`, and a quote would otherwise end the path inside the name
+/// and leave `'Neil` behind. A quote around a path has a space or the
+/// text's end on one side, so it still ends one.
+const APOSTROPHE_JOINER: char = '\u{E001}';
+
+/// Windows XP's profile root, still a link to `Users`: a name after it is a
+/// user's, as after `Users`.
+const LEGACY_PROFILES: &str = "Documents and Settings";
+
 /// The folders a path may start at (the Mac's, and the Linux ones a WSL or
 /// remote session writes).
 const ROOTS: [&str; 15] = [
@@ -216,7 +227,10 @@ fn blocks_start(c: char) -> bool {
 /// Spaces are plain single spaces here (`scrub` folds the rest first). Pure
 /// given `known_names`; shortening twice changes nothing.
 pub fn shorten_paths(text: &str, known_names: &[String]) -> String {
-    let text = joining_known_names(text, known_names);
+    let text = joining_apostrophes(&joining_legacy_profiles(&joining_known_names(
+        text,
+        known_names,
+    )));
     let t: Vec<char> = text.chars().collect();
     let mut result = String::with_capacity(text.len());
     let mut cursor = 0;
@@ -262,7 +276,64 @@ pub fn shorten_paths(text: &str, known_names: &[String]) -> String {
         cursor = next;
     }
     result.extend(&t[cursor..]);
-    result.replace(NAME_JOINER, " ")
+    result
+        .replace(NAME_JOINER, " ")
+        .replace(APOSTROPHE_JOINER, "'")
+}
+
+/// `O'Neil` → `O<joiner>Neil`: an apostrophe after a letter or digit and
+/// before three or more of them, so a name holding one stays one path
+/// component. A contraction or possessive (`'s`, `'t`, `'re`, `'ll`…) is
+/// left alone: `/Users/jane's files` still ends the path at the quote. Pure.
+fn joining_apostrophes(text: &str) -> String {
+    if !text.contains('\'') {
+        return text.to_owned();
+    }
+    let mut t: Vec<char> = text.chars().collect();
+    for i in 1..t.len() {
+        let follows = t[i + 1..]
+            .iter()
+            .take(3)
+            .take_while(|c| c.is_alphanumeric())
+            .count();
+        if t[i] == '\'' && t[i - 1].is_alphanumeric() && follows == 3 {
+            t[i] = APOSTROPHE_JOINER;
+        }
+    }
+    t.into_iter().collect()
+}
+
+/// `C:\Documents and Settings\…` → `C:\Documents<joiner>and<joiner>Settings\…`
+/// (any case, either separator, right after a drive's root), so the matcher
+/// takes the folder whole and knows the name after it is a user's. Pure.
+fn joining_legacy_profiles(text: &str) -> String {
+    if !text.contains(' ') || !(text.contains('\\') || text.contains('/')) {
+        return text.to_owned();
+    }
+    let phrase: Vec<char> = LEGACY_PROFILES.chars().collect();
+    let mut t: Vec<char> = text.chars().collect();
+    let mut i = 3;
+    while i + phrase.len() <= t.len() {
+        let after_drive_root = matches!(t[i - 1], '\\' | '/')
+            && t[i - 2] == ':'
+            && t[i - 3].is_ascii_alphabetic()
+            && (i == 3 || !is_word_like(t[i - 4]));
+        let found = after_drive_root
+            && same_ignoring_case(&t[i..i + phrase.len()], &phrase)
+            && t.get(i + phrase.len())
+                .is_none_or(|c| c.is_whitespace() || "/\\\"'`<>()[]{}.,;:!?".contains(*c));
+        if found {
+            for c in &mut t[i..i + phrase.len()] {
+                if *c == ' ' {
+                    *c = NAME_JOINER;
+                }
+            }
+            i += phrase.len();
+        } else {
+            i += 1;
+        }
+    }
+    t.into_iter().collect()
 }
 
 /// The first path in `t` at or after `from`: where it starts, where its
@@ -439,6 +510,14 @@ fn named_folder(path: &[char], mode: Mode) -> Option<Named> {
         return None;
     }
     let parent = parts[parts.len() - 2].to_lowercase();
+    if mode == Mode::Windows
+        && parent
+            == LEGACY_PROFILES
+                .to_lowercase()
+                .replace(' ', &NAME_JOINER.to_string())
+    {
+        return Some(Named::Home);
+    }
     match parent.as_str() {
         "users" | "home" => Some(Named::Home),
         "volumes" => Some(Named::Volume),

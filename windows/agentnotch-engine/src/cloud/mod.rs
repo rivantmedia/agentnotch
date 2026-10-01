@@ -186,9 +186,12 @@ impl CloudHandle {
         }
     }
 
-    /// Stops the thread after what is queued, saves the stores and waits
-    /// for it to end. Calling it again does nothing.
+    /// Stops what runs at once (a pass sends nothing after the request it
+    /// has out, a summary's `claude` is killed: [`CloudSync::halt`]), then
+    /// the thread after what is queued, saves the stores and waits for it to
+    /// end. Calling it again does nothing.
     pub fn stop(&self) {
+        self.service.halt();
         let worker = self.worker.lock().unwrap_or_else(|p| p.into_inner()).take();
         let _ = self.sender.send(Message::Stop);
         match worker {

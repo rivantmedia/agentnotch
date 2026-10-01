@@ -353,6 +353,9 @@ struct Inner {
     /// Halved by a 413 (never below [`MIN_SESSIONS_PER_REQUEST`]); never
     /// raised again in the run.
     max_sessions_per_request: usize,
+    /// Halted after a start: [`CloudSync::stop`] still owes the stores a
+    /// save.
+    save_on_stop: bool,
 }
 
 /// A summary run's claim: the generation it began in and the handle that
@@ -464,6 +467,7 @@ impl CloudSync {
                 summary_cancel: None,
                 last_backfill_at: None,
                 max_sessions_per_request: limit::SESSIONS,
+                save_on_stop: false,
             }),
             published: Mutex::new(CloudState::default()),
         }
@@ -499,21 +503,34 @@ impl CloudSync {
         self.restore_session();
     }
 
-    /// Stops what runs (a summary's `claude` is killed, a sign-in or pass
-    /// still out is dropped when it comes back) and saves every store now.
+    /// Stops what runs ([`halt`](Self::halt)) and saves every store now.
+    /// Calling it again does nothing.
     pub fn stop(&self, _now: SystemTime) {
-        {
-            let mut inner = lock(&self.inner);
-            if !inner.started {
-                return;
+        self.halt();
+        let save = std::mem::take(&mut lock(&self.inner).save_on_stop);
+        if save {
+            if let Some(stores) = &self.stores {
+                stores.save_now();
             }
-            inner.started = false;
-            inner.pending = None;
-            self.stop_summarizing(&mut inner);
         }
-        if let Some(stores) = &self.stores {
-            stores.save_now();
+    }
+
+    /// The half of [`stop`](Self::stop) that takes effect at once, from any
+    /// thread (the Mac's `stop` clearing `started`): nothing new starts, a
+    /// pass sends nothing after the request it has out (whose answer is
+    /// kept, as on the Mac), a summary's `claude` is killed, and a sign-in
+    /// still out is ended on Supabase when it comes back. The handle calls
+    /// it before it queues the stop, so quitting never waits for the rest
+    /// of a pass the cloud thread is in.
+    pub fn halt(&self) {
+        let mut inner = lock(&self.inner);
+        if !inner.started {
+            return;
         }
+        inner.started = false;
+        inner.save_on_stop = true;
+        inner.pending = None;
+        self.stop_summarizing(&mut inner);
     }
 
     /// The saved session, if it is for the website this run uses. Another
