@@ -102,6 +102,16 @@ fn control_response(answer: Option<Vec<u8>>) -> Result<ControlResponse, ClientEr
         .map_err(|_| ClientError::Other("Agent Notch's answer could not be read".into()))
 }
 
+/// How long a client that found every instance of the pipe busy waits for the next one
+/// (`WaitNamedPipeW`): what is left until its deadline, in whole milliseconds; `None` once that
+/// has passed. Never 0, which Windows reads as "the server's default wait", nor `INFINITE`.
+// Only Windows has a pipe to be busy; the rule is tested on every system.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn busy_wait_ms(left: Duration) -> Option<u32> {
+    let left = left.as_millis();
+    (left > 0).then(|| left.min(u128::from(u32::MAX - 1)) as u32)
+}
+
 #[cfg(not(windows))]
 mod imp {
     use super::ClientError;
@@ -244,7 +254,6 @@ mod imp {
     }
 
     fn open(name: &HSTRING, deadline: Instant) -> Result<Owned, ClientError> {
-        let mut waited = false;
         loop {
             // SAFETY: `name` is a NUL-terminated string that outlives the call; no security
             // attributes and no template file are passed.
@@ -267,18 +276,26 @@ mod imp {
             };
             match win32_code(&error) {
                 Some(FILE_NOT_FOUND) => return Err(ClientError::NotRunning),
-                // Every instance is taken this instant: the server makes a new one as soon as
-                // it accepts a connection, so wait for it once.
-                Some(PIPE_BUSY) if !waited => {
-                    waited = true;
-                    // 0 would mean "the server's default wait", not "don't wait".
-                    let left = left_ms(deadline).max(1);
-                    // SAFETY: `name` is a NUL-terminated string that outlives the call.
-                    if !unsafe { WaitNamedPipeW(name, left) }.as_bool() {
+                // Every instance is taken this instant. The server makes a new one as soon as
+                // it accepts a connection, but every client waiting wakes when it comes and
+                // only one gets it, so the others wait again until the deadline.
+                Some(PIPE_BUSY) => {
+                    let left = deadline.saturating_duration_since(Instant::now());
+                    let Some(wait) = super::busy_wait_ms(left) else {
                         return Err(ClientError::Busy);
+                    };
+                    // SAFETY: `name` is a NUL-terminated string that outlives the call.
+                    if !unsafe { WaitNamedPipeW(name, wait) }.as_bool() {
+                        let gone = io::Error::last_os_error().raw_os_error()
+                            == Some(FILE_NOT_FOUND as i32);
+                        // The app went away meanwhile, or no instance came free in time.
+                        return Err(if gone {
+                            ClientError::NotRunning
+                        } else {
+                            ClientError::Busy
+                        });
                     }
                 }
-                Some(PIPE_BUSY) => return Err(ClientError::Busy),
                 _ => {
                     return Err(ClientError::Other(format!(
                         "the hook pipe can't be opened: {}",
@@ -598,5 +615,19 @@ mod tests {
         texts.sort();
         texts.dedup();
         assert_eq!(texts.len(), all.len());
+    }
+
+    #[test]
+    fn a_busy_pipe_is_waited_for_until_the_deadline() {
+        assert_eq!(busy_wait_ms(SECOND), Some(1000));
+        assert_eq!(busy_wait_ms(Duration::from_millis(1)), Some(1));
+        // Less than a whole millisecond left would be a wait of 0, the server's default: no.
+        assert_eq!(busy_wait_ms(Duration::from_micros(999)), None);
+        assert_eq!(busy_wait_ms(Duration::ZERO), None);
+        // A long timeout never becomes INFINITE.
+        assert_eq!(
+            busy_wait_ms(Duration::from_secs(u64::from(u32::MAX))),
+            Some(u32::MAX - 1)
+        );
     }
 }
