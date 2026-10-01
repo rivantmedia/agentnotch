@@ -4,6 +4,13 @@
 //!
 //! Owner: WP8. WP0 stub: the §3.4 signatures; it never signs in or sends.
 
+pub mod api;
+pub mod contract;
+pub mod files;
+pub mod keys;
+pub mod pricing;
+pub mod website;
+
 use crate::hub::DeepLinkOutcome;
 use crate::model::{CloudAuthState, CloudState};
 use crate::platform::Platform;
