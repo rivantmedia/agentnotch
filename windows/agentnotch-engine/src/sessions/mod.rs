@@ -3,13 +3,14 @@
 //! transcripts and chat history. All pure: `SessionStore::apply(input, now)`.
 //!
 //! Owner: WP5. In so far: the pure modules (`attention`, `background`,
-//! `completion`, `locator`, `phase`, `summary`, `tasks`, `tool_input`, `tool_results`,
+//! `chat`, `completion`, `locator`, `phase`, `summary`, `tasks`, `tool_input`, `tool_results`,
 //! `transcript`).
 //! Still WP0's stub: [`SessionStore`] (the §3.4 signatures, keeps no
 //! sessions); the real store comes in wp5-6..wp5-10.
 
 pub mod attention;
 pub mod background;
+pub mod chat;
 pub mod completion;
 pub mod locator;
 pub mod phase;
