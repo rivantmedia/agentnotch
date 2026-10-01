@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "generator": "windows/scripts/check-claude-code-facts.mjs",
+  "generated_at": null,
+  "note": "Placeholder until the facts job (DESIGN-WIN §6.2, WP11) commits its first evidence. With no versions and no exec_form_min, exec-form hooks are never written (string form only).",
+  "versions": [],
+  "exec_form_min": null,
+  "exec_form_evidence": null
+}

@@ -462,6 +462,20 @@ pub trait SecureFiles: Send + Sync {
     fn canonical(&self, path: &Path) -> io::Result<PathBuf>;
     /// Protected, only the owner (and SYSTEM).
     fn is_private(&self, path: &Path) -> io::Result<bool>;
+    /// The 8.3 spelling of an existing path (`GetShortPathNameW`), for a hook
+    /// command whose long path can't be written unquoted. `None` where the
+    /// volume keeps no short names, and on every other OS.
+    fn short_path(&self, path: &Path) -> Option<PathBuf> {
+        let _ = path;
+        None
+    }
+    /// The long spelling of a path that may hold 8.3 names
+    /// (`GetLongPathNameW`), so a hook command written with one is still
+    /// recognised as ours. `None` when there is nothing to look up.
+    fn long_path(&self, path: &Path) -> Option<PathBuf> {
+        let _ = path;
+        None
+    }
 }
 
 pub trait Device: Send + Sync {
