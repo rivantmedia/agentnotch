@@ -16,8 +16,9 @@
     only the processes it started, by their handle (never by image name).
 
     Phases are rows of a table (Get-PhaseTable): a number, a name, an optional gate and a
-    body. Phases 4-9 are rows too (the real app: before consent, the deep link, Turn on, every hook
-    entry, Turn off); the next sub-task adds 10-12. A gate is a flag in smoke\gates.json: the
+    body. Phases 4-12 are rows too (the real app: before consent, the deep link, Turn on, every hook
+    entry, Turn off, sign-in and sync against a fake website, an update over the running app, a
+    manual reinstall). A gate is a flag in smoke\gates.json: the
     package a phase waits for has not landed, so the phase prints a warning, is listed in the
     step summary and is not run. With -Release any closed gate fails the run before phase 0,
     so no release ships with a phase unrun.
@@ -1720,6 +1721,400 @@ function Invoke-TurnOffPhase {
     }
 }
 
+# --- phases 10-12: sign-in and sync, an update over a running app, the manual reinstall -------------------------------
+
+# More of the page's names (see $script:Ui above): Settings > Claude Code > Cloud, and the consent
+# the hooks switch comes back through. The cloud rows are the page's own actions (settings-sections.js).
+$script:Ui.CloudSignIn      = '[data-an-action="an-cloud-sign-in"]'
+$script:Ui.CloudSignOutAsk  = '[data-an-action="an-cloud-sign-out-ask"]'
+$script:Ui.CloudSignOut     = '[data-an-action="an-cloud-sign-out"]'
+$script:Ui.CloudSyncOff     = '[data-an-action="an-cloud-sync"][data-an-on="0"]'
+$script:Ui.HooksSwitchOff   = '[data-an-action="hooks-enabled"][data-an-on="0"]'
+$script:Ui.Reconsider       = '[data-an-action="reconsider"]'
+
+# The URL the app would have opened in the browser, from the dev browser log (the app writes it
+# there instead of opening it when AGENTNOTCH_DEV=1 and AGENTNOTCH_DEV_BROWSER_LOG is set).
+function Get-AuthorizeUrls {
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
+    @([regex]::Matches($Text, '(?i)https?://[^\s"''<>]+/auth/v1/authorize[^\s"''<>]*') | ForEach-Object { $_.Value })
+}
+
+# What is wrong with the sign-in URL (one line each; none = fine): Supabase's authorize on the
+# fake website, Google, the app's own redirect, an S256 PKCE challenge (RFC 7636: 43 base64url
+# characters), and nothing that is a secret. The verifier never leaves the app until the code
+# exchange, and tokens are not made yet, so none of those may be in this URL.
+function Test-AuthorizeUrl {
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Url, [Parameter(Mandatory)][string]$Website)
+    $uri = $null
+    if ($Url -notmatch '^https?://' -or -not [Uri]::TryCreate($Url, [UriKind]::Absolute, [ref]$uri)) { 'it is not an absolute URL'; return }
+    $prefix = $Website.TrimEnd('/') + '/auth/v1/authorize?'
+    if (-not $Url.StartsWith($prefix, [StringComparison]::Ordinal)) { "it does not start with $prefix" }
+    if ($uri.UserInfo) { 'it carries a user name or password' }
+    $pairs = [Collections.Generic.List[object]]::new()
+    foreach ($part in ($uri.Query.TrimStart('?') -split '&')) {
+        if (-not $part) { continue }
+        $name, $value = $part -split '=', 2
+        $decode = { param($t) [Uri]::UnescapeDataString(([string]$t).Replace('+', ' ')) }
+        $pairs.Add([pscustomobject]@{ Name = (& $decode $name); Value = (& $decode $value) })
+    }
+    $values = @{}
+    foreach ($key in 'provider', 'redirect_to', 'code_challenge', 'code_challenge_method') {
+        $found = @($pairs | Where-Object { $_.Name -ceq $key })
+        if ($found.Count -ne 1) { "expected exactly one '$key' parameter, found $($found.Count)"; continue }
+        $values[$key] = $found[0].Value
+    }
+    if ($values.ContainsKey('provider') -and $values['provider'] -cne 'google') { "provider is '$($values['provider'])', expected google" }
+    if ($values.ContainsKey('redirect_to') -and $values['redirect_to'] -cne 'agentnotch://auth-callback') { "redirect_to is '$($values['redirect_to'])', expected agentnotch://auth-callback" }
+    if ($values.ContainsKey('code_challenge') -and $values['code_challenge'] -cnotmatch '^[A-Za-z0-9_-]{43}$') { "code_challenge '$($values['code_challenge'])' is not 43 base64url characters (a SHA-256 digest)" }
+    if ($values.ContainsKey('code_challenge_method') -and $values['code_challenge_method'] -ine 's256') { "code_challenge_method is '$($values['code_challenge_method'])', expected S256" }
+    foreach ($pair in $pairs) {
+        if ($pair.Name -imatch '^(access_token|refresh_token|code_verifier|verifier|apikey|api_key|secret|password|token|auth_code|code)$') { "the URL carries '$($pair.Name)'" }
+    }
+}
+
+# A request log as the fake website writes it: one JSON object per line.
+function ConvertFrom-RequestLog {
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
+    foreach ($line in ($Text -split "`r?`n")) {
+        if (-not $line.Trim()) { continue }
+        try { $entry = $line | ConvertFrom-Json -AsHashtable } catch { continue }
+        if ($entry -is [System.Collections.IDictionary]) { $entry }
+    }
+}
+
+function Get-RequestCount {
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Requests, [Parameter(Mandatory)][string]$Method, [Parameter(Mandatory)][string]$Path)
+    @($Requests | Where-Object { $_['method'] -ceq $Method -and $_['path'] -ceq $Path }).Count
+}
+
+# The two cloud switches from the `settings` snapshot the page itself draws from.
+function Get-CloudSwitches {
+    param([Parameter(Mandatory)][AllowNull()]$Settings)
+    $cloud = if ($Settings -is [System.Collections.IDictionary] -and $Settings.Contains('cloud') -and $Settings['cloud'] -is [System.Collections.IDictionary]) { $Settings['cloud'] } else { @{} }
+    [pscustomobject]@{
+        Sync      = ($cloud.Contains('sync_enabled') -and $cloud['sync_enabled'] -eq $true)
+        Summaries = ($cloud.Contains('summaries_enabled') -and $cloud['summaries_enabled'] -eq $true)
+    }
+}
+
+function Get-FakeWebsiteRequests {
+    param([Parameter(Mandatory)][string]$LogFile)
+    if (-not (Test-Path -LiteralPath $LogFile -PathType Leaf)) { return @() }
+    @(ConvertFrom-RequestLog -Text ([string](Get-Content -LiteralPath $LogFile -Raw -ErrorAction SilentlyContinue)))
+}
+
+# smoke\fake-website.mjs on a free loopback port. Its tokens are plain strings only it accepts;
+# nothing here talks to a real website or a real Supabase project.
+function Start-FakeWebsite {
+    param([Parameter(Mandatory)][string]$LogFile, [Parameter(Mandatory)][string]$SyncDir)
+    $port = Get-FreeTcpPort
+    $run = Start-NodeScript -Script (Join-Path $PSScriptRoot 'smoke\fake-website.mjs') -Arguments @('--port', [string]$port, '--log', $LogFile, '--sync-dir', $SyncDir)
+    $url = "http://127.0.0.1:$port"
+    Wait-Until {
+        if ($run.Process.HasExited) { throw "the fake website exited with $($run.Process.ExitCode)" }
+        try { (Invoke-RestMethod -Uri "$url/api/app/v1/config" -TimeoutSec 2).supabaseUrl -eq $url } catch { $false }
+    } 20 'the fake website to answer'
+    # That probe is a request of its own; the log the phase reads starts clean.
+    Remove-Item -LiteralPath $LogFile -Force -ErrorAction SilentlyContinue
+    [pscustomobject]@{ Run = $run; Process = $run.Process; Url = $url; Port = $port; Log = $LogFile; SyncDir = $SyncDir }
+}
+
+function Invoke-ContractShape {
+    param([Parameter(Mandatory)][string]$BodyFile)
+    $run = Wait-NodeScript -Run (Start-NodeScript -Script (Join-Path $PSScriptRoot 'smoke\contract-shape.mjs') -Arguments @($BodyFile, '--sorted', '--millis')) -TimeoutSeconds 30
+    if ($run.ExitCode -ne 0) { throw "the sync request does not have the contract's shape: $($run.Stdout.Trim()) $($run.Stderr.Trim())" }
+}
+
+# The running copy of the installed app that this script did not start (the installer's /R, or
+# an install that launched it): found by its image path, adopted so it is stopped by handle too.
+function Find-RunningApp {
+    $found = @(Get-Process -Name agentnotch -ErrorAction SilentlyContinue | Where-Object { try { $_.Path -eq $script:AppExe } catch { $false } })
+    if ($found.Count) { $found[0] }
+}
+
+function Use-RunningApp {
+    param([Parameter(Mandatory)][System.Diagnostics.Process]$Process)
+    $script:LiveApp = Register-OwnProcess $Process
+}
+
+# The real app, with the DevTools port. $Extra is added to the app's environment (phase 10).
+function Start-LiveApp {
+    param([hashtable]$Extra = @{})
+    Stop-LiveApp
+    $script:CdpPort = Get-FreeTcpPort
+    $environment = Merge-Environment @((Get-AppEnvironment), @{ WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$($script:CdpPort)" }, $Extra)
+    $script:LiveApp = Register-OwnProcess (Start-AppProcess -Exe $script:AppExe -Environment $environment)
+    Write-PhaseLog "the real app is running as process $($script:LiveApp.Id), DevTools on port $($script:CdpPort)"
+    Wait-ControlStatus -Seconds 60 -What 'the app to listen' -Check ({ param($s) Test-ControlStatus -Status $s -Expect @{ transport = 'listening' } }.GetNewClosure()) | Out-Null
+    if ($script:LiveApp.HasExited) { throw "the app exited with $($script:LiveApp.ExitCode)" }
+}
+
+# Ends the running app the way a user would (`control quit`), by handle when it does not go.
+function Stop-LiveAppGracefully {
+    if (-not $script:LiveApp -or $script:LiveApp.HasExited) { $script:LiveApp = $null; return }
+    try { [void](Invoke-Cli -Arguments @('control', 'quit') -Environment (Get-AppEnvironment)) } catch { Write-PhaseLog "control quit: $($_.Exception.Message)" }
+    if (-not $script:LiveApp.WaitForExit(15000)) { Write-PhaseLog 'the app did not quit within 15 s; stopping it by handle' }
+    Stop-LiveApp
+}
+
+function Wait-SettingsPage {
+    param([Parameter(Mandatory)][string]$Expression, [int]$Seconds = 20)
+    [void](Invoke-Cdp -Arguments @('wait', $script:Ui.SettingsPage, $Expression, [string]($Seconds * 1000)) -TimeoutSeconds ($Seconds + 15))
+}
+
+# Opens Settings and presses an armed control of it.
+function Invoke-SettingsClick {
+    param([Parameter(Mandatory)][string]$Selector)
+    Invoke-CdpInvoke -Page $script:Ui.NotchPage -Command $script:Ui.OpenSettings | Out-Null
+    Wait-SettingsPage -Expression (Get-ArmedExpression -Selector $Selector)
+    [void](Invoke-Cdp -Arguments @('click', $script:Ui.SettingsPage, $Selector))
+}
+
+function Get-SettingsSnapshot {
+    Invoke-CdpCall -Page $script:Ui.SettingsPage -Method 'settings'
+}
+
+# --- phase 10: sign-in and sync against the fake website ---------------------------------------------------------------
+
+function Invoke-CloudPhase {
+    $log = Join-Path $script:ArtifactsDir 'fake-website.jsonl'
+    $syncDir = Join-Path $script:ArtifactsDir 'fake-website-sync'
+    $browserLog = Join-Path $script:ArtifactsDir 'dev-browser.log'
+    foreach ($file in $log, $browserLog) { Remove-Item -LiteralPath $file -Force -ErrorAction SilentlyContinue }
+    Remove-Item -LiteralPath $syncDir -Recurse -Force -ErrorAction SilentlyContinue
+    $site = Start-FakeWebsite -LogFile $log -SyncDir $syncDir
+    Write-PhaseLog "fake website on $($site.Url)"
+    try {
+        # A fresh start of the app, pointed at the fake website: only this run, only 127.0.0.1.
+        Stop-LiveAppGracefully
+        Start-LiveApp -Extra @{ AGENTNOTCH_WEB_URL = $site.Url; AGENTNOTCH_DEV = '1'; AGENTNOTCH_DEV_BROWSER_LOG = $browserLog }
+
+        # 1. Sign in: the URL the app would have opened.
+        Invoke-SettingsClick -Selector $script:Ui.CloudSignIn
+        Wait-Until { (Get-AuthorizeUrls -Text ([string](Get-Content -LiteralPath $browserLog -Raw -ErrorAction SilentlyContinue))).Count -gt 0 } 15 'the authorize URL in the dev browser log'
+        $url = (Get-AuthorizeUrls -Text (Get-Content -LiteralPath $browserLog -Raw))[0]
+        Write-PhaseLog "authorize URL: $url"
+        $problems = @(Test-AuthorizeUrl -Url $url -Website $site.Url)
+        if ($problems) { throw "the authorize URL: $($problems -join '; ')" }
+        if (@(Get-FakeWebsiteRequests -LogFile $log | Where-Object { $_['path'] -like '/api/app/v1/config' }).Count -lt 1) { throw 'the app never asked the fake website for its config' }
+
+        # 2. The browser's answer: the registered scheme hands the callback to the running app.
+        Start-Process 'agentnotch://auth-callback?code=smoke'
+        Wait-ControlStatus -Seconds 10 -What 'control status to say cloud: signed_in' -Check ({ param($s) Test-ControlStatus -Status $s -Expect @{ cloud = 'signed_in' } }.GetNewClosure()) | Out-Null
+        $support = Find-SupportDir -Profile $script:P
+        if (-not $support) { throw 'no support folder' }
+        $session = Join-Path $support 'cloud-session.json'
+        if (-not (Test-Path -LiteralPath $session -PathType Leaf)) { throw "$session does not exist after sign-in" }
+        $aclProblems = @(Get-AclProblems -Path $session)
+        if ($aclProblems) { throw "cloud-session.json: $($aclProblems -join '; ')" }
+        $exchange = Get-RequestCount -Requests (Get-FakeWebsiteRequests -LogFile $log) -Method 'POST' -Path '/auth/v1/token'
+        if ($exchange -lt 1) { throw 'the fake website saw no code exchange' }
+
+        # 3. Consent before upload: signed in is not "sync on".
+        Start-Sleep -Seconds 3
+        $syncs = Get-RequestCount -Requests (Get-FakeWebsiteRequests -LogFile $log) -Method 'POST' -Path '/api/app/v1/sync'
+        if ($syncs -ne 0) { throw "a /sync request arrived ($syncs) although sync was never turned on" }
+        $switches = Get-CloudSwitches -Settings (Get-SettingsSnapshot)
+        if ($switches.Sync -or $switches.Summaries) { throw "a switch is on after sign-in (sync $($switches.Sync), summaries $($switches.Summaries))" }
+
+        # 4. Sync on: one upload, in the contract's shape, with nothing of this machine's folders.
+        Invoke-SettingsClick -Selector $script:Ui.CloudSyncOff
+        Wait-Until { (Get-RequestCount -Requests (Get-FakeWebsiteRequests -LogFile $log) -Method 'POST' -Path '/api/app/v1/sync') -ge 1 } 30 'a /sync request'
+        $bodies = @(Get-ChildItem -LiteralPath $syncDir -Filter 'sync-*.json' -ErrorAction SilentlyContinue | Sort-Object Name)
+        if (-not $bodies.Count) { throw "the fake website saved no sync body under $syncDir" }
+        Invoke-ContractShape -BodyFile $bodies[0].FullName
+        $text = [string](Get-Content -LiteralPath $bodies[0].FullName -Raw)
+        $escapedProfile = (ConvertTo-Json $script:P -Compress).Trim('"')
+        if ($text.Contains($escapedProfile)) { throw 'the sync body holds a path under the temporary profile' }
+        $syncRequest = @(Get-FakeWebsiteRequests -LogFile $log | Where-Object { $_['method'] -ceq 'POST' -and $_['path'] -ceq '/api/app/v1/sync' })[0]
+        if ($syncRequest['authorization'] -ne 'present') { throw 'the /sync request carried no authorization' }
+        Write-PhaseLog "sync body $($bodies[0].Name): $($text.Length) bytes, the contract's shape, no profile path"
+        Copy-Item -LiteralPath $bodies[0].FullName -Destination (Join-Path $script:ArtifactsDir 'sync-request-sample.json') -Force
+
+        # 5. Sign out: the server is told, both switches go off, the session file goes, and nothing more is sent.
+        Invoke-SettingsClick -Selector $script:Ui.CloudSignOutAsk
+        Wait-SettingsPage -Expression (Get-ArmedExpression -Selector $script:Ui.CloudSignOut)
+        [void](Invoke-Cdp -Arguments @('click', $script:Ui.SettingsPage, $script:Ui.CloudSignOut))
+        Wait-Until { (Get-RequestCount -Requests (Get-FakeWebsiteRequests -LogFile $log) -Method 'POST' -Path '/auth/v1/logout') -ge 1 } 10 'the logout request'
+        Wait-Until { -not (Test-Path -LiteralPath $session) } 10 'cloud-session.json to be deleted'
+        Wait-ControlStatus -Seconds 10 -What 'control status to leave signed_in' -Check ({ param($s) if ($s['cloud'] -ceq 'signed_in') { 'cloud is still signed_in' } }.GetNewClosure()) | Out-Null
+        $switches = Get-CloudSwitches -Settings (Get-SettingsSnapshot)
+        if ($switches.Sync -or $switches.Summaries) { throw "a switch is still on after sign-out (sync $($switches.Sync), summaries $($switches.Summaries))" }
+        $before = Get-RequestCount -Requests (Get-FakeWebsiteRequests -LogFile $log) -Method 'POST' -Path '/api/app/v1/sync'
+        Start-Sleep -Seconds 3
+        $after = Get-RequestCount -Requests (Get-FakeWebsiteRequests -LogFile $log) -Method 'POST' -Path '/api/app/v1/sync'
+        if ($after -ne $before) { throw "a /sync request arrived after sign-out ($before -> $after)" }
+        Write-PhaseLog 'signed out: /logout called, switches off, session file gone, no upload after it'
+    } finally {
+        Save-LiveRunLog
+        Stop-OwnProcess -Process $site.Process
+    }
+    # The phases after this one run the app as a user has it: no fake website, no dev switches.
+    Stop-LiveAppGracefully
+    Start-LiveApp
+}
+
+# --- phase 11: an update over a running app --------------------------------------------------------------------------
+
+# The files of P the update must leave alone: every settings.json and every hook copy.
+function Get-HookFilesHash {
+    $hashes = Get-TreeHash -Root $script:P
+    $kept = [ordered]@{}
+    foreach ($key in $hashes.Keys) {
+        if ($key -like '.claude*/settings.json' -or $key -like '.claude*/hooks/*') { $kept[$key] = $hashes[$key] }
+    }
+    $kept
+}
+
+# Turn on, again: after phase 9 the hooks are off. The page shows a consent card, a "Turn on…"
+# that opens it, or the hooks switch, whichever the engine's state calls for.
+function Enable-Hooks {
+    Invoke-CdpInvoke -Page $script:Ui.NotchPage -Command $script:Ui.OpenSettings | Out-Null
+    $probe = "(() => { const q = (s) => !!document.querySelector(s); return q($(ConvertTo-JsString $script:Ui.ConsentTurnOn)) ? 'card' : q($(ConvertTo-JsString $script:Ui.Reconsider)) ? 'reconsider' : q($(ConvertTo-JsString $script:Ui.HooksSwitchOff)) ? 'switch' : 'none'; })()"
+    Wait-Until { $script:HooksUiState = [string](Invoke-Cdp -Arguments @('eval', $script:Ui.SettingsPage, $probe)); $script:HooksUiState -ne 'none' } 20 'Settings to offer to turn the hooks on'
+    $state = $script:HooksUiState
+    Write-PhaseLog "Settings offers: $state"
+    if ($state -eq 'reconsider') {
+        Invoke-CdpClick -Page $script:Ui.SettingsPage -Selector $script:Ui.Reconsider
+        $state = 'card'
+    }
+    $selector = if ($state -eq 'card') { $script:Ui.ConsentTurnOn } else { $script:Ui.HooksSwitchOff }
+    Wait-SettingsPage -Expression (Get-ArmedExpression -Selector $selector)
+    [void](Invoke-Cdp -Arguments @('click', $script:Ui.SettingsPage, $selector))
+    Wait-Until {
+        $done = $true
+        foreach ($name in $script:RunFolders) {
+            $file = Join-Path (Get-Folder $name) 'settings.json'
+            if ((Get-FileSha256 $file) -eq $script:ProfileHashes["$name/settings.json"] -or -not (Test-Path (Get-ExpectedHookExe $name))) { $done = $false }
+        }
+        $done
+    } 15 'both run folders to hold our entries again'
+    Start-Sleep -Milliseconds 700   # a pass writes its files one after the other; let it finish
+}
+
+# The index, among the entries of an event, of the first one that is ours.
+function Get-OwnEntryIndex {
+    param([Parameter(Mandatory)]$Settings, [Parameter(Mandatory)][string]$EventName, [Parameter(Mandatory)][string]$ExpectedExe)
+    $entries = @(Get-HookEntries -Settings $Settings | Where-Object { $_.Event -eq $EventName })
+    for ($i = 0; $i -lt $entries.Count; $i++) {
+        if (Get-OwnForm -Entry $entries[$i] -ExpectedExe $ExpectedExe -Resolve { param($p) Resolve-LongPath -Path $p }) { return [pscustomobject]@{ Index = $i; Entry = $entries[$i] } }
+    }
+    throw "no $EventName entry of ours in the settings.json"
+}
+
+function Invoke-UpdatePhase {
+    if (-not $script:LiveApp -or $script:LiveApp.HasExited) { Start-LiveApp }
+    $execAllowed = Get-ExecFormAllowedHere
+    $dummy = $null
+    $hook = $null
+    try {
+        Enable-Hooks
+        $problems = [Collections.Generic.List[string]]::new()
+        foreach ($line in (Get-InstalledFolderProblems -Name '.claude' -StatusLineWrapped $true -ExecFormAllowed $execAllowed)) { $problems.Add($line) }
+        foreach ($line in (Get-InstalledFolderProblems -Name '.claude-work' -StatusLineWrapped $false -ExecFormAllowed $execAllowed)) { $problems.Add($line) }
+        if ($problems.Count) { throw ("after Turn on again:`n  " + ($problems -join "`n  ")) }
+        $installed = Get-HookFilesHash
+        Write-PhaseLog "hooks are installed again ($($installed.Count) files hashed)"
+
+        # A PermissionRequest the app holds: the hook waits for the user's answer.
+        $settingsPath = Join-Path (Get-Folder '.claude') 'settings.json'
+        $settings = Read-Settings $settingsPath
+        $expected = Get-ExpectedHookExe '.claude'
+        $pre = Get-OwnEntryIndex -Settings $settings -EventName 'PreToolUse' -ExpectedExe $expected
+        $permission = Get-OwnEntryIndex -Settings $settings -EventName 'PermissionRequest' -ExpectedExe $expected
+        $shell = @(Get-ShellsFor -Entry $permission.Entry)[0]
+        $dummy = Start-DummyClaude
+        $environment = Get-HookEnvironmentArguments -ClaudePid $dummy.Id
+        $preStdin = Write-StdinFile -Name 'update-pre' -Json (New-HookStdin -Fixture 'permission_request_bash' -SessionId $script:SmokeSessionId -Transcript (Get-SmokeTranscript) -Cwd 'C:\smoke\work-app' -EventName 'PreToolUse' -ToolUseId 'toolu_smoke_update')
+        $requestStdin = Write-StdinFile -Name 'update-request' -Json (New-HookStdin -Fixture 'permission_request_bash' -SessionId $script:SmokeSessionId -Transcript (Get-SmokeTranscript) -Cwd 'C:\smoke\work-app')
+        $first = ConvertFrom-HookRuns -Text (Wait-NodeScript -Run (Start-HookRun -Arguments (@('--settings', $settingsPath, '--event', 'PreToolUse', '--index', [string]$pre.Index, '--shell', $shell, '--stdin', $preStdin, '--timeout', '15000') + $environment))).Stdout
+        foreach ($run in $first) { if ($run['exit'] -ne 0) { throw "the PreToolUse exited with $($run['exit'])" } }
+        $hook = Start-HookRun -Arguments (@('--settings', $settingsPath, '--event', 'PermissionRequest', '--index', [string]$permission.Index, '--shell', $shell, '--stdin', $requestStdin, '--timeout', '170000') + $environment)
+        Invoke-CdpCall -Page $script:Ui.NotchPage -Method 'panel_open' -Arguments @{ route = 'sessions'; reason = 'ring_click' } | Out-Null
+        # The request is on the panel: the app holds it, and the hook is waiting for the answer.
+        [void](Invoke-Cdp -Arguments @('wait', $script:Ui.PanelPage, "!!document.querySelector($(ConvertTo-JsString ($script:Ui.Answer -f 'allow', $script:SmokeSessionId)))", '30000') -TimeoutSeconds 45)
+        if ($hook.Process.HasExited) { throw 'the hook returned before the update: nothing was held' }
+        Write-PhaseLog 'a PermissionRequest is held by the running app'
+
+        # The update the way the updater runs it: passive, over the same install, started again after.
+        $oldApp = $script:LiveApp
+        $installer = Register-OwnProcess (Start-Process -FilePath $script:Installer -ArgumentList '/UPDATE', '/P', '/R' -Environment @{ USERPROFILE = $script:P } -PassThru)
+        $appStopped = $null
+        $hookDone = $null
+        $deadline = (Get-Date).AddSeconds(240)
+        while (-not ($installer.HasExited -and $appStopped -and $hookDone)) {
+            if ((Get-Date) -gt $deadline) { throw "the update did not finish within 240 s (installer exited: $($installer.HasExited), app stopped: $([bool]$appStopped), hook returned: $([bool]$hookDone))" }
+            $now = [DateTime]::UtcNow
+            if (-not $appStopped -and $oldApp.HasExited) { $appStopped = $now }
+            if (-not $hookDone -and $hook.Process.HasExited) { $hookDone = $now }
+            Start-Sleep -Milliseconds 100
+        }
+        if ($installer.ExitCode -ne 0) { throw "the installer exited with $($installer.ExitCode)" }
+        $lag = ($hookDone - $appStopped).TotalSeconds
+        Write-PhaseLog ("the app stopped, the held hook returned {0:N1} s later" -f $lag)
+        if ($lag -gt 2.0) { throw ("the held hook returned {0:N1} s after the app stopped (limit 2 s)" -f $lag) }
+        $result = @(ConvertFrom-HookRuns -Text (Wait-NodeScript -Run $hook).Stdout)[0]
+        if ($result['timedOut'] -or $result['exit'] -ne 0) { throw "the held hook exited with $($result['exit'])$(if ($result['timedOut']) { ' (timed out)' })" }
+        if ([string]$result['stdout_b64'] -ne '') { throw "the held hook printed $($result['stdout']) instead of failing open" }
+
+        # /R: the updated app is running again.
+        Wait-Until { [bool](Find-RunningApp) } 60 'the app to run again after the update'
+        Use-RunningApp -Process (Find-RunningApp)
+        $status = Wait-ControlStatus -Seconds 60 -What 'the updated app to listen' -Check ({ param($s) Test-ControlStatus -Status $s -Expect @{ transport = 'listening' } }.GetNewClosure())
+        if ($status['accounts'] -ne '2') { Write-Host "::warning::the app started by the installer sees $($status['accounts']) account(s), not 2: it may not run with the temporary profile as its home" }
+        Write-PhaseLog ("the updated app runs as process {0}; control status: {1}" -f $script:LiveApp.Id, (($status.GetEnumerator() | ForEach-Object { "$($_.Key): $($_.Value)" }) -join ', '))
+
+        # What the update must not touch.
+        Start-Sleep -Seconds 3
+        $changed = @(Compare-Hashes -Before $installed -After (Get-HookFilesHash))
+        if ($changed) { throw "the update changed P: $($changed -join ', ')" }
+        Write-PhaseLog 'every settings.json and hook copy in P is unchanged'
+    } finally {
+        if ($hook) { Stop-OwnProcess -Process $hook.Process }
+        if ($dummy) { Stop-OwnProcess -Process $dummy }
+        Save-LiveRunLog
+    }
+}
+
+# --- phase 12: the manual reinstall path --------------------------------------------------------------------------------
+
+function Invoke-ReinstallPhase {
+    # The app is running: "Uninstall before installing" has to cope with that too.
+    if (-not $script:LiveApp -or $script:LiveApp.HasExited) {
+        $running = Find-RunningApp
+        if ($running) { Use-RunningApp -Process $running } else { Start-LiveApp }
+    }
+    $hooksBefore = Get-HookFilesHash
+    if (-not @($hooksBefore.Keys | Where-Object { $_ -like '.claude*/settings.json' }).Count) { throw 'no settings.json in P to compare' }
+    $settingsOnly = [ordered]@{}
+    foreach ($key in $hooksBefore.Keys) { if ($key -like '.claude*/settings.json') { $settingsOnly[$key] = $hooksBefore[$key] } }
+
+    # uninstall.exe /S: what the reinstall page's default does, minus its page (no /UPDATE, nothing ticked).
+    Start-Process -FilePath $script:UninstallExe -ArgumentList '/S' -Environment @{ USERPROFILE = $script:P } -Wait
+    Wait-Until { -not (Test-Path $script:AppExe) -and -not (Test-Path $script:UninstallKey) } 60 'the uninstall'
+    if (-not $script:LiveApp.WaitForExit(10000)) { throw 'the uninstall left the app running' }
+    $changed = @(Compare-Hashes -Before $settingsOnly -After (Get-HookFilesHash) -Filter '.claude*/settings.json')
+    if ($changed) { throw "the uninstall (no /REMOVEHOOKS) changed a settings.json: $($changed -join ', ')" }
+    Write-PhaseLog 'uninstalled; every settings.json in P is as the hooks left it'
+
+    Start-Process -FilePath $script:Installer -ArgumentList '/S' -Environment @{ USERPROFILE = $script:P } -Wait
+    Wait-Until { (Test-Path $script:AppExe) -and (Test-Path $script:HookExe) -and (Test-Path $script:UninstallExe) } 60 'the reinstalled files'
+    $changed = @(Compare-Hashes -Before $settingsOnly -After (Get-HookFilesHash) -Filter '.claude*/settings.json')
+    if ($changed) { throw "the reinstall changed a settings.json: $($changed -join ', ')" }
+
+    # The first launch after it: consent was kept (it lives with the app's data, which an uninstall keeps).
+    $running = Find-RunningApp
+    if ($running) { Use-RunningApp -Process $running } else { Start-LiveApp }
+    $status = Wait-ControlStatus -Seconds 60 -What 'control status to say hook_consent: granted' -Check ({ param($s) Test-ControlStatus -Status $s -Expect @{ hook_consent = 'granted' } }.GetNewClosure())
+    Write-PhaseLog ("after the first launch control status: " + (($status.GetEnumerator() | ForEach-Object { "$($_.Key): $($_.Value)" }) -join ', '))
+    Start-Sleep -Seconds 3
+    $changed = @(Compare-Hashes -Before $settingsOnly -After (Get-HookFilesHash) -Filter '.claude*/settings.json')
+    if ($changed) { throw "the first launch changed a settings.json: $($changed -join ', ')" }
+    $hooksNow = Get-HookFilesHash
+    if (-not @($hooksNow.Keys | Where-Object { $_ -like '.claude*/hooks/agentnotch-hook*' }).Count) { throw 'no hook copy is left in P after the reinstall' }
+    Save-LiveRunLog
+}
+
 # --- phase 13: a hook with no app --------------------------------------------------------------------------
 
 # One run of the hook the way Claude Code starts it: piped stdin, no window. Seconds is the
@@ -1830,7 +2225,7 @@ function Invoke-UninstallPhase {
 # --- the table of phases ------------------------------------------------------------------------------------
 
 # Rows run in order. Gate names a flag of gates.json: while it is closed the phase is reported
-# and not run. Phases 10-12 of the design are added here, between 9 and 13.
+# and not run.
 function Get-PhaseTable {
     param($Gates = $null)
     $rows = @(
@@ -1845,6 +2240,9 @@ function Get-PhaseTable {
         @{ Number = '7';  Name = 'Turn on';                             Gate = 'engine'; Body = { Invoke-TurnOnPhase } }
         @{ Number = '8';  Name = 'every entry as written, every answer'; Gate = 'engine'; Body = { Invoke-EntriesAsWrittenPhase } }
         @{ Number = '9';  Name = 'Turn off';                            Gate = 'engine'; Body = { Invoke-TurnOffPhase } }
+        @{ Number = '10'; Name = 'sign-in and sync against the fake website'; Gate = 'cloud'; Body = { Invoke-CloudPhase } }
+        @{ Number = '11'; Name = 'update over a running app';           Gate = 'engine'; Body = { Invoke-UpdatePhase } }
+        @{ Number = '12'; Name = 'manual reinstall keeps the hooks';    Gate = 'engine'; Body = { Invoke-ReinstallPhase } }
         @{ Number = '13'; Name = 'the hook fails open';                 Body = { Invoke-FailOpenPhase } }
         @{ Number = '14'; Name = 'autostart on and off';                Gate = 'glue'; Body = { Invoke-AutostartPhase } }
         @{ Number = '15'; Name = 'uninstall with /REMOVEHOOKS';         Body = { Invoke-UninstallPhase } }

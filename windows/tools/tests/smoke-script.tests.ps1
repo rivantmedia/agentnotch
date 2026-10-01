@@ -959,6 +959,132 @@ Test-Case 'with the engine gate closed phases 5-9 are reported as waiting and no
     }
 }
 
+# --- phases 10-12 -----------------------------------------------------------------------------------------
+
+$site = 'http://127.0.0.1:4555'
+$rfcChallenge = 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM'
+function New-AuthorizeUrl([hashtable]$Override = @{}, [string]$Base = $site) {
+    $parts = [ordered]@{
+        provider              = 'google'
+        redirect_to           = 'agentnotch://auth-callback'
+        code_challenge        = $rfcChallenge
+        code_challenge_method = 's256'
+    }
+    foreach ($key in $Override.Keys) { if ($null -eq $Override[$key]) { $parts.Remove($key) } else { $parts[$key] = $Override[$key] } }
+    "$Base/auth/v1/authorize?" + (($parts.GetEnumerator() | ForEach-Object { "$($_.Key)=$([Uri]::EscapeDataString([string]$_.Value))" }) -join '&')
+}
+
+Test-Case 'the authorize URL the Mac builds passes (lower-case s256, the RFC 7636 challenge, the redirect escaped or not)' {
+    Assert-Equal @(Test-AuthorizeUrl -Url (New-AuthorizeUrl) -Website $site).Count 0 'problems'
+    Assert-Equal @(Test-AuthorizeUrl -Url (New-AuthorizeUrl @{ code_challenge_method = 'S256' }) -Website "$site/").Count 0 'upper-case S256, website with a slash'
+    Assert-Equal @(Test-AuthorizeUrl -Url "$site/auth/v1/authorize?provider=google&redirect_to=agentnotch://auth-callback&code_challenge=$rfcChallenge&code_challenge_method=s256" -Website $site).Count 0 'redirect not escaped'
+    Assert-Equal @(Test-AuthorizeUrl -Url (New-AuthorizeUrl @{ state = 'abc123' }) -Website $site).Count 0 'a state parameter is fine'
+}
+
+Test-Case 'a challenge that is not 43 base64url characters is refused' {
+    foreach ($bad in 'short', ($rfcChallenge + 'A'), ($rfcChallenge.Substring(1) + '='), ($rfcChallenge.Substring(1) + '+')) {
+        $problems = @(Test-AuthorizeUrl -Url (New-AuthorizeUrl @{ code_challenge = $bad }) -Website $site)
+        Assert-True ($problems -match 'code_challenge .* is not 43 base64url') "refused <$bad>"
+    }
+}
+
+Test-Case 'the plain method, a missing method and a missing challenge are refused' {
+    Assert-True (@(Test-AuthorizeUrl -Url (New-AuthorizeUrl @{ code_challenge_method = 'plain' }) -Website $site) -match "expected S256") 'plain'
+    Assert-True (@(Test-AuthorizeUrl -Url (New-AuthorizeUrl @{ code_challenge_method = $null }) -Website $site) -match "'code_challenge_method' parameter, found 0") 'no method'
+    Assert-True (@(Test-AuthorizeUrl -Url (New-AuthorizeUrl @{ code_challenge = $null }) -Website $site) -match "'code_challenge' parameter, found 0") 'no challenge'
+}
+
+Test-Case 'another redirect, another provider, another website and a relative URL are refused' {
+    Assert-True (@(Test-AuthorizeUrl -Url (New-AuthorizeUrl @{ redirect_to = 'https://evil.example/auth-callback' }) -Website $site) -match 'redirect_to is') 'redirect'
+    Assert-True (@(Test-AuthorizeUrl -Url (New-AuthorizeUrl @{ redirect_to = 'agentnotch://other' }) -Website $site) -match 'redirect_to is') 'host of the redirect'
+    Assert-True (@(Test-AuthorizeUrl -Url (New-AuthorizeUrl @{ provider = 'github' }) -Website $site) -match 'provider is') 'provider'
+    Assert-True (@(Test-AuthorizeUrl -Url (New-AuthorizeUrl @{} 'http://127.0.0.1:9') -Website $site) -match 'does not start with') 'website'
+    Assert-True (@(Test-AuthorizeUrl -Url (New-AuthorizeUrl @{} 'https://accounts.google.com') -Website $site) -match 'does not start with') 'a real host'
+    Assert-True (@(Test-AuthorizeUrl -Url '/auth/v1/authorize?provider=google' -Website $site) -match 'not an absolute URL') 'relative'
+    Assert-True (@(Test-AuthorizeUrl -Url '' -Website $site) -match 'not an absolute URL') 'empty'
+}
+
+Test-Case 'a URL that carries a secret is refused: the verifier, a token, a key, a code, a login' {
+    foreach ($name in 'code_verifier', 'access_token', 'refresh_token', 'apikey', 'secret', 'auth_code', 'code') {
+        $problems = @(Test-AuthorizeUrl -Url (New-AuthorizeUrl @{ $name = 'x' }) -Website $site)
+        Assert-True ($problems -match "carries '$name'") "refused $name"
+    }
+    Assert-True (@(Test-AuthorizeUrl -Url "http://user:pw@127.0.0.1:4555/auth/v1/authorize?provider=google&redirect_to=agentnotch://auth-callback&code_challenge=$rfcChallenge&code_challenge_method=s256" -Website $site).Count -gt 0) 'user info'
+}
+
+Test-Case 'a duplicated parameter is refused (which one would the server read?)' {
+    $url = (New-AuthorizeUrl) + '&provider=github'
+    Assert-True (@(Test-AuthorizeUrl -Url $url -Website $site) -match "exactly one 'provider' parameter, found 2") 'duplicate'
+}
+
+Test-Case 'the authorize URL is found in the dev browser log, whatever else the log holds' {
+    $good = New-AuthorizeUrl
+    Assert-Equal @(Get-AuthorizeUrls -Text '').Count 0 'empty log'
+    Assert-Equal (@(Get-AuthorizeUrls -Text "$good`n")[0]) $good 'a plain line'
+    Assert-Equal (@(Get-AuthorizeUrls -Text "2026-10-01T10:00:00Z open $good`r`n")[0]) $good 'a stamped line'
+    Assert-Equal (@(Get-AuthorizeUrls -Text "{`"url`":`"$good`"}`n")[0]) $good 'a JSON line'
+    Assert-Equal @(Get-AuthorizeUrls -Text "https://example.com/other`nnothing`n").Count 0 'other URLs are not it'
+    Assert-Equal @(Get-AuthorizeUrls -Text "$good`n$good`n").Count 2 'two sign-ins, two URLs'
+}
+
+Test-Case 'the fake website log is read line by line; a torn or foreign line is skipped' {
+    $text = "{`"method`":`"GET`",`"path`":`"/api/app/v1/config`",`"status`":200}`n{ torn`nnot json`n{`"method`":`"POST`",`"path`":`"/api/app/v1/sync`",`"status`":200,`"authorization`":`"present`"}`r`n[1,2]`n"
+    $entries = @(ConvertFrom-RequestLog -Text $text)
+    Assert-Equal $entries.Count 2 'two requests'
+    Assert-Equal $entries[1]['authorization'] 'present' 'fields'
+    Assert-Equal (Get-RequestCount -Requests $entries -Method 'POST' -Path '/api/app/v1/sync') 1 'one sync'
+    Assert-Equal (Get-RequestCount -Requests $entries -Method 'GET' -Path '/api/app/v1/sync') 0 'method counts'
+    Assert-Equal (Get-RequestCount -Requests @() -Method 'POST' -Path '/auth/v1/logout') 0 'no requests'
+    Assert-Equal @(ConvertFrom-RequestLog -Text '').Count 0 'empty'
+}
+
+Test-Case 'the cloud switches are read from the settings snapshot; anything but true is off' {
+    $on = Get-CloudSwitches -Settings @{ cloud = @{ sync_enabled = $true; summaries_enabled = $true } }
+    Assert-True ($on.Sync -and $on.Summaries) 'both on'
+    $off = Get-CloudSwitches -Settings @{ cloud = @{ sync_enabled = $false; summaries_enabled = 'yes' } }
+    Assert-True (-not $off.Sync -and -not $off.Summaries) 'false and a non-boolean are off'
+    $none = Get-CloudSwitches -Settings @{ other = 1 }
+    Assert-True (-not $none.Sync -and -not $none.Summaries) 'no cloud object is off'
+    $null = Get-CloudSwitches -Settings $null
+}
+
+Test-Case 'phases 10-12 are in the table in order between 9 and 13: 10 behind the cloud gate, 11 and 12 behind the engine gate' {
+    $table = @(Get-PhaseTable)
+    $numbers = @($table | ForEach-Object { $_.Number })
+    $at = $numbers.IndexOf('9')
+    Assert-Equal (($numbers[$at..($at + 4)]) -join ',') '9,10,11,12,13' 'consecutive'
+    Assert-Equal (@($table | Where-Object { $_.Number -eq '10' })[0].Gate) 'cloud' 'phase 10'
+    Assert-Equal (@($table | Where-Object { $_.Number -eq '11' })[0].Gate) 'engine' 'phase 11'
+    Assert-Equal (@($table | Where-Object { $_.Number -eq '12' })[0].Gate) 'engine' 'phase 12'
+}
+
+Test-Case 'with the cloud gate closed phase 10 is reported as waiting and the website is never started' {
+    $gatesPath = Join-Path (New-Scratch 'gates-cloud') 'g.json'
+    Write-GatesFile $gatesPath @{ engine = $true }
+    $gates = Read-Gates -Path $gatesPath
+    $phase = @(Get-PhaseTable -Gates $gates | Where-Object { $_.Number -eq '10' })[0]
+    Assert-True (-not (Test-GateOpen -Gates $gates -Name $phase.Gate)) 'gated'
+    Assert-True ((Get-GateWarning -Gates $gates -Number '10' -Gate $phase.Gate) -match '^::warning::phase 10 not run: waiting for ') 'with its warning'
+}
+
+Test-Case 'the fake website serves the sign-in answers phase 10 depends on (config names itself; the code exchange gives a session)' {
+    $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue
+    if (-not $node) { return }
+    $log = Join-Path (New-Scratch 'fake-site') 'log.jsonl'
+    $running = Start-FakeWebsite -LogFile $log -SyncDir (Join-Path (Split-Path $log) 'sync')
+    try {
+        Assert-True ($running.Url -match '^http://127\.0\.0\.1:\d+$') 'loopback only'
+        $config = Invoke-RestMethod -Uri "$($running.Url)/api/app/v1/config"
+        Assert-Equal $config.supabaseUrl $running.Url 'supabaseUrl names the website itself'
+        $session = Invoke-RestMethod -Method Post -Uri "$($running.Url)/auth/v1/token?grant_type=pkce" -ContentType 'application/json' -Body '{"auth_code":"smoke","code_verifier":"v"}'
+        Assert-True ([bool]$session.access_token) 'a session'
+        Start-Sleep -Milliseconds 200
+        Assert-Equal (Get-RequestCount -Requests (Get-FakeWebsiteRequests -LogFile $log) -Method 'POST' -Path '/auth/v1/token') 1 'the exchange is logged'
+    } finally {
+        Stop-OwnProcess -Process $running.Process
+    }
+}
+
 } finally {
     Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction SilentlyContinue
 }
