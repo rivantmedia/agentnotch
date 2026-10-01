@@ -4,7 +4,7 @@
 //!
 //! Owner: WP5. In so far: the pure modules (`attention`, `background`,
 //! `chat`, `completion`, `locator`, `phase`, `summary`, `tasks`, `tool_input`, `tool_results`,
-//! `transcript`).
+//! `transcript`, `registry`, `desktop`).
 //! Still WP0's stub: [`SessionStore`] (the §3.4 signatures, keeps no
 //! sessions); the real store comes in wp5-6..wp5-10.
 
@@ -12,8 +12,10 @@ pub mod attention;
 pub mod background;
 pub mod chat;
 pub mod completion;
+pub mod desktop;
 pub mod locator;
 pub mod phase;
+pub mod registry;
 pub mod summary;
 pub mod tasks;
 pub mod tool_input;
