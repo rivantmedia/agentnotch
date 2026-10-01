@@ -129,9 +129,14 @@ function Get-TreeHash {
 
 # What differs between two hash tables, one line each: changed, added, removed. Empty = same.
 function Compare-Hashes {
-    param([Parameter(Mandatory)]$Before, [Parameter(Mandatory)]$After, [string]$Filter = '')
+    param([Parameter(Mandatory)]$Before, [Parameter(Mandatory)]$After, [string]$Filter = '', [string[]]$Exclude = @())
     $differences = [Collections.Generic.List[string]]::new()
-    $inScope = { param($p) (-not $Filter) -or ($p -like $Filter) }
+    $inScope = {
+        param($p)
+        if ($Filter -and $p -notlike $Filter) { return $false }
+        foreach ($pattern in $Exclude) { if ($p -like $pattern) { return $false } }
+        $true
+    }
     foreach ($path in $Before.Keys) {
         if (-not (& $inScope $path)) { continue }
         if (-not $After.Contains($path)) { $differences.Add("removed: $path") }
@@ -185,6 +190,24 @@ function Get-CliLogPath {
     Join-Path $Data ("$($Arguments[0]).log")
 }
 
+# Where the app's own data lives for a run: the app resolves its folders through the shell, and
+# the shell may honour the USERPROFILE the app runs with (the temporary profile) or not. Both
+# places are looked at, so the check is about what the app did, not about that detail.
+function Get-DataRoots {
+    param([Parameter(Mandatory)][string]$Profile, [string]$Roaming = $env:APPDATA)
+    @($Roaming, (Join-Path $Profile 'AppData\Roaming'))
+}
+
+# The first existing <root>\<folder>\<file>, or $null.
+function Find-DataFile {
+    param([Parameter(Mandatory)][string[]]$Roots, [Parameter(Mandatory)][string]$Folder, [Parameter(Mandatory)][string]$File)
+    foreach ($root in $Roots) {
+        $path = Join-Path (Join-Path $root $Folder) $File
+        if (Test-Path -LiteralPath $path -PathType Leaf) { return $path }
+    }
+    $null
+}
+
 function Merge-Environment {
     param([hashtable[]]$Layers)
     $merged = @{}
@@ -204,11 +227,12 @@ function Start-AppProcess {
 # One CLI call: the exit code from the process, the text from the command's log file.
 function Invoke-Cli {
     param([Parameter(Mandatory)][string[]]$Arguments, [hashtable]$Environment = @{})
-    $log = Get-CliLogPath -Data $script:DataDir -Arguments $Arguments
-    Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue
+    $logs = @(foreach ($root in Get-DataRoots -Profile $script:P) { Get-CliLogPath -Data (Join-Path $root 'Agent Notch') -Arguments $Arguments })
+    foreach ($log in $logs) { Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue }
     $process = Start-AppProcess -Exe $script:AppExe -Arguments $Arguments -Environment $Environment -Wait
-    $text = if (Test-Path -LiteralPath $log) { [string](Get-Content -LiteralPath $log -Raw) } else { '' }
-    [pscustomobject]@{ ExitCode = $process.ExitCode; Text = $text; Log = $log }
+    $written = @($logs | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf })
+    $text = if ($written) { [string](Get-Content -LiteralPath $written[0] -Raw) } else { '' }
+    [pscustomobject]@{ ExitCode = $process.ExitCode; Text = $text; Log = if ($written) { $written[0] } else { $logs -join ' or ' } }
 }
 
 function Wait-Until {
@@ -419,8 +443,7 @@ function Initialize-Context {
     $script:UninstallExe = Join-Path $script:InstallDir 'uninstall.exe'
     $script:UninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Agent Notch'
     $script:RunKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
-    $script:DataDir = Join-Path $env:APPDATA 'Agent Notch'
-    $script:SealedDataDir = Join-Path $env:APPDATA 'Agent Notch Sealed'
+    $script:DataRoots = @(Get-DataRoots -Profile $script:P)
     $script:FixtureDir = Join-Path $PSScriptRoot 'smoke\profile'
     $script:FakeClaudeLog = Join-Path $temp 'fake-claude.log'
     $script:UsageFixture = Join-Path $script:FixtureDir 'usage.json'
@@ -547,7 +570,13 @@ function Invoke-DoctorPhase {
     Set-Content -LiteralPath (Join-Path $script:ArtifactsDir 'doctor.log') -Value $run.Text
     Write-PhaseLog $run.Text
     if ($run.ExitCode -ne 0) { throw "doctor exited with $($run.ExitCode)" }
-    if (-not $run.Text.Trim()) { throw "the doctor wrote no $($run.Log)" }
+    if (-not $run.Text.Trim()) {
+        foreach ($root in $script:DataRoots) {
+            Write-PhaseLog "under ${root}:"
+            Get-ChildItem -LiteralPath $root -Filter 'Agent Notch*' -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object { Write-PhaseLog "  $($_.FullName)" }
+        }
+        throw "the doctor wrote no $($run.Log)"
+    }
     $named = @(Find-CredentialNames -Text $run.Text)
     if ($named) { throw "the doctor's report names $($named -join ', ')" }
     if (Test-GateOpen -Gates $script:GateSet -Name 'engine') {
@@ -562,8 +591,16 @@ function Invoke-DoctorPhase {
 # and shows its notch. Phase 4 of the design replaces it with the self-test; until then it is
 # what proves a build starts at all.
 function Invoke-SealedLaunchPhase {
-    Remove-Item -LiteralPath $script:SealedDataDir -Recurse -Force -ErrorAction SilentlyContinue
-    $dataBefore = Get-TreeHash -Root $script:DataDir
+    $dataTrees = {
+        $trees = [ordered]@{}
+        foreach ($root in $script:DataRoots) {
+            foreach ($pair in (Get-TreeHash -Root (Join-Path $root 'Agent Notch') -Prefix "$root/").GetEnumerator()) { $trees[$pair.Key] = $pair.Value }
+        }
+        $trees
+    }
+    $removeSealed = { foreach ($root in $script:DataRoots) { Remove-Item -LiteralPath (Join-Path $root 'Agent Notch Sealed') -Recurse -Force -ErrorAction SilentlyContinue } }
+    & $removeSealed
+    $dataBefore = & $dataTrees
     $sealedEnvironment = Merge-Environment @((Get-AppEnvironment), @{ AGENTNOTCH_SAFE_MODE = '1' })
     $app = Register-OwnProcess (Start-AppProcess -Exe $script:AppExe -Environment $sealedEnvironment)
     Start-Sleep -Seconds 20
@@ -572,14 +609,16 @@ function Invoke-SealedLaunchPhase {
     $visible = [AgentNotch.Windows]::Visible([uint32]$app.Id)
     Stop-OwnProcess -Process $app
     if ($visible -lt 1) { throw 'the sealed app shows no window' }
-    Copy-Item -LiteralPath (Join-Path $script:SealedDataDir 'run.log') -Destination (Join-Path $script:ArtifactsDir 'sealed-run.log') -ErrorAction SilentlyContinue
-    $runLog = Get-Content -LiteralPath (Join-Path $script:SealedDataDir 'run.log') -Raw -ErrorAction SilentlyContinue
+    $runLogPath = Find-DataFile -Roots $script:DataRoots -Folder 'Agent Notch Sealed' -File 'run.log'
+    if (-not $runLogPath) { throw "the sealed run left no run.log under $($script:DataRoots -join ' or ')" }
+    Copy-Item -LiteralPath $runLogPath -Destination (Join-Path $script:ArtifactsDir 'sealed-run.log')
+    $runLog = Get-Content -LiteralPath $runLogPath -Raw
     if ($runLog -notmatch 'an: hub started \(sealed\)') { throw "the sealed hub did not start: $runLog" }
-    $changed = @(Compare-Hashes -Before $dataBefore -After (Get-TreeHash -Root $script:DataDir))
-    if ($changed) { throw "a sealed run wrote to $script:DataDir`: $($changed -join ', ')" }
-    $changedP = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P))
+    $changed = @(Compare-Hashes -Before $dataBefore -After (& $dataTrees))
+    if ($changed) { throw "a sealed run wrote to the app's own data folder: $($changed -join ', ')" }
+    $changedP = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P) -Exclude 'AppData/*')
     if ($changedP) { throw "a sealed run changed P: $($changedP -join ', ')" }
-    Remove-Item -LiteralPath $script:SealedDataDir -Recurse -Force -ErrorAction SilentlyContinue
+    & $removeSealed
 }
 
 # --- phase 13: a hook with no app --------------------------------------------------------------------------
@@ -675,7 +714,7 @@ function Invoke-UninstallPhase {
     Wait-Until { -not (Test-Path $script:AppExe) -and -not (Test-Path $script:UninstallKey) } 60 'the uninstall'
     if ($null -ne (Get-RunValue)) { throw 'the Run value is still there' }
     if (Test-Path 'HKCU:\Software\Classes\agentnotch') { throw 'the agentnotch: scheme is still registered' }
-    $changed = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P) -Filter '*settings.json')
+    $changed = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P) -Filter '.claude*/settings.json')
     if ($changed) { throw "uninstall changed what it must leave: $($changed -join ', ')" }
     $copies = @(Get-ChildItem -LiteralPath $script:P -Recurse -Force -Filter 'agentnotch-hook*' -ErrorAction SilentlyContinue)
     if ($copies) { throw "hook copies are left in P: $($copies.FullName -join ', ')" }
@@ -683,7 +722,9 @@ function Invoke-UninstallPhase {
     # folders legitimately hold what its commands logged: an uninstall keeps them unless asked.)
     $profileChanged = @(Compare-Hashes -Before $script:KnownProfileBefore -After (Get-KnownProfileHashes))
     if ($profileChanged) { throw "the runner's own Claude profile changed: $($profileChanged -join ', ')" }
-    if (Test-Path -LiteralPath $script:SealedDataDir) { throw "$script:SealedDataDir is still there" }
+    foreach ($root in $script:DataRoots) {
+        if (Test-Path -LiteralPath (Join-Path $root 'Agent Notch Sealed')) { throw "$root\Agent Notch Sealed is still there" }
+    }
     Write-PhaseLog 'uninstalled; P holds the original settings and no hook copy; the runner profile is untouched'
 }
 

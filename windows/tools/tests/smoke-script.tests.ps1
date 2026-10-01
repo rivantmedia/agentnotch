@@ -228,6 +228,25 @@ Test-Case 'environment layers merge with the later one winning' {
     Assert-Equal "$($merged.A)$($merged.B)$($merged.C)" '134' 'merged'
 }
 
+Test-Case 'the data roots are the real roaming folder and one inside the temporary profile, and a data file is found in either' {
+    $roaming = New-Scratch 'data-real'; $profileDir = New-Scratch 'data-profile'
+    $roots = @(Get-DataRoots -Profile $profileDir -Roaming $roaming)
+    Assert-Equal $roots.Count 2 'two roots'
+    Assert-Equal $roots[0] $roaming 'the real one first'
+    Assert-Equal $roots[1] (Join-Path $profileDir 'AppData\Roaming') 'the profile one second'
+    Assert-Equal ($null -eq (Find-DataFile -Roots $roots -Folder 'Agent Notch' -File 'doctor.log')) $true 'nothing yet'
+    $inProfile = Join-Path $roots[1] 'Agent Notch'
+    New-Item -ItemType Directory -Force -Path $inProfile | Out-Null
+    [IO.File]::WriteAllText((Join-Path $inProfile 'doctor.log'), 'x')
+    Assert-Equal (Find-DataFile -Roots $roots -Folder 'Agent Notch' -File 'doctor.log') (Join-Path $inProfile 'doctor.log') 'found in the profile'
+}
+
+Test-Case 'a hash comparison can leave a folder out' {
+    $before = [ordered]@{ '.claude/settings.json' = 'a' }
+    $after = [ordered]@{ '.claude/settings.json' = 'a'; 'AppData/Roaming/Agent Notch/x.log' = 'b'; '.local/y' = 'c' }
+    Assert-Equal (@(Compare-Hashes -Before $before -After $after -Exclude 'AppData/*') -join ';') 'added: .local/y' 'excluded'
+}
+
 # --- the temporary Claude setup -------------------------------------------------------------------
 
 Test-Case 'a settings fixture becomes CRLF with a byte order mark; a plain one stays LF without' {
