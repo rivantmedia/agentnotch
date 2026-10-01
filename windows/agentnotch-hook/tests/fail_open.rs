@@ -16,9 +16,9 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
@@ -84,6 +84,25 @@ fn exe_command(exe: &Path, args: &[&str]) -> Command {
     command
 }
 
+/// Starts `command`, again while its exe is "busy" (ETXTBSY). A copy of the exe that this
+/// thread has just written can still be open for writing in a child another test thread forked
+/// meanwhile (until that child execs), and Linux refuses to run a file open for writing
+/// (rust-lang/rust#114554). The window is a few milliseconds.
+fn spawn(command: &mut Command) -> Child {
+    let started = Instant::now();
+    loop {
+        match command.spawn() {
+            Err(e)
+                if e.kind() == ErrorKind::ExecutableFileBusy
+                    && started.elapsed() < Duration::from_secs(5) =>
+            {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            started_child => return started_child.expect("the hook exe starts"),
+        }
+    }
+}
+
 fn run(mut command: Command, stdin: Stdin) -> Run {
     command
         .stdin(match stdin {
@@ -93,7 +112,7 @@ fn run(mut command: Command, stdin: Stdin) -> Run {
         })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = command.spawn().expect("the hook exe starts");
+    let mut child = spawn(&mut command);
     let pid = child.id();
     if let (Stdin::Bytes(bytes), Some(mut pipe)) = (stdin, child.stdin.take()) {
         // A role that reads no stdin may be gone already: a broken pipe is fine.
