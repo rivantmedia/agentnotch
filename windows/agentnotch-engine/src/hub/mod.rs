@@ -5,6 +5,7 @@
 
 pub mod api;
 pub mod project;
+pub mod project_settings;
 pub mod sealed_fixture;
 
 pub use api::*;

@@ -5,14 +5,21 @@
 // Each suite uses its own part of this.
 #![allow(dead_code)]
 
+use agentnotch_engine::accounts::AccountRegistry;
 use agentnotch_engine::attention::rows::ResetClock;
 use agentnotch_engine::core::settings::ControlSettings;
+use agentnotch_engine::hooks::HookManager;
 use agentnotch_engine::hub::project::{Directory, ProjectionInput, RowExtras};
-use agentnotch_engine::model::{
-    Account, AccountId, Attribution, HubSnapshot, IdentityId, NeedsInputReason, PermissionContext,
-    Phase, RingId, SessionView, SetupState, UiSettings,
+use agentnotch_engine::hub::project_settings::{
+    settings_snapshot, setup_state, SettingsInput, SetupInput,
 };
-use agentnotch_engine::runtime_types::RingReading;
+use agentnotch_engine::model::{
+    Account, AccountId, Attribution, CloudState, DesktopCacheFormat, HubSnapshot, IdentityId,
+    NeedsInputReason, PermissionContext, Phase, RingId, SessionView, SettingsSnapshot, SetupState,
+    UiSettings,
+};
+use agentnotch_engine::platform::NotifyPermission;
+use agentnotch_engine::runtime_types::{RingReading, VersionSighting};
 use agentnotch_engine::sessions::session::Session;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -235,5 +242,94 @@ impl World {
 
     pub fn project(&self) -> HubSnapshot {
         self.project_at(now(), now_ms())
+    }
+}
+
+/// Everything one settings projection reads, owned, so a test can change one
+/// part (the registry and the hook manager are the real stores).
+pub struct SettingsWorld {
+    pub registry: AccountRegistry,
+    pub hooks: HookManager,
+    pub settings: ControlSettings,
+    pub readings: BTreeMap<IdentityId, RingReading>,
+    pub versions: Vec<VersionSighting>,
+    pub window_names: BTreeMap<String, String>,
+    pub changed: Vec<AccountId>,
+    pub pipe_name: String,
+    pub busy: bool,
+    pub refreshing: bool,
+    pub desktop_format: Option<DesktopCacheFormat>,
+    pub notify: NotifyPermission,
+    pub hotkey_ok: bool,
+    pub hotkey_message: Option<String>,
+    pub cloud: CloudState,
+    pub session_count: u32,
+    pub review_count: u32,
+    pub transport_error: Option<String>,
+    pub sealed: bool,
+}
+
+impl SettingsWorld {
+    pub fn new(registry: AccountRegistry, hooks: HookManager) -> SettingsWorld {
+        SettingsWorld {
+            registry,
+            hooks,
+            settings: ControlSettings::default(),
+            readings: BTreeMap::new(),
+            versions: Vec::new(),
+            window_names: BTreeMap::new(),
+            changed: Vec::new(),
+            pipe_name: r"\\.\pipe\agentnotch-hook-test".to_owned(),
+            busy: false,
+            refreshing: false,
+            desktop_format: None,
+            notify: NotifyPermission::Allowed,
+            hotkey_ok: true,
+            hotkey_message: None,
+            cloud: CloudState::default(),
+            session_count: 0,
+            review_count: 0,
+            transport_error: None,
+            sealed: false,
+        }
+    }
+
+    pub fn setup_input(&self) -> SetupInput<'_> {
+        SetupInput {
+            registry: &self.registry,
+            hooks: &self.hooks,
+            settings: &self.settings,
+            window_names: &self.window_names,
+            transport_error: self.transport_error.as_deref(),
+            sealed: self.sealed,
+        }
+    }
+
+    pub fn setup(&self) -> SetupState {
+        setup_state(&self.setup_input())
+    }
+
+    pub fn snapshot(&self) -> SettingsSnapshot {
+        self.snapshot_at(now())
+    }
+
+    pub fn snapshot_at(&self, now: SystemTime) -> SettingsSnapshot {
+        settings_snapshot(&SettingsInput {
+            now,
+            setup: self.setup_input(),
+            readings: &self.readings,
+            versions: &self.versions,
+            changed_folders: &self.changed,
+            pipe_name: &self.pipe_name,
+            busy: self.busy,
+            refreshing: self.refreshing,
+            desktop_format: self.desktop_format,
+            notify_permission: self.notify,
+            hotkey_ok: self.hotkey_ok,
+            hotkey_message: self.hotkey_message.as_deref(),
+            cloud: &self.cloud,
+            session_count: self.session_count,
+            review_count: self.review_count,
+        })
     }
 }
