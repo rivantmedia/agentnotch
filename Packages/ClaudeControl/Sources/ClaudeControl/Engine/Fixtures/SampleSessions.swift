@@ -95,7 +95,7 @@ enum SampleSessions {
                 project: "side-blog",
                 account: side,
                 phase: .processing,
-                tasks: taskList(done: 1, active: "Writing the intro", pending: 2),
+                tasks: taskList(done: 1, active: "Writing the intro", pending: 2, minutesEach: 2, activeFor: 1),
                 context: 21,
                 turnStarted: minutes(-3)
             ),
@@ -162,7 +162,7 @@ enum SampleSessions {
                 project: "billing-service",
                 account: work,
                 phase: .processing,
-                tasks: taskList(done: 2, active: "Writing tests for the v2 schema", pending: 3),
+                tasks: taskList(done: 2, active: "Writing tests for the v2 schema", pending: 3, minutesEach: 5, activeFor: 4),
                 context: 84,
                 turnStarted: minutes(-14)
             ),
@@ -172,7 +172,7 @@ enum SampleSessions {
                 project: "infra",
                 account: personal,
                 phase: .processing,
-                tasks: taskList(done: 9, active: "Bisecting the failing commit", pending: 5),
+                tasks: taskList(done: 9, active: "Bisecting the failing commit", pending: 5, minutesEach: 0.75, activeFor: 1.25),
                 context: 93,
                 turnStarted: minutes(-8),
                 lastMessage: (role: "tool", tool: "Grep", text: "ETIMEDOUT|socket hang up")
@@ -441,19 +441,42 @@ enum SampleSessions {
 
     /// A task list with `done` completed tasks, an optional in-progress one
     /// and `pending` more.
-    static func taskList(done: Int, active: String?, pending: Int) -> SessionTaskList {
+    ///
+    /// With `minutesEach`, the list is dated the way Claude writes it: each
+    /// completed task took that long, one after the other, and the one in
+    /// progress started `activeFor` minutes before `now` (so it has a pace
+    /// and an estimate). Without, it has no times, so no estimate.
+    static func taskList(
+        done: Int,
+        active: String?,
+        pending: Int,
+        minutesEach: Double? = nil,
+        activeFor: Double = 0,
+        now: Date = SampleSessions.now
+    ) -> SessionTaskList {
+        var names = (0..<done).map { "Step \($0 + 1)" }
+        if let active { names.append(active) }
+        names += (0..<pending).map { "Follow-up \($0 + 1)" }
+        // The list as written while working on task `running`, with the ones before it completed.
+        func todos(running: Int?) -> [(content: String, status: String, activeForm: String?)] {
+            let finished = running ?? done
+            return names.enumerated().map { index, name in
+                let status = index < finished ? "completed" : index == running ? "in_progress" : "pending"
+                return (name, status, active != nil && index == done ? name : nil)
+            }
+        }
+        let running = active == nil ? nil : done
         var list = SessionTaskList()
-        var todos: [(content: String, status: String, activeForm: String?)] = []
-        for index in 0..<done {
-            todos.append(("Step \(index + 1)", "completed", nil))
+        guard let minutesEach else {
+            list.todosReplaced(todos(running: running))
+            return list
         }
-        if let active {
-            todos.append((active, "in_progress", active))
+        let each = minutesEach * 60
+        let start = now.addingTimeInterval(-(Double(done) * each + (active == nil ? 0 : activeFor * 60)))
+        for step in 0..<done {
+            list.todosReplaced(todos(running: step), at: start.addingTimeInterval(Double(step) * each))
         }
-        for index in 0..<pending {
-            todos.append(("Follow-up \(index + 1)", "pending", nil))
-        }
-        list.todosReplaced(todos)
+        list.todosReplaced(todos(running: running), at: start.addingTimeInterval(Double(done) * each))
         return list
     }
 

@@ -22,6 +22,10 @@ import Foundation
 @MainActor
 final class ClaudeSessionFeed {
     static let throttle: TimeInterval = 0.4
+    /// A working session's row says how long its tasks have left ("3/7 ·
+    /// ~4m left"), which moves with the clock as well as with the hub; the
+    /// panel's list ticks as often. Rows that read the same aren't sent.
+    static let clockInterval: TimeInterval = 30
 
     private weak var hub: ClaudeControlHub?
     private weak var fleet: NotchFleet?
@@ -49,10 +53,14 @@ final class ClaudeSessionFeed {
     /// gets (`changes`: the connected set, the ring list).
     func start(alsoOn changes: AnyPublisher<Void, Never>) {
         guard let hub else { return }
-        Publishers.Merge3(
+        Publishers.Merge4(
             hub.$sessions.map { _ in () }.eraseToAnyPublisher(),
             hub.$accounts.map { _ in () }.eraseToAnyPublisher(),
-            changes
+            changes,
+            Timer.publish(every: Self.clockInterval, on: .main, in: .common)
+                .autoconnect()
+                .map { _ in () }
+                .eraseToAnyPublisher()
         )
         // `@Published` fires before the value lands; the update runs a turn
         // later at the earliest.

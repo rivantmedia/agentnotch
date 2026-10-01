@@ -220,6 +220,12 @@ Agent Notch is the same app under a new name, with a new bundle id
   - Each row carries its actions: **Allow / Always / Deny**, a question's options (or
     **Other…**), **Review plan / Approve**, **Show terminal**. Click a row for the
     conversation and a reply box.
+  - A working session's task list shows as a bar with the time left: `▬▬▬▭▭ 3/7 · ~4m left`.
+    The estimate is the average time its finished tasks took, times the tasks still to do,
+    less what the current task has already run. The current task fills its segment as it runs
+    (never past 90%). The estimate appears once a task has finished and is shown only while
+    Claude is working. In the chat, the task list shows the percent done and how long each
+    task took.
   - The panel opens by itself when a session needs you, unless you are already in its
     terminal or a full-screen app is in front. Settings › *Open the sessions panel* sets this
     to Never, Needs you, or Needs you or done.

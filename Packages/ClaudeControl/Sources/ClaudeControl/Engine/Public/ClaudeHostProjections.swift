@@ -289,10 +289,15 @@ nonisolated enum ClaudeHostProjections {
     static func tasks(_ list: SessionTaskList) -> ClaudeTaskProgress? {
         let items = list.items
         guard !items.isEmpty else { return nil }
+        // Only what changes with a task event, so the summary republishes on
+        // those and not as the clock runs.
+        let timing = list.timing
         return ClaudeTaskProgress(
             completed: list.completedCount,
             total: items.count,
-            active: list.activeItem?.activeLabel
+            active: list.activeItem?.activeLabel,
+            secondsPerTask: timing.secondsPerTask,
+            activeSince: timing.activeSince
         )
     }
 
@@ -319,10 +324,12 @@ nonisolated enum ClaudeHostProjections {
     /// |----------------|----------|------------------------------------------------------|------------|
     /// | needs input    | .waiting | waitingFor: the needs-input summary                  | wait start |
     /// | failed turn    | .idle    | "Stopped · Rate limited (weekly) · resets Fri 09:00" | activity   |
-    /// | working        | .busy    | "3/7 · Writing tests · ctx 42%", "Bash…", "Thinking…"| turn start |
+    /// | working        | .busy    | "3/7 · ~4m left · Writing tests · ctx 42%", "Bash…"  | turn start |
     /// | ready (review) | .success | "Ready for review · <project> · 2 in background"     | completion |
     /// | idle           | .idle    | "<host app> · <project>"                             | activity   |
-    static func activityRow(_ session: ClaudeSessionSummary, runningTool: String? = nil) -> ClaudeActivityRow {
+    ///
+    /// The time left (once the session's tasks have a pace) is as of `now`.
+    static func activityRow(_ session: ClaudeSessionSummary, runningTool: String? = nil, now: Date = Date()) -> ClaudeActivityRow {
         let runningTool = runningTool ?? session.runningTool
         let state: ClaudeActivityRow.State
         var waitingFor: String?
@@ -348,6 +355,7 @@ nonisolated enum ClaudeHostProjections {
                 if let tasks = session.tasks { parts.append("\(tasks.completed)/\(tasks.total)") }
             } else if let tasks = session.tasks {
                 parts.append("\(tasks.completed)/\(tasks.total)")
+                if let left = tasks.remainingLabel(now: now) { parts.append(left) }
                 if let active = tasks.active.map({ collapsed($0, limit: 48) }), !active.isEmpty {
                     parts.append(active)
                 }

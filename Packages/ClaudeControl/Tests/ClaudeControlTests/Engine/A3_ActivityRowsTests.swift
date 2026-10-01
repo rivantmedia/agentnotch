@@ -51,7 +51,7 @@ struct A3_ActivityRowsTests {
                                                     calendar: calendar, locale: locale)
         #expect(summary.ringID == "claude-work")
         #expect(summary.pid == 4242)
-        return ClaudeHostProjections.activityRow(summary, runningTool: tool)
+        return ClaudeHostProjections.activityRow(summary, runningTool: tool, now: now)
     }
 
     private func expectPrivate(_ row: ClaudeActivityRow) {
@@ -146,6 +146,25 @@ struct A3_ActivityRowsTests {
         let thinking = row(state(phase: .processing, context: 7))
         #expect(thinking.detail == "Thinking… · ctx 7%")
         expectPrivate(withTasks)
+    }
+
+    @Test func workingTasksWithAPaceSayHowLongIsLeft() {
+        // 3 done at 4 minutes each; "Writing tests" started 1 minute ago; 4 more.
+        let tasks = SampleSessions.taskList(done: 3, active: "Writing tests", pending: 4,
+                                            minutesEach: 4, activeFor: 1, now: now)
+        let summary = ClaudeHostProjections.session(state(phase: .processing, tasks: tasks, context: 42.4), home: home,
+                                                    hostApp: "iTerm2", now: now, calendar: calendar, locale: locale)
+        let progress = summary.tasks
+        #expect(progress?.secondsPerTask == 240)
+        #expect(progress?.activeSince == now.addingTimeInterval(-60))
+        // 3 minutes of the active task, then 4 × 4.
+        #expect(progress?.remaining(now: now) == 19.0 * 60)
+        #expect(progress?.percent(now: now) == 40)
+        let row = ClaudeHostProjections.activityRow(summary, now: now)
+        #expect(row.detail == "3/8 · ~19m left · Writing tests · ctx 42%")
+        // The summary holds no clock: a minute on, only the row's text moves.
+        let later = ClaudeHostProjections.activityRow(summary, now: now.addingTimeInterval(60))
+        #expect(later.detail == "3/8 · ~18m left · Writing tests · ctx 42%")
     }
 
     @Test func reviewWaitsUntilReviewed() {

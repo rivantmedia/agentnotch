@@ -34,6 +34,9 @@ nonisolated struct SessionRowModel: Identifiable, Equatable, Sendable {
     let accessibilityLabel: String
     /// The turn stopped on an error: "Dismiss" clears it (GUX-2).
     var isFailed: Bool = false
+    /// A working session's progress with credit for the task in progress and
+    /// the time left; nil otherwise (the bar then counts completed tasks only).
+    var taskEstimate: TaskEstimate? = nil
 
     /// Ready for review: "Mark reviewed" means something.
     var isReviewable: Bool { bucket == .readyForReview }
@@ -79,7 +82,8 @@ nonisolated struct SessionRowModel: Identifiable, Equatable, Sendable {
             accessibilityLabel: SessionRowContent.accessibilityLabel(
                 for: session, accountLabel: account?.label, rateLimit: rateLimit, now: now
             ),
-            isFailed: session.hasFailedTurn
+            isFailed: session.hasFailedTurn,
+            taskEstimate: SessionRowContent.taskEstimate(for: session, now: now)
         )
     }
 }

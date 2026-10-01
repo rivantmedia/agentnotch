@@ -354,7 +354,7 @@ nonisolated enum SessionRowContent {
             }
         }
         if !session.tasks.isEmpty {
-            parts.append(taskSummary(session.tasks))
+            parts.append(taskSummary(session.tasks, estimate: taskEstimate(for: session, now: now)))
         }
         if let accountLabel {
             parts.append("account \(accountLabel)")
@@ -362,13 +362,25 @@ nonisolated enum SessionRowContent {
         return parts.joined(separator: ", ")
     }
 
-    /// "3 of 7 tasks done, now: Writing tests".
-    static func taskSummary(_ tasks: SessionTaskList) -> String {
+    /// "3 of 7 tasks done, now: Writing tests"; with an estimate, "3 of 7
+    /// tasks done, 46%, about 4 minutes left, now: Writing tests".
+    static func taskSummary(_ tasks: SessionTaskList, estimate: TaskEstimate? = nil) -> String {
         var text = "\(tasks.completedCount) of \(tasks.totalCount) tasks done"
+        if let estimate, let spoken = estimate.spokenRemaining {
+            text += ", \(estimate.percent)%, \(spoken)"
+        }
         if let active = tasks.activeItem {
             text += ", now: \(active.activeLabel)"
         }
         return text
+    }
+
+    /// How far a working session's tasks are and how long the rest should
+    /// take; nil for a session that isn't working (a session waiting on the
+    /// user, finished or idle runs no clock) or has no tasks.
+    static func taskEstimate(for session: SessionState, now: Date) -> TaskEstimate? {
+        guard session.attention.bucket == .working, !session.tasks.isEmpty else { return nil }
+        return session.tasks.timing.estimate(now: now)
     }
 
     // MARK: Helpers

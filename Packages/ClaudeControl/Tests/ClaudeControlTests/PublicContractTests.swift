@@ -212,6 +212,10 @@ struct PublicContractTests {
         let _: (ClaudeNeedsInput.Kind, String) = (needs.kind, needs.summary)
         let tasks = ClaudeTaskProgress(completed: 1, total: 3, active: "Writing tests")
         let _: (Int, Int, String?) = (tasks.completed, tasks.total, tasks.active)
+        let timed = ClaudeTaskProgress(completed: 1, total: 3, active: "Writing tests", secondsPerTask: 60, activeSince: Date())
+        let _: (TimeInterval?, Date?) = (timed.secondsPerTask, timed.activeSince)
+        let _: (Double, Int, TimeInterval?, String?) = (timed.fraction(now: Date()), timed.percent(now: Date()),
+                                                        timed.remaining(now: Date()), timed.remainingLabel(now: Date()))
         let s = ClaudeSessionSummary(id: "s", ringID: "claude", title: "t", projectName: "p", attention: .working,
                                      attentionSince: Date())
         let _: (String, String, Int32?, String, String, String?, ClaudeAttention, Date, ClaudeTaskProgress?, Double?, Int) =

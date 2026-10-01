@@ -3,9 +3,10 @@
 //  ClaudeControl
 //
 //  The chat's header: back and the title, what Claude is on (or the
-//  project), then at a glance the task progress (a click opens the task
-//  board), context use, the account and a button that brings up the
-//  session's terminal.
+//  project), then at a glance the task progress and time left (a click
+//  opens the task board: percent done, time left, and how long each task
+//  took or has run), context use, the account and a button that brings up
+//  the session's terminal.
 //
 
 import SwiftUI
@@ -19,6 +20,10 @@ struct ChatSessionHeader: View {
     /// Shown only when several accounts are in use.
     let account: AccountTagModel?
     let tasks: SessionTaskList
+    /// A working session's progress and time left (SessionRowContent.taskEstimate).
+    var taskEstimate: TaskEstimate? = nil
+    /// The panel's clock, for how long the task in progress has run.
+    var now = Date()
     let contextPercent: Double?
     let canFocus: Bool
     let focusLabel: String
@@ -61,7 +66,7 @@ struct ChatSessionHeader: View {
 
                 HStack(spacing: 8) {
                     if !tasks.isEmpty {
-                        ChatTaskSummaryButton(tasks: tasks, isOpen: isTaskBoardOpen) {
+                        ChatTaskSummaryButton(tasks: tasks, estimate: taskEstimate, isOpen: isTaskBoardOpen) {
                             isTaskBoardOpen.toggle()
                         }
                     }
@@ -76,7 +81,7 @@ struct ChatSessionHeader: View {
             }
 
             if isTaskBoardOpen && !tasks.isEmpty {
-                ChatTaskBoard(tasks: tasks, maxVisibleRows: maxTaskRows)
+                ChatTaskBoard(tasks: tasks, estimate: taskEstimate, now: now, maxVisibleRows: maxTaskRows)
                     .transition(.opacity)
             }
         }
@@ -88,9 +93,10 @@ struct ChatSessionHeader: View {
 
 // MARK: - Task summary
 
-/// "▬▬▭ 3/7 ⌄": toggles the task board.
+/// "▬▬▭ 3/7 ~4m ⌄": toggles the task board.
 struct ChatTaskSummaryButton: View {
     let tasks: SessionTaskList
+    var estimate: TaskEstimate? = nil
     let isOpen: Bool
     let action: () -> Void
 
@@ -100,7 +106,7 @@ struct ChatTaskSummaryButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 5) {
-                TaskProgressBar(tasks: tasks, width: 30)
+                TaskProgressBar(tasks: tasks, estimate: estimate, width: 30, remainingStyle: .short)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 7, weight: .bold))
                     .foregroundStyle(.ink(isHovered || isOpen ? .primary : .tertiary))
@@ -113,15 +119,30 @@ struct ChatTaskSummaryButton: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
-        .help(tasks.activeItem.map { "Now: \($0.activeLabel)" } ?? "Tasks")
-        .accessibilityLabel(SessionRowContent.taskSummary(tasks))
+        .help(Self.help(tasks, estimate: estimate))
+        .accessibilityLabel(SessionRowContent.taskSummary(tasks, estimate: estimate))
         .accessibilityHint(isOpen ? "Hides the task list" : "Shows the task list")
+    }
+
+    /// "Now: Writing tests · 46% · ~4m left", "Tasks".
+    nonisolated static func help(_ tasks: SessionTaskList, estimate: TaskEstimate?) -> String {
+        var parts = tasks.activeItem.map { ["Now: \($0.activeLabel)"] } ?? []
+        if let estimate {
+            parts.append("\(estimate.percent)%")
+            if let remaining = estimate.remaining { parts.append(remaining) }
+        }
+        return parts.isEmpty ? "Tasks" : parts.joined(separator: " · ")
     }
 }
 
-/// Every task with its state: done, in progress, to do.
+/// Every task with its state (done, in progress, to do) and how long it
+/// took or has run, under "3 of 7 done · 46% · ~4m left".
 struct ChatTaskBoard: View {
     let tasks: SessionTaskList
+    /// A working session's progress and time left; nil shows completed
+    /// tasks only, and no running time for the task in progress.
+    var estimate: TaskEstimate? = nil
+    var now = Date()
     var maxVisibleRows = Self.regularRows
 
     static let regularRows = 8
@@ -134,11 +155,11 @@ struct ChatTaskBoard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            SplitLine(leading: "Tasks", trailing: "\(tasks.completedCount) of \(tasks.totalCount) done")
+            SplitLine(leading: "Tasks", trailing: Self.headline(tasks, estimate: estimate))
             ChatAdaptiveScroll(maxHeight: CGFloat(maxVisibleRows) * (rowHeight + 2)) {
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(tasks.items) { item in
-                        ChatTaskRow(item: item)
+                        ChatTaskRow(item: item, time: Self.time(of: item, isRunning: estimate != nil, now: now))
                             .frame(minHeight: rowHeight)
                     }
                 }
@@ -149,8 +170,28 @@ struct ChatTaskBoard: View {
     }
 }
 
+extension ChatTaskBoard {
+    /// "3 of 7 done · 42%", with the time left once there is a pace:
+    /// "3 of 7 done · 46% · ~4m left".
+    nonisolated static func headline(_ tasks: SessionTaskList, estimate: TaskEstimate?) -> String {
+        let percent = estimate?.percent ?? Int((tasks.fraction * 100 + 1e-9).rounded(.down))
+        var parts = ["\(tasks.completedCount) of \(tasks.totalCount) done", "\(percent)%"]
+        if let remaining = estimate?.remaining { parts.append(remaining) }
+        return parts.joined(separator: " · ")
+    }
+
+    /// How long a completed task took ("4m", "<1m"), or how long the task in
+    /// progress has run while the session works; nil when a time is unknown.
+    nonisolated static func time(of item: SessionTaskItem, isRunning: Bool, now: Date) -> String? {
+        guard item.status == .completed || isRunning else { return nil }
+        return item.duration(now: now).map { UsageFormatter.duration($0) }
+    }
+}
+
 private struct ChatTaskRow: View {
     let item: SessionTaskItem
+    /// "4m": how long it took, or has run.
+    var time: String?
 
     @Environment(\.claudeControlTheme) private var theme
 
@@ -166,9 +207,15 @@ private struct ChatTaskRow: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 0)
+            if let time {
+                Text(time)
+                    .claudeFont(.caption, monospacedDigits: true)
+                    .foregroundStyle(.ink(item.status == .inProgress ? .secondary : .tertiary))
+                    .fixedSize()
+            }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(item.subject), \(item.status.spoken)")
+        .accessibilityLabel(time.map { "\(item.subject), \(item.status.spoken), \($0)" } ?? "\(item.subject), \(item.status.spoken)")
     }
 
     @ViewBuilder

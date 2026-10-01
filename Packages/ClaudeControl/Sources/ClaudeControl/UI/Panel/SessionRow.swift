@@ -10,7 +10,7 @@
 //
 //      Fix the login redirect loop                              ◐ 2m
 //      Bash  npm run test -- --watch=false auth/redirect.spec.ts
-//      ● Work · ▬▬▬▭▭▭ 3/7 · ▬ 42% context · acme-web
+//      ● Work · ▬▬▬▭▭▭ 3/7 · ~4m left · ▬ 42% context · acme-web
 //                                         Deny   Always   Allow
 //
 //  Past eight sessions, rows that don't need an answer collapse to one line.
@@ -274,23 +274,30 @@ extension SessionDetailTone {
 
 // MARK: - Meta line
 
-/// "● Work · ▬▬▬▭▭ 3/7 · ▬ 42% context · acme-web · 2 background".
+/// "● Work · ▬▬▬▭▭ 3/7 · ~4m left · ▬ 42% context · acme-web · 2 background".
 ///
 /// When the row is too narrow for all of it, the project goes first, then
-/// the word "context"; the account, tasks and context percentage always stay.
+/// the word "context", then the word "left"; the account, tasks, time left
+/// and context percentage always stay.
 struct SessionMetaLine: View {
     let row: SessionRowModel
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            line(project: true, contextLabel: true)
-            line(project: true, contextLabel: false)
-            line(project: false, contextLabel: false)
-            line(project: false, contextLabel: false, truncatesAccount: true)
+            line(project: true, contextLabel: true, remaining: .full)
+            line(project: true, contextLabel: false, remaining: .full)
+            line(project: false, contextLabel: false, remaining: .full)
+            line(project: false, contextLabel: false, remaining: .short)
+            line(project: false, contextLabel: false, remaining: .short, truncatesAccount: true)
         }
     }
 
-    private func line(project showsProject: Bool, contextLabel: Bool, truncatesAccount: Bool = false) -> some View {
+    private func line(
+        project showsProject: Bool,
+        contextLabel: Bool,
+        remaining: TaskProgressBar.RemainingStyle,
+        truncatesAccount: Bool = false
+    ) -> some View {
         var items: [AnyView] = []
         if let account = row.account {
             items.append(AnyView(
@@ -299,7 +306,9 @@ struct SessionMetaLine: View {
             ))
         }
         if !row.tasks.isEmpty {
-            items.append(AnyView(TaskProgressBar(tasks: row.tasks).fixedSize()))
+            items.append(AnyView(
+                TaskProgressBar(tasks: row.tasks, estimate: row.taskEstimate, remainingStyle: remaining).fixedSize()
+            ))
         }
         if let context = row.contextPercent {
             items.append(AnyView(ContextMeter(percent: context, isCompact: !contextLabel).fixedSize()))
@@ -336,14 +345,14 @@ struct SessionMetaLine: View {
     }
 }
 
-/// "3/7 · 42%" beside a one-line row's ring.
+/// "3/7 ~4m · 42%" beside a one-line row's ring.
 private struct CompactProgress: View {
     let row: SessionRowModel
 
     var body: some View {
         HStack(spacing: 6) {
             if !row.tasks.isEmpty {
-                TaskProgressBar(tasks: row.tasks, width: 28)
+                TaskProgressBar(tasks: row.tasks, estimate: row.taskEstimate, width: 28, remainingStyle: .short)
             }
             if let context = row.contextPercent {
                 ContextMeter(percent: context, isCompact: true)

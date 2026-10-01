@@ -180,11 +180,41 @@ public nonisolated struct ClaudeTaskProgress: Hashable, Sendable {
     public var total: Int
     /// The task being worked on, if any.
     public var active: String?
+    /// Wall-clock seconds a task has taken on average so far; nil until a
+    /// completed task has been timed (then there is no estimate).
+    public var secondsPerTask: TimeInterval?
+    /// When the task being worked on started, when known.
+    public var activeSince: Date?
 
-    public init(completed: Int, total: Int, active: String? = nil) {
+    public init(
+        completed: Int,
+        total: Int,
+        active: String? = nil,
+        secondsPerTask: TimeInterval? = nil,
+        activeSince: Date? = nil
+    ) {
         self.completed = completed
         self.total = total
         self.active = active
+        self.secondsPerTask = secondsPerTask
+        self.activeSince = activeSince
+    }
+
+    /// Done so far, 0...1, crediting the task in progress for the time it
+    /// has run against the pace (never 1 before every task is completed).
+    public func fraction(now: Date) -> Double { timing.fraction(now: now) }
+
+    /// Whole percent done, rounded down.
+    public func percent(now: Date) -> Int { timing.percent(now: now) }
+
+    /// Seconds the rest should take; nil when all is done or there is no pace yet.
+    public func remaining(now: Date) -> TimeInterval? { timing.remaining(now: now) }
+
+    /// "~4m left", "almost done"; nil without an estimate.
+    public func remainingLabel(now: Date) -> String? { TaskTiming.remainingLabel(remaining(now: now)) }
+
+    var timing: TaskTiming {
+        TaskTiming(completed: completed, total: total, secondsPerTask: secondsPerTask, activeSince: activeSince)
     }
 }
 

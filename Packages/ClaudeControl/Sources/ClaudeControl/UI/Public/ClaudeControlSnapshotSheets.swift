@@ -150,6 +150,7 @@ import SwiftUI
                 state: state, hooks: ChatHooks(), onSend: { _ in },
                 showsTaskBoard: taskBoard, initialQuestionSelections: selections
             )
+            .environment(\.claudeClock, UIFixtures.now)
             .frame(width: width)
             sheets.append(Sheet(name: name, width: width, height: height, view: AnyView(card(view))))
         }

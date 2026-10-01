@@ -13,6 +13,10 @@
 //    Claude Code deletes a list once every task in it is completed, so a
 //    TaskCreate arriving when all tasks are done starts a fresh list (task ids
 //    keep counting up, so nothing collides).
+//  Each task also remembers when it was created, started and completed (hook
+//  arrival times, transcript timestamps for history), so the list knows its
+//  own pace: `timing` turns that into how far along it is and how long the
+//  rest should take (TaskTiming).
 //
 
 import Foundation
@@ -34,11 +38,67 @@ nonisolated struct SessionTaskItem: Equatable, Sendable, Identifiable {
     var status: Status
     /// The subject is the "Task #<id>" stand-in for a task seen only in an update.
     var hasPlaceholderSubject: Bool = false
+    /// When the task was created, when it last went in progress and when it
+    /// was completed: hook arrival times, or transcript timestamps for history.
+    /// Nil when not seen (a task first met mid-flight, or a list built without dates).
+    var createdAt: Date?
+    var startedAt: Date?
+    var completedAt: Date?
 
     /// Label for the in-progress row: activeForm, else the subject.
     var activeLabel: String {
         if let activeForm, !activeForm.isEmpty { return activeForm }
         return subject
+    }
+
+    /// Changes the status and dates the change. Going back to pending forgets
+    /// both times; (re)starting restarts the clock; a status that doesn't
+    /// change keeps its time (a repeated "in_progress" isn't a new start).
+    mutating func setStatus(_ newStatus: Status, at date: Date?) {
+        guard newStatus != status else { return }
+        status = newStatus
+        switch newStatus {
+        case .pending:
+            startedAt = nil
+            completedAt = nil
+        case .inProgress:
+            startedAt = date
+            completedAt = nil
+        case .completed:
+            completedAt = date
+        }
+    }
+
+    /// Wall-clock time from start to completion (completed tasks), or so far
+    /// (the task in progress); nil when a time is unknown.
+    func duration(now: Date) -> TimeInterval? {
+        switch status {
+        case .pending:
+            return nil
+        case .inProgress:
+            return startedAt.map { max(0, now.timeIntervalSince($0)) }
+        case .completed:
+            guard let startedAt, let completedAt else { return nil }
+            return max(0, completedAt.timeIntervalSince(startedAt))
+        }
+    }
+
+    /// `self` (newer, from hooks) with the times `history` (the same task
+    /// rebuilt from the transcript) knew earlier: a hook seen late misses the
+    /// creation or the start the transcript dated. A time the status no
+    /// longer has stays unset.
+    func withTimes(mergedFrom history: SessionTaskItem) -> SessionTaskItem {
+        func earliest(_ a: Date?, _ b: Date?) -> Date? {
+            switch (a, b) {
+            case let (a?, b?): return min(a, b)
+            default: return a ?? b
+            }
+        }
+        var merged = self
+        merged.createdAt = earliest(createdAt, history.createdAt)
+        merged.startedAt = status == .pending ? nil : earliest(startedAt, history.startedAt)
+        merged.completedAt = status == .completed ? earliest(completedAt, history.completedAt) : nil
+        return merged
     }
 }
 
@@ -49,6 +109,8 @@ nonisolated struct SessionTaskList: Equatable, Sendable {
         var subject: String
         var description: String?
         var activeForm: String?
+        /// When the call was made: the task's creation time.
+        var createdAt: Date?
     }
 
     /// Tasks from the Task* tools, in creation order.
@@ -91,6 +153,16 @@ nonisolated struct SessionTaskList: Equatable, Sendable {
 
     var isEmpty: Bool { items.isEmpty }
 
+    /// Pace and progress measured from the list's own times (see TaskTiming).
+    var timing: TaskTiming {
+        TaskTiming(
+            completed: completedCount,
+            total: totalCount,
+            secondsPerTask: TaskTiming.secondsPerTask(items),
+            activeSince: activeItem?.startedAt
+        )
+    }
+
     // MARK: - Reducer operations
 
     /// Forget everything (/clear, SessionStart source "clear").
@@ -99,9 +171,9 @@ nonisolated struct SessionTaskList: Equatable, Sendable {
     }
 
     /// PreToolUse TaskCreate.
-    mutating func taskCreateStarted(toolUseId: String, subject: String, description: String?, activeForm: String?) {
+    mutating func taskCreateStarted(toolUseId: String, subject: String, description: String?, activeForm: String?, at date: Date? = nil) {
         startNewBatchIfDone()
-        pendingCreates[toolUseId] = PendingCreate(subject: subject, description: description, activeForm: activeForm)
+        pendingCreates[toolUseId] = PendingCreate(subject: subject, description: description, activeForm: activeForm, createdAt: date)
     }
 
     /// Claude Code resets the task list once all of it is completed (in the
@@ -113,7 +185,7 @@ nonisolated struct SessionTaskList: Equatable, Sendable {
     }
 
     /// PostToolUse TaskCreate (or its transcript result) with the new task id.
-    mutating func taskCreateFinished(toolUseId: String, taskId: String, subject: String?) {
+    mutating func taskCreateFinished(toolUseId: String, taskId: String, subject: String?, at date: Date? = nil) {
         let pending = pendingCreates.removeValue(forKey: toolUseId)
         settledCreates.insert(toolUseId)
         if pending == nil && !tasks.contains(where: { $0.id == taskId }) {
@@ -125,7 +197,8 @@ nonisolated struct SessionTaskList: Equatable, Sendable {
             subject: resolvedSubject,
             description: pending?.description,
             activeForm: pending?.activeForm,
-            status: nil
+            status: nil,
+            at: pending?.createdAt ?? date
         )
     }
 
@@ -136,15 +209,15 @@ nonisolated struct SessionTaskList: Equatable, Sendable {
     }
 
     /// TaskCreated hook event.
-    mutating func taskCreated(taskId: String, subject: String?) {
+    mutating func taskCreated(taskId: String, subject: String?, at date: Date? = nil) {
         if !tasks.contains(where: { $0.id == taskId }) {
             startNewBatchIfDone()
         }
-        upsert(id: taskId, subject: nonEmpty(subject), description: nil, activeForm: nil, status: nil)
+        upsert(id: taskId, subject: nonEmpty(subject), description: nil, activeForm: nil, status: nil, at: date)
     }
 
     /// PreToolUse TaskUpdate. `status` is Claude Code's raw value; "deleted" removes the task.
-    mutating func taskUpdated(taskId: String, status: String?, subject: String?, activeForm: String?) {
+    mutating func taskUpdated(taskId: String, status: String?, subject: String?, activeForm: String?, at date: Date? = nil) {
         if status == "deleted" {
             tasks.removeAll { $0.id == taskId }
             deletedIds.insert(taskId)
@@ -155,26 +228,40 @@ nonisolated struct SessionTaskList: Equatable, Sendable {
             subject: nonEmpty(subject),
             description: nil,
             activeForm: nonEmpty(activeForm),
-            status: status.flatMap(SessionTaskItem.Status.init(rawValue:))
+            status: status.flatMap(SessionTaskItem.Status.init(rawValue:)),
+            at: date
         )
     }
 
     /// TaskCompleted hook event.
-    mutating func taskCompleted(taskId: String, subject: String?) {
-        upsert(id: taskId, subject: nonEmpty(subject), description: nil, activeForm: nil, status: .completed)
+    mutating func taskCompleted(taskId: String, subject: String?, at date: Date? = nil) {
+        upsert(id: taskId, subject: nonEmpty(subject), description: nil, activeForm: nil, status: .completed, at: date)
     }
 
-    /// PreToolUse TodoWrite: the full list is replaced.
-    mutating func todosReplaced(_ newTodos: [(content: String, status: String, activeForm: String?)]) {
+    /// PreToolUse TodoWrite: the full list is replaced. A todo keeps the times
+    /// of the previous list's todo with the same text (each matched once), so
+    /// rewriting the list doesn't restart its clocks.
+    mutating func todosReplaced(_ newTodos: [(content: String, status: String, activeForm: String?)], at date: Date? = nil) {
         hasTodoList = true
+        var previous = todos
         todos = newTodos.enumerated().map { index, todo in
-            SessionTaskItem(
+            var item = SessionTaskItem(
                 id: "todo-\(index)",
                 subject: todo.content,
                 activeForm: nonEmpty(todo.activeForm),
                 description: nil,
-                status: SessionTaskItem.Status(rawValue: todo.status) ?? .pending
+                status: .pending,
+                createdAt: date
             )
+            if let match = previous.firstIndex(where: { $0.subject == todo.content }) {
+                let earlier = previous.remove(at: match)
+                item.status = earlier.status
+                item.createdAt = earlier.createdAt
+                item.startedAt = earlier.startedAt
+                item.completedAt = earlier.completedAt
+            }
+            item.setStatus(SessionTaskItem.Status(rawValue: todo.status) ?? .pending, at: date)
+            return item
         }
     }
 
@@ -183,7 +270,8 @@ nonisolated struct SessionTaskList: Equatable, Sendable {
         subject: String?,
         description: String?,
         activeForm: String?,
-        status: SessionTaskItem.Status?
+        status: SessionTaskItem.Status?,
+        at date: Date?
     ) {
         if let index = tasks.firstIndex(where: { $0.id == id }) {
             if let subject {
@@ -192,16 +280,19 @@ nonisolated struct SessionTaskList: Equatable, Sendable {
             }
             if let description { tasks[index].description = description }
             if let activeForm { tasks[index].activeForm = activeForm }
-            if let status { tasks[index].status = status }
+            if let status { tasks[index].setStatus(status, at: date) }
         } else {
-            tasks.append(SessionTaskItem(
+            var item = SessionTaskItem(
                 id: id,
                 subject: subject ?? "Task #\(id)",
                 activeForm: activeForm,
                 description: description,
-                status: status ?? .pending,
-                hasPlaceholderSubject: subject == nil
-            ))
+                status: .pending,
+                hasPlaceholderSubject: subject == nil,
+                createdAt: date
+            )
+            if let status { item.setStatus(status, at: date) }
+            tasks.append(item)
         }
     }
 
@@ -227,14 +318,18 @@ nonisolated struct SessionTaskList: Equatable, Sendable {
             }
             mergedTask.activeForm = task.activeForm ?? base.activeForm
             mergedTask.description = task.description ?? base.description
-            result.tasks[index] = mergedTask
+            result.tasks[index] = mergedTask.withTimes(mergedFrom: base)
         }
         result.settledCreates.formUnion(settledCreates)
         result.pendingCreates = result.pendingCreates
             .filter { !settledCreates.contains($0.key) }
             .merging(pendingCreates) { _, hook in hook }
         if hasTodoList {
-            result.todos = todos
+            var history = result.todos
+            result.todos = todos.map { todo in
+                guard let match = history.firstIndex(where: { $0.subject == todo.subject }) else { return todo }
+                return todo.withTimes(mergedFrom: history.remove(at: match))
+            }
             result.hasTodoList = true
         }
         return result
@@ -254,6 +349,7 @@ nonisolated extension SessionTaskList {
     @discardableResult
     mutating func apply(_ event: HookEvent) -> Bool {
         guard !event.isSubagentEvent else { return false }
+        let date = event.receivedAt
 
         switch event.event {
         case "PreToolUse":
@@ -265,7 +361,8 @@ nonisolated extension SessionTaskList {
                     toolUseId: toolUseId,
                     subject: JSONValue.string(input["subject"]?.value) ?? "Untitled task",
                     description: JSONValue.string(input["description"]?.value),
-                    activeForm: JSONValue.string(input["activeForm"]?.value)
+                    activeForm: JSONValue.string(input["activeForm"]?.value),
+                    at: date
                 )
                 return true
             case "TaskUpdate":
@@ -274,11 +371,12 @@ nonisolated extension SessionTaskList {
                     taskId: taskId,
                     status: JSONValue.string(input["status"]?.value),
                     subject: JSONValue.string(input["subject"]?.value),
-                    activeForm: JSONValue.string(input["activeForm"]?.value)
+                    activeForm: JSONValue.string(input["activeForm"]?.value),
+                    at: date
                 )
                 return true
             case "TodoWrite":
-                todosReplaced(Self.todos(from: input["todos"]?.value))
+                todosReplaced(Self.todos(from: input["todos"]?.value), at: date)
                 return true
             default:
                 return false
@@ -287,7 +385,7 @@ nonisolated extension SessionTaskList {
         case "PostToolUse" where event.tool == "TaskCreate":
             guard let toolUseId = event.toolUseId else { return false }
             if let taskId = event.taskId {
-                taskCreateFinished(toolUseId: toolUseId, taskId: taskId, subject: event.taskSubject)
+                taskCreateFinished(toolUseId: toolUseId, taskId: taskId, subject: event.taskSubject, at: date)
             }
             return true
 
@@ -299,12 +397,12 @@ nonisolated extension SessionTaskList {
 
         case "TaskCreated":
             guard let taskId = event.taskId else { return false }
-            taskCreated(taskId: taskId, subject: event.taskSubject)
+            taskCreated(taskId: taskId, subject: event.taskSubject, at: date)
             return true
 
         case "TaskCompleted":
             guard let taskId = event.taskId else { return false }
-            taskCompleted(taskId: taskId, subject: event.taskSubject)
+            taskCompleted(taskId: taskId, subject: event.taskSubject, at: date)
             return true
 
         case "SessionStart" where event.source == "clear":
@@ -368,6 +466,7 @@ nonisolated extension SessionTaskList {
         if json["isSidechain"] as? Bool == true { return }
         guard let type = json["type"] as? String,
               let message = json["message"] as? [String: Any] else { return }
+        let date = (json["timestamp"] as? String).flatMap(ConversationParser.parseDate)
 
         if type == "user", let text = message["content"] as? String,
            text.contains("<command-name>/clear</command-name>") {
@@ -387,7 +486,8 @@ nonisolated extension SessionTaskList {
                         toolUseId: toolUseId,
                         subject: JSONValue.string(input["subject"]) ?? "Untitled task",
                         description: JSONValue.string(input["description"]),
-                        activeForm: JSONValue.string(input["activeForm"])
+                        activeForm: JSONValue.string(input["activeForm"]),
+                        at: date
                     )
                 case "TaskUpdate":
                     if let taskId = JSONValue.string(input["taskId"]) {
@@ -395,11 +495,12 @@ nonisolated extension SessionTaskList {
                             taskId: taskId,
                             status: JSONValue.string(input["status"]),
                             subject: JSONValue.string(input["subject"]),
-                            activeForm: JSONValue.string(input["activeForm"])
+                            activeForm: JSONValue.string(input["activeForm"]),
+                            at: date
                         )
                     }
                 case "TodoWrite":
-                    todosReplaced(Self.todos(from: input["todos"]))
+                    todosReplaced(Self.todos(from: input["todos"]), at: date)
                 default:
                     break
                 }
@@ -415,9 +516,9 @@ nonisolated extension SessionTaskList {
                 // Prefer the structured result, then the text.
                 let structured = (json["toolUseResult"] as? [String: Any])?["task"] as? [String: Any]
                 if let taskId = JSONValue.string(structured?["id"]) {
-                    taskCreateFinished(toolUseId: toolUseId, taskId: taskId, subject: JSONValue.string(structured?["subject"]))
+                    taskCreateFinished(toolUseId: toolUseId, taskId: taskId, subject: JSONValue.string(structured?["subject"]), at: date)
                 } else if let text = Self.resultText(block["content"]), let taskId = Self.createdTaskId(in: text) {
-                    taskCreateFinished(toolUseId: toolUseId, taskId: taskId, subject: nil)
+                    taskCreateFinished(toolUseId: toolUseId, taskId: taskId, subject: nil, at: date)
                 }
             }
         }

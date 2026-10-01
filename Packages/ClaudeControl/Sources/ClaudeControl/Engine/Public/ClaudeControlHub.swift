@@ -664,7 +664,7 @@ public final class ClaudeControlHub: ObservableObject {
         if let shownRings, !shownRings.contains(ringID) { return [] }
         return sessions
             .filter { $0.ringID == ringID }
-            .map { ClaudeHostProjections.activityRow($0) }
+            .map { ClaudeHostProjections.activityRow($0, now: now) }
     }
 
     public func session(pid: Int32) -> ClaudeSessionSummary? {

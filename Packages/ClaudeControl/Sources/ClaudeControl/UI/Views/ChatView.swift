@@ -201,6 +201,7 @@ struct ChatContent: View {
 
     @Environment(\.claudeControlTheme) private var theme
     @Environment(\.claudeStaticRendering) private var isStatic
+    @Environment(\.claudeClock) private var clock
     @State private var isTaskBoardOpen = false
     @State private var headerHeight: CGFloat = 0
     @State private var messagesHeight: CGFloat = 0
@@ -216,6 +217,8 @@ struct ChatContent: View {
                 subtitleIsActivity: isWorking && session.tasks.activeItem != nil,
                 account: account,
                 tasks: session.tasks,
+                taskEstimate: SessionRowContent.taskEstimate(for: session, now: clock ?? Date()),
+                now: clock ?? Date(),
                 contextPercent: session.contextUsedPercent,
                 canFocus: canFocus,
                 focusLabel: session.entrypoint == "claude-vscode" ? "Show in editor" : "Show terminal",

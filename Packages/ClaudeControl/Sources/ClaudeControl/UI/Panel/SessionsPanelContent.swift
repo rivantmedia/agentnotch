@@ -65,6 +65,7 @@ struct SessionsPanelContent<Chat: View>: View {
                     }
                 ))
                 .id(id)
+                .environment(\.claudeClock, now)
                 .modifier(PanelKeys(context: chatContext(for: session, now: now), perform: { perform($0, now: now) }))
             } else {
                 endedSession

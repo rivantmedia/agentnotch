@@ -163,7 +163,8 @@ enum UIFixtures {
                 id: "busy-working-\(index)", title: title, project: ["acme-web", "api", "mobile", "infra"][index % 4],
                 account: accounts[index % 3], phase: .processing,
                 tasks: SampleSessions.taskList(done: index % 5, active: "Step \(index % 5 + 1) of \(title.lowercased())",
-                                               pending: 3 + index % 3),
+                                               pending: 3 + index % 3, minutesEach: Double(2 + index % 3), activeFor: 1,
+                                               now: now),
                 context: Double(15 + index * 8),
                 turnStarted: now.addingTimeInterval(-Double(index * 4 + 3) * 60)
             ))

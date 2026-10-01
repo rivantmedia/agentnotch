@@ -120,6 +120,10 @@ nonisolated private struct ClaudeStaticScrollingKey: EnvironmentKey {
     static let defaultValue = false
 }
 
+nonisolated private struct ClaudeClockKey: EnvironmentKey {
+    static let defaultValue: Date? = nil
+}
+
 extension EnvironmentValues {
     /// True while the snapshot renderer draws a view: animations start
     /// settled, timers don't tick and fields show their text, so every PNG is
@@ -134,5 +138,13 @@ extension EnvironmentValues {
     nonisolated var claudeStaticKeepsScrolling: Bool {
         get { self[ClaudeStaticScrollingKey.self] }
         set { self[ClaudeStaticScrollingKey.self] = newValue }
+    }
+
+    /// The panel's clock: its 30-second timeline, or the fixed time a
+    /// snapshot draws at. One `now` for the chat's task times and estimate,
+    /// as for the list's; nil outside the panel (read the time then).
+    nonisolated var claudeClock: Date? {
+        get { self[ClaudeClockKey.self] }
+        set { self[ClaudeClockKey.self] = newValue }
     }
 }
