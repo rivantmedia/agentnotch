@@ -86,6 +86,23 @@ describe("classifyAsset", () => {
     }
   });
 
+  it("classifies the six files a release with a Windows preview carries", () => {
+    const cases: Array<[string, string | null]> = [
+      ["AgentNotch-1.1.0.dmg", "mac"],
+      ["AgentNotch-1.1.0.zip", "mac"],
+      ["appcast.xml", null],
+      ["AgentNotch-1.1.0-Setup.exe", "windows"],
+      ["AgentNotch-1.1.0-Setup.exe.sig", null],
+      ["latest.json", null],
+      // The updater's own archive is no download, and must not pass as the Mac's zip.
+      ["AgentNotch-1.1.0-Setup.nsis.zip", null],
+      ["AgentNotch-1.1.0.msi.zip", null],
+    ];
+    for (const [name, platform] of cases) {
+      expect(classifyAsset(name), name).toBe(platform);
+    }
+  });
+
   it("matches GitHub's renamed uploads: a space becomes a dot", () => {
     // Uploaded as "Agent Notch 1.0.0.dmg", served as "Agent.Notch.1.0.0.dmg".
     expect(classifyAsset("Agent.Notch.1.0.0.dmg")).toBe("mac");
@@ -189,6 +206,32 @@ describe("pickDownloads", () => {
     expect(downloads.mac).toBeNull();
     expect(downloads.windows?.name).toBe("AgentNotch-1.0.0-Setup.exe");
     expect(downloads.linux?.name).toBe("AgentNotch-1.0.0-x86_64.AppImage");
+  });
+
+  it("offers the disk image and the installer from a release's six files", () => {
+    const dmg = asset("AgentNotch-1.1.0.dmg", { size: 15_000_000 });
+    const exe = asset("AgentNotch-1.1.0-Setup.exe", { size: 9_000_000 });
+    const list = [
+      asset("latest.json", { size: 400 }),
+      asset("AgentNotch-1.1.0-Setup.exe.sig", { size: 100 }),
+      exe,
+      asset("appcast.xml", { size: 1200 }),
+      asset("AgentNotch-1.1.0.zip"),
+      dmg,
+    ];
+    expect(pickDownloads(list, REPO)).toEqual({
+      mac: {
+        name: "AgentNotch-1.1.0.dmg",
+        url: dmg.browser_download_url,
+        size: 15_000_000,
+      },
+      windows: {
+        name: "AgentNotch-1.1.0-Setup.exe",
+        url: exe.browser_download_url,
+        size: 9_000_000,
+      },
+      linux: null,
+    });
   });
 
   it("offers nothing for a release of upstream's files only", () => {

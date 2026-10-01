@@ -60,6 +60,10 @@ first use, updates, privacy, development switches, releases. Read it before chan
 | `web/` | The cloud sync website: Next.js (T3: tRPC, Prisma, Tailwind, TypeScript) on Supabase (Postgres, Auth with Google). Its own README covers setup and checks (`npm test`, `npm run typecheck`). `web/.env` holds real values and stays untracked; `.env.example` has placeholders. |
 | `web/contract/` | The **fixed** app⇄website API (`README.md` + JSON fixtures both sides test against: field names, key derivation, limits, error shape). Change a fixture only together with both sides. |
 | `web/src/app/download/` (`page.tsx`, `loading.tsx`, `[platform]/route.ts`), `web/src/lib/releases.ts`, `web/src/server/releases.ts` | The website's public download page. `lib/releases.ts` is pure (release pick, asset classifier: dmg > pkg > zip for Mac, future Windows/Linux names, never `codenotch`/appcast/signatures; `isReleaseDownloadUrl`; User-Agent platform); `server/releases.ts` fetches `GET /repos/<RELEASES_REPO>/releases?per_page=5` (default `rivantmedia/agentnotch`, optional `GITHUB_RELEASES_TOKEN`, recommended on Vercel, whose shared outbound addresses share GitHub's 60 unauthenticated requests an hour; 5-minute Next cache of 200s only; never throws). `/download/<mac\|windows\|linux>` 302s only to `https://github.com/<repo>/releases/download/…` (`private, no-store`). Tests never call GitHub. |
+| `windows/` | The **Windows port (preview)**: upstream's Tauri 2 crate `windows/codenotch` (edited only at listed seams) plus fork crates `agentnotch-{proto,engine,win,hook,release}` and the glue `windows/codenotch/src/agentnotch/` (holds no logic) with its UI in `windows/codenotch/ui/agentnotch/`. See "Windows port (preview)" below. Design: `docs/design/DESIGN-WIN.md`; porting notes beside it. |
+| `windows/scripts/`, `windows/tools/` | `agentnotch-build.ps1` (hook, app, NSIS installer, signing, `windows-release-info.env`), `agentnotch-smoke.ps1` and `smoke/` (installer smoke test and its Node helpers; `smoke/real-claude*` is the hermetic real-Claude-Code job), `check-claude-code-facts.mjs`, `tools/` (pinned `@tauri-apps/cli`, the PowerShell and Node tests, `release-harness/`: a mini Actions runner that runs `release.yml`'s shell steps against a fake `gh`). |
+| `.github/workflows/agentnotch-windows.yml`, `claude-code-facts.yml` | The reusable Windows workflow (build, smoke test, signing check, the `real-claude` job; `inputs.release` builds for a release and uploads the installer) and the weekly Claude Code facts check. |
+| `Scripts/bump-version.sh` | Sets `VERSION` and the `"version"` line of `windows/codenotch/tauri.conf.json` together (see Windows port). |
 
 **Public API rule:** `ClaudeControl`'s public surface is the bridge contract (`Tests/ClaudeControlTests/PublicContractTests.swift` pins it). Add members freely; don't rename or remove them without updating the bridge and that test.
 
@@ -137,6 +141,9 @@ Packages/ClaudeControl/Scripts/embed-scripts.sh [--check]
 - Never write to `~/.claude*`, `~/.claude.json`, `~/.claude-windows/**` or `~/.claude-shared`.
 - Never read `.credentials.json`, Keychain secrets or `sessions/*.key`.
 - Never run `claude`: tests use fake executables.
+- **The one exception** is the hermetic `real-claude` job of `agentnotch-windows.yml`, on the
+  Windows CI runner (see "Windows port (preview)"). Never run it on this Mac, and never start a
+  real `claude` from any other job, test or script.
 - Never touch the maintainer's running app (bundle id `com.rivantmedia.agentnotch`, or
   `com.paraswtf.superpowered-codenotch` under the former name) or
   the official Codenotch (`com.vinz.codenotch`, its prefs and its keychain items).
@@ -451,6 +458,103 @@ folder `../claude-parallel-accounts-vsc-extension`). It creates this layout:
 - **Checking a real setup:** `swift run --package-path Packages/ClaudeControl agentnotch-inspect-accounts`.
   It is read-only and prints accounts, run and store folders, install targets and cleanup targets.
   On the maintainer's Mac it must report exactly 2 accounts.
+
+## Windows port (preview)
+
+`windows/` carries the Windows app: upstream's Tauri 2 / WebView2 port with the same Claude Code
+session control as the Mac app, shipped from 1.1.0 as **Windows (preview)**, unsigned. Everything
+Claude lives in the Rust crates, none of it in upstream's files beyond the listed seams. The
+design (`docs/design/DESIGN-WIN.md`, whose "Maintainer decisions" override the rest) and the
+porting notes (`docs/design/windows-port-notes/`) are the specification; read them before
+changing behaviour.
+
+- **Crates.** `agentnotch-proto` (wire protocol) and `agentnotch-engine` (all Claude logic) are
+  pure: no Tauri, `windows*`, `libc` or C-building dependency, and **no `#[cfg(...windows...)]`
+  or `std::os::windows`** (checked by `check-seams.sh`). `agentnotch-win` holds the Windows
+  implementations of the engine's traits behind `stub.rs` on other systems; `agentnotch-hook` is
+  `agentnotch-hook.exe`; `agentnotch-release` is the release tool (update key derivation,
+  minisign, `latest.json`; C-free). Every `CreateFileW(` in `agentnotch-hook` and
+  `agentnotch-win` passes `SECURITY_SQOS_PRESENT` or carries a `// not a pipe: …` marker. The
+  glue's `cli::run` refuses a claimed command beside an `agentnotch:` argument (exit 2): keep
+  it. A hook never exits 2 (no argument-parsing crate; `catch_unwind`; always exit 0).
+- **Build, test, run on this Mac.** Rust 1.98.1 and Node 22 (put the toolchain in the
+  scratchpad, never into `~`; use a temporary `HOME`). From `windows/`:
+  `cargo fmt -p <crate>`, `cargo clippy --locked -p <crate> --all-targets -- -D warnings`,
+  `cargo test --locked -p <crate>`, and the Windows-target type check
+  `cargo clippy --locked -p <crate> --all-targets --target x86_64-pc-windows-msvc -- -D warnings`
+  for the five fork crates (`fork.yml`'s `rust` job runs all of these on Ubuntu). Never build
+  `-p codenotch` in the repo (tauri-build writes `codenotch/gen/`). Code under `#[cfg(windows)]`
+  is proven only by `agentnotch-windows.yml` on a Windows runner (about 25 minutes, on every
+  pushed branch that touches `windows/**`): `gh run list|watch|view -R rivantmedia/agentnotch`.
+  The PowerShell and Node tests (`windows/tools/tests`, `windows/scripts/smoke/*.test.mjs`) and
+  the release harness (`python3 windows/tools/release-harness/run.py`, `identical.py`) run on
+  `fork.yml`; `bash windows/tools/tests/bump-version.test.sh` runs `bump-version.sh` in a
+  temporary copy.
+- **Never run `claude`: the exception.** Real Claude Code runs only in the `real-claude` job
+  of `agentnotch-windows.yml`, on the Windows CI runner, in a temporary profile
+  (`USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `CLAUDE_CONFIG_DIR`), at a pinned version
+  (installed from npm with its integrity hash), with a fake API key, against a fake Messages API
+  on loopback, firewalled to loopback, with no secrets and no login token anywhere. Its result
+  is evidence for the hook forms and the exec-form version floor (`EXEC_FORM_MIN`). The Mac, every
+  test and every other job still never run `claude`; the smoke test pins its probe to
+  `fake-claude.exe`. The gate for the job is `windows/scripts/smoke/gates.json`.
+- **Version.** `VERSION` and `windows/codenotch/tauri.conf.json`'s `"version"` must be equal
+  (`check-seams.sh` and `agentnotch-build.ps1` check it). `Scripts/bump-version.sh <V>` sets both
+  and prints what changed (exit 2 on a bad version or a missing line); the release commit is its
+  output. After merging `main` into a branch with the Windows files, run
+  `Scripts/bump-version.sh --sync`: `main`'s `VERSION` moves on without the Windows file. Never
+  run it on the real tree to try it: test it in a temporary copy (`--root <dir>`).
+- **Releases and updates (additions to the contract above).**
+  - Windows goes out in the same release: tag `agentnotch-v<V>`, six assets, the three Mac ones
+    plus `AgentNotch-<V>-Setup.exe` (NSIS, per user, no administrator), its `.sig` and
+    `latest.json` (the Windows feed, `…/releases/latest/download/latest.json`). The website's
+    `assetKind` picks the dmg and the exe; `.sig`, `.json`, `.xml` and the updater archives
+    (`*.nsis.zip`, `*.msi.zip`) are never downloads.
+  - **No second secret.** The Windows update key is derived (HKDF-SHA256, salt
+    `com.rivantmedia.agentnotch`, info `tauri-updater minisign ed25519 v1`) from
+    `SPARKLE_ED_PRIVATE_KEY` by `agentnotch-release` in the `keys` job, which checks it against
+    the previous release's `latest.json` (and `Scripts/tauri-update-public-key.txt`, an optional
+    pin the maintainer commits after the first Windows release, when present). The `windows` job
+    builds with the public key only and gets no secret; `sign-windows` (ubuntu) signs the
+    installer and writes `latest.json` with `requireSignedVersion`. Rotating the Mac seed also
+    changes the Windows key: a bridge release signed with the old seed's derived key needs the
+    old seed kept as `SPARKLE_ED_PRIVATE_KEY_PREVIOUS` for that one release (`rotate_update_key`
+    ticked); `release-make-keys.sh`'s warning says so.
+  - `skip_windows` (a manual run input) publishes the Mac alone; it warns when the previous
+    release had Windows files, since installed Windows copies then miss the release.
+  - **Code signing is off until the secrets exist.** The `windows-signing` environment (deployment
+    branches: `main` only; the Release workflow does not pass it any secret, the build job selects
+    it) holds `WINDOWS_SIGN_PFX_BASE64` + `WINDOWS_SIGN_PFX_PASSWORD` (+ optional
+    `WINDOWS_SIGN_TIMESTAMP_URL`) or all six `WINDOWS_SIGN_AZURE_*`; half a set is an error.
+    Without them the build says `AUTHENTICODE=unsigned` in `windows-release-info.env` and the
+    release notes carry the SmartScreen and Smart App Control steps. Never set these, as with
+    every other secret.
+  - A build without `-UpdaterPubkey` (branch, PR, dry run's smoke build, a copy built from
+    source) carries no key and no endpoint and never updates; the doctor says so.
+  - Never ship `windows-package.yml`'s output, as before.
+- **Windows facts the engine relies on.**
+  - Accounts are config folders under `%USERPROFILE%` as on the Mac (`CLAUDE_CONFIG_DIR`, else
+    `~\.claude`); the engine's home is `USERPROFILE`, which is how tests and the smoke test point it
+    at a temporary profile. Paths compare case-insensitively; the transcript slug of
+    `C:\Users\me\proj` is `C--Users-me-proj`, and the hook's `transcript_path` is preferred.
+    `AGENTNOTCH_EXTRA_CONFIG_DIRS` splits on `;`.
+  - Hook IPC is a named pipe, `\\.\pipe\agentnotch-hook-<SID>` (no TCP port; the official Windows
+    Codenotch's `127.0.0.1:48666` is not used), owner-only. State is `<support>` =
+    `%LOCALAPPDATA%\com.rivantmedia.agentnotch\Claude`; upstream's config is
+    `%APPDATA%\Agent Notch`. The install dir is `%LOCALAPPDATA%\Agent Notch`.
+  - Hook command forms: a string (`C:/Users/me/.claude/hooks/agentnotch-hook.exe hook`, unquoted,
+    forward slashes, parses in Git Bash and PowerShell alike) or Claude Code's exec form
+    (`command` + `args`), written only when every Claude Code version seen is at least
+    `EXEC_FORM_MIN`. From `claude-code-facts.json` (committed, regenerated weekly): exec form
+    exists from 2.1.139; before 2.1.101 an unknown key made Claude Code ignore a whole settings file.
+  - Uninstalling removes hooks only on **Delete the application data** or `/REMOVEHOOKS`;
+    an update or reinstall never touches a `settings.json`. The official Codenotch's hook entries
+    are reported and removed only on request. Both apps can run side by side.
+  - Upstream's GLM provider reads one API key from Claude Code's `settings.json` (`env`
+    `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_API_KEY`, kept only for a Z.ai base URL): accepted as
+    upstream ships it, pinned by `verify-token-free.sh` (`GLM_CLAUDE_KEY_PIN`), and the only
+    such read. Don't add another.
+  - Dev switches: README "Development (Windows)" and Appendix C of the design.
 
 ## Handy dev switches
 
