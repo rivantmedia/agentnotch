@@ -195,6 +195,16 @@ fn the_builds_website_is_used() {
         h.saved_session().map(|s| s.website_url).as_deref(),
         Some(AuthFixture::WEBSITE)
     );
+    h.service.set_sync(true, h.now());
+    h.write_session(CloudFixture::SESSION_A, 0);
+    h.observe_one(h.observation(CloudFixture::SESSION_A));
+    h.sync_now();
+    let hosts: Vec<String> = h
+        .requests_to("/api/app/v1/sync")
+        .iter()
+        .map(host_of)
+        .collect();
+    assert_eq!(hosts, ["agentnotch.example.com"]);
 
     // Kept as the app keeps any address: lowercase, no trailing slash.
     let untidy = Harness::with(HarnessOptions {
@@ -478,6 +488,9 @@ fn signing_out_turns_sync_off_and_stops_capture() {
     h.service.record_usage(h.usage());
     assert_eq!((h.ledger_count(), h.pending_usage()), (1, 1));
     assert_eq!(h.service.state().pending_usage, 1);
+    // And it is sent, to the new sign-in.
+    h.tick();
+    assert_eq!(h.requests_to("/api/app/v1/sync").len(), 1);
 }
 
 // ---- A sign-in is bound to its sign-in state (finding 20) ----

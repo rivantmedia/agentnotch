@@ -79,7 +79,7 @@ impl CloudService {
     }
 }
 
-fn run(service: &CloudSync, receiver: &Receiver<Message>, clock: &dyn Clock) {
+fn run(service: &Arc<CloudSync>, receiver: &Receiver<Message>, clock: &dyn Clock) {
     let mut next_tick = Instant::now();
     loop {
         let wait = next_tick.saturating_duration_since(Instant::now());

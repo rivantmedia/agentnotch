@@ -18,14 +18,18 @@
 
 use super::api::{ApiError, CloudApi};
 use super::auth::{self, Auth, AuthError, AuthSession, FileSessionStore, PendingSignIn};
-use super::contract::{CALLBACK_HOST, CALLBACK_SCHEME};
+use super::backfill;
+use super::contract::{limit, SyncDevice, CALLBACK_HOST, CALLBACK_SCHEME};
 use super::environment;
 use super::files::lock;
-use super::pass::{CloudStores, CloudSyncPass};
+use super::ledger::SessionOwners;
+use super::pass::{CloudAccountInfo, CloudStores, CloudSyncPass, Input};
 use super::recorder::RecordedUsageReading;
-use super::summary::run::{Cancel, SHIM_REFUSED};
-use super::summary::text::LocalNames;
+use super::summary::run::{self as summary_run, Cancel, Outcome, Summarizer, SHIM_REFUSED};
+use super::summary::store::MAX_RETRY;
+use super::summary::text::{build_excerpt, LocalNames, MAX_EXCERPT_CHARACTERS};
 use super::website;
+use crate::core::paths::PathStyle;
 use crate::core::settings::keys;
 use crate::hub::DeepLinkOutcome;
 use crate::model::{CloudAuthState, CloudState};
@@ -59,6 +63,30 @@ pub const SUMMARY_USAGE_CEILING: f64 = 80.0;
 /// nobody finishes ends by itself, quietly, instead of leaving the section
 /// stuck on "Signing in".
 pub const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+/// A summary whose run says this login can't make one waits this long.
+pub const UNAVAILABLE_WAIT: Duration = Duration::from_secs(6 * 60 * 60);
+/// After a 413, the next (smaller) pass goes this soon.
+pub const TOO_LARGE_RETRY: Duration = Duration::from_secs(5);
+/// A 413 halves the sessions per request, never below this.
+pub const MIN_SESSIONS_PER_REQUEST: usize = 10;
+/// The longest wait a website's Retry-After can ask for here: a larger one
+/// (or one no clock can hold) waits this long.
+pub const MAX_RETRY_AFTER: Duration = Duration::from_secs(365 * 24 * 60 * 60);
+
+/// Shown when the sign-in ended during a sync (Supabase refused the
+/// refresh token, or the session is another website's).
+pub const SIGNED_OUT_OF_WEBSITE: &str = "Signed out of the website. Sign in again.";
+/// Shown when the website refused a token Supabase had just refreshed.
+pub const SIGN_IN_NOT_ACCEPTED: &str =
+    "The website didn't accept this PC's sign-in. Trying again later.";
+/// Why a summary waits: no folder is signed in as its account now.
+pub const NO_FOLDER_REASON: &str = "No folder is signed in as this account now";
+/// Why a summary waits: its account's part holds no conversation.
+pub const NO_CONVERSATION_REASON: &str = "No conversation to summarise";
+/// Why a summary is dropped: its folder was signed in as someone else by
+/// the time it came back.
+pub const FOLDER_CHANGED_REASON: &str = "The folder changed accounts during the summary";
+pub const RATE_LIMITED_REASON: &str = "Rate limited";
 
 /// Why a deep link changed nothing: no sign-in waits for one (the app was
 /// started by the link, the sign-in was cancelled, timed out or already
@@ -155,6 +183,13 @@ fn clamp_u32(count: usize) -> u32 {
     u32::try_from(count).unwrap_or(u32::MAX)
 }
 
+/// A Retry-After (seconds) as a wait, at most [`MAX_RETRY_AFTER`].
+fn retry_wait(retry_after: Option<f64>) -> Duration {
+    retry_after
+        .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
+        .map_or(Duration::ZERO, |wait| wait.min(MAX_RETRY_AFTER))
+}
+
 /// Whether `link` is the website sign-in's callback
 /// (`agentnotch://auth-callback…`, a trailing slash allowed). Never panics
 /// on odd text: it is whatever another program put on the command line.
@@ -184,6 +219,10 @@ pub struct Generations {
     sync: AtomicU64,
     /// Summaries (or sync) turned off: a run still going is dropped.
     summary: AtomicU64,
+    /// The summary running now, if any: moving `summary` on stops its
+    /// child at once, whichever thread does it (the handle's included,
+    /// while the cloud thread is busy with a pass).
+    running_summary: Mutex<Option<Cancel>>,
 }
 
 impl Generations {
@@ -209,6 +248,13 @@ impl Generations {
 
     fn bump_summary(&self) {
         self.summary.fetch_add(1, Ordering::SeqCst);
+        if let Some(cancel) = lock(&self.running_summary).as_ref() {
+            cancel.cancel();
+        }
+    }
+
+    fn track_summary(&self, cancel: Option<Cancel>) {
+        *lock(&self.running_summary) = cancel;
     }
 
     /// What `call` will stop, stopped now: the handle calls this before it
@@ -299,8 +345,31 @@ struct Inner {
     /// The hub reported running sessions since capture last (re)started:
     /// until it has, `last_live_ids` says nothing about what ended.
     live_observed_since_resume: bool,
-    /// The summary running beside the schedule.
+    /// The summary running beside the schedule (claimed before its thread
+    /// starts, released when it ends).
     summary_cancel: Option<Cancel>,
+    /// The last pass that read the folders' own history.
+    last_backfill_at: Option<SystemTime>,
+    /// Halved by a 413 (never below [`MIN_SESSIONS_PER_REQUEST`]); never
+    /// raised again in the run.
+    max_sessions_per_request: usize,
+}
+
+/// A summary run's claim: the generation it began in and the handle that
+/// stops its child.
+struct SummaryClaim {
+    cancel: Cancel,
+    generation: u64,
+}
+
+/// Clears `is_syncing` and republishes when a pass ends, however it ends.
+struct SyncingFlag<'a>(&'a CloudSync);
+
+impl Drop for SyncingFlag<'_> {
+    fn drop(&mut self) {
+        lock(&self.0.inner).is_syncing = false;
+        self.0.publish();
+    }
 }
 
 /// Settings writes collected under the lock and sent after it is released,
@@ -321,6 +390,7 @@ pub struct CloudSync {
     stores: Option<CloudStores>,
     auth: Option<Arc<Auth>>,
     names: LocalNames,
+    summarizer: Summarizer,
     generations: Arc<Generations>,
     inner: Mutex<Inner>,
     published: Mutex<CloudState>,
@@ -352,6 +422,13 @@ impl CloudSync {
             &cfg.home.to_string_lossy(),
             sealed,
         );
+        // The app's own environment, scrubbed per run (`usage::scrubbed_env`).
+        let summarizer = Summarizer::for_config(
+            &cfg,
+            platform.runner.clone(),
+            platform.files.clone(),
+            std::env::vars_os().collect(),
+        );
         CloudSync {
             sealed,
             website,
@@ -363,6 +440,7 @@ impl CloudSync {
             stores,
             auth,
             names,
+            summarizer,
             generations: Arc::new(Generations::default()),
             inner: Mutex::new(Inner {
                 started: false,
@@ -384,6 +462,8 @@ impl CloudSync {
                 last_live_ids: BTreeSet::new(),
                 live_observed_since_resume: false,
                 summary_cancel: None,
+                last_backfill_at: None,
+                max_sessions_per_request: limit::SESSIONS,
             }),
             published: Mutex::new(CloudState::default()),
         }
@@ -1150,9 +1230,10 @@ impl CloudSync {
 
     /// The regular pass (every [`TICK_INTERVAL`]): a sign-in nobody finished
     /// in time ends, who is signed in where is noted, sessions gone for a
-    /// minute end, a summary starts beside the schedule when allowed, and a
-    /// pass runs when due.
-    pub fn tick(&self, now: SystemTime) {
+    /// minute end, a summary starts beside the schedule when allowed (on its
+    /// own thread: up to 90 s of `claude` never holds up a pass or a call),
+    /// and a pass runs when due.
+    pub fn tick(self: &Arc<Self>, now: SystemTime) {
         let Some(stores) = &self.stores else { return };
         if !lock(&self.inner).started {
             return;
@@ -1173,19 +1254,19 @@ impl CloudSync {
                 self.sync_soon(now);
             }
         }
-        if self.can_summarize(now) && lock(&self.inner).summary_cancel.is_none() {
-            self.summarize_next(now);
+        if let Some(claim) = self.claim_summary(now) {
+            let service = Arc::clone(self);
+            let spawned = std::thread::Builder::new()
+                .name("an-cloud-summary".into())
+                .spawn(move || {
+                    service.summarize_claimed(&claim, now);
+                    service.release_summary();
+                });
+            if spawned.is_err() {
+                self.release_summary();
+            }
         }
-        let due = {
-            let inner = lock(&self.inner);
-            self.can_upload_locked(&inner)
-                && !inner.is_syncing
-                && inner.schedule.next_sync_at.is_none_or(|at| at <= now)
-                && inner.schedule.not_before.is_none_or(|at| at <= now)
-        };
-        if due {
-            self.sync_now(now, false);
-        }
+        self.sync_now(now, false);
     }
 
     /// Sync within [`SOON_DELAY`] (unless one is due sooner), never before a
@@ -1204,20 +1285,358 @@ impl CloudSync {
         inner.schedule.next_sync_at = Some(soon);
     }
 
-    /// One sync pass (CL§5.5): what changed since it was last sent, in
-    /// batches, bound to the sign-in and the generations it started with.
-    /// `by_hand` ("Sync now") doesn't wait for a backoff to end. The pass is
-    /// ported with the schedule (CloudSync.swift 1141-1257); this service
-    /// doesn't send anything before it is.
-    pub fn sync_now(&self, now: SystemTime, by_hand: bool) {
-        let _ = (now, by_hand);
+    /// A pass is due: none is planned (the first), or the planned one's time
+    /// came, and no backoff or Retry-After runs.
+    fn is_due(schedule: &Schedule, now: SystemTime) -> bool {
+        schedule.next_sync_at.is_none_or(|at| at <= now)
+            && schedule.not_before.is_none_or(|at| at <= now)
     }
 
-    /// Summarise the next due session, if any, on a worker thread beside
-    /// the schedule (CL§9.1). Ported with the schedule (CloudSync.swift
-    /// 1296-1356); this service launches nothing before it is.
+    /// One sync pass (CL§5.4): what changed since it was last sent, in
+    /// batches. `by_hand` ("Sync now") runs it whatever the schedule says,
+    /// a backoff included; otherwise only when it is due. Nothing runs
+    /// unless uploads may happen and no other pass runs.
+    pub fn sync_now(&self, now: SystemTime, by_hand: bool) {
+        let (Some(stores), Some(website)) = (&self.stores, self.website.as_deref()) else {
+            return;
+        };
+        {
+            let mut inner = lock(&self.inner);
+            if !self.can_upload_locked(&inner)
+                || inner.is_syncing
+                || !(by_hand || Self::is_due(&inner.schedule, now))
+            {
+                return;
+            }
+            inner.is_syncing = true;
+        }
+        self.publish();
+        let _syncing = SyncingFlag(self);
+        self.run_pass(stores, website, now);
+    }
+
+    /// The pass itself (CloudSync.swift 1163-1237). Turning sync off (or
+    /// signing out) during it stops it before the next batch; turning
+    /// summaries off leaves them out of the batches still to go. A pass
+    /// belongs to the sign-in it started with: when that changed while a
+    /// request was out (signed out, in again), what comes back is dropped,
+    /// nothing is marked sent and no failure is held against the new
+    /// sign-in. (The website is the run's, fixed: the Mac's other half of
+    /// "bound" can't change here.)
+    fn run_pass(&self, stores: &CloudStores, website: &str, now: SystemTime) {
+        let generation = self.generations.sync();
+        let pass_sign_in = self.generations.auth();
+        let is_bound = || pass_sign_in == self.generations.auth();
+
+        let (backfill_due, cfg, max_sessions) = {
+            let mut inner = lock(&self.inner);
+            let due = inner
+                .last_backfill_at
+                .is_none_or(|at| now.duration_since(at).is_ok_and(|d| d >= BACKFILL_INTERVAL));
+            if due {
+                inner.last_backfill_at = Some(now);
+            }
+            (due, inner.cfg.clone(), inner.max_sessions_per_request)
+        };
+        let backfill_folders = backfill_due.then(|| {
+            backfill::folders(
+                &self.deps.backfill_folders(),
+                &self.deps.folder_logins().unwrap_or_default(),
+                &stores.folder_logins,
+                &stores.paths,
+            )
+        });
+        let device = SyncDevice {
+            id: cfg.device_id.clone(),
+            name: cfg.device_name.clone(),
+            app_version: cfg.app_version.clone(),
+        };
+        let mut input = Input::new(
+            environment::account_infos(&self.deps.accounts()),
+            device,
+            now,
+        );
+        input.backfill_folders = backfill_folders;
+        input.include_summaries = cfg.summaries_enabled;
+        input.known_names = self.names.current(now);
+        input.max_sessions_per_request = max_sessions;
+        // Reads transcripts: never under the service's lock.
+        let prepared = CloudSyncPass::prepare(&input, stores);
+        {
+            let mut inner = lock(&self.inner);
+            if !is_bound() {
+                return;
+            }
+            inner.pending_sessions = clamp_u32(prepared.session_count);
+        }
+        self.publish();
+
+        let api = self.api(website);
+        for batch in &prepared.batches {
+            let summaries_on = {
+                let inner = lock(&self.inner);
+                if generation != self.generations.sync()
+                    || !is_bound()
+                    || !self.can_upload_locked(&inner)
+                {
+                    // Sync was switched off (or the sign-in changed) during
+                    // the pass: the rest isn't sent.
+                    return;
+                }
+                inner.cfg.summaries_enabled
+            };
+            let batch = if summaries_on {
+                batch.clone()
+            } else {
+                batch.without_summaries()
+            };
+            match api.sync(&batch.request) {
+                Ok(_) => {
+                    // Checked and marked under the lock: a sign-out comes
+                    // either before (nothing is marked) or after.
+                    let mut inner = lock(&self.inner);
+                    if !is_bound() {
+                        return;
+                    }
+                    stores.memory.mark_sent(&batch.records, self.clock.now());
+                    stores.recorder.mark_sent(&batch.readings);
+                    inner.pending_sessions = inner
+                        .pending_sessions
+                        .saturating_sub(clamp_u32(batch.records.len()));
+                }
+                Err(error) => {
+                    // The sign-in or website changed while it was out: its
+                    // failure isn't the new sign-in's.
+                    if is_bound() {
+                        self.handle_sync_failure(&error);
+                    }
+                    return;
+                }
+            }
+        }
+        let mut inner = lock(&self.inner);
+        if generation != self.generations.sync() || !is_bound() {
+            return;
+        }
+        let at = self.clock.now();
+        stores.memory.note_synced(at);
+        inner.schedule.failures = 0;
+        inner.schedule.not_before = None;
+        inner.last_error = None;
+        inner.schedule.next_sync_at = Some(
+            at + if prepared.has_more {
+                SOON_DELAY
+            } else {
+                SYNC_INTERVAL
+            },
+        );
+    }
+
+    /// A request of the pass failed (CL§5.8): the sign-in ended (Supabase
+    /// refused the refresh token, or the session is another website's):
+    /// signed out, the switches with it. A 413 shrinks the requests. Any
+    /// other failure, a 401 after a good refresh included, keeps the
+    /// session and backs off (honouring the website's Retry-After).
+    fn handle_sync_failure(&self, error: &ApiError) {
+        let now = self.clock.now();
+        let mut writes = Writes::new();
+        {
+            let mut inner = lock(&self.inner);
+            if error.ends_sign_in() {
+                self.generations.bump_auth();
+                self.turn_switches_off(&mut inner, &mut writes, now);
+                inner.auth_state = CloudAuthState::SignedOut;
+                inner.dashboard_url = None;
+                inner.last_error = Some(SIGNED_OUT_OF_WEBSITE.into());
+            } else if let ApiError::Server {
+                status,
+                retry_after,
+                ..
+            } = error
+            {
+                if *status == 413 && inner.max_sessions_per_request > MIN_SESSIONS_PER_REQUEST {
+                    inner.max_sessions_per_request =
+                        (inner.max_sessions_per_request / 2).max(MIN_SESSIONS_PER_REQUEST);
+                    inner.schedule.next_sync_at = Some(now + TOO_LARGE_RETRY);
+                } else {
+                    inner.schedule.failures = inner.schedule.failures.saturating_add(1);
+                    inner.last_error = Some(if *status == 401 {
+                        // Refused even after a refresh Supabase accepted: the
+                        // website's own check failed (its key set can't be
+                        // fetched, say). The session is kept; try later.
+                        SIGN_IN_NOT_ACCEPTED.into()
+                    } else {
+                        error.to_string()
+                    });
+                    let wait = backoff(inner.schedule.failures).max(retry_wait(*retry_after));
+                    Self::back_off(&mut inner, now, wait);
+                }
+            } else {
+                inner.schedule.failures = inner.schedule.failures.saturating_add(1);
+                inner.last_error = Some(error.to_string());
+                let wait = backoff(inner.schedule.failures);
+                Self::back_off(&mut inner, now, wait);
+            }
+        }
+        self.send(writes);
+    }
+
+    /// No pass before `now + wait`, whatever asks for one sooner.
+    fn back_off(inner: &mut Inner, now: SystemTime, wait: Duration) {
+        let until = now
+            .checked_add(wait)
+            .or_else(|| now.checked_add(MAX_RETRY_AFTER))
+            .unwrap_or(now);
+        inner.schedule.not_before = Some(until);
+        inner.schedule.next_sync_at = Some(until);
+    }
+
+    // ---- Summaries ----
+
+    /// Summarise the next due session, if any, here and now (CL§9.1): one
+    /// that ended after summaries were turned on, of an account whose
+    /// 5-hour window is under [`SUMMARY_USAGE_CEILING`], run in a folder of
+    /// the account that ran it, from its own part of the conversation only.
+    /// One at a time: nothing happens while another runs. The tick runs the
+    /// same on a thread of its own.
     pub fn summarize_next(&self, now: SystemTime) {
-        let _ = now;
+        if let Some(claim) = self.claim_summary(now) {
+            self.summarize_claimed(&claim, now);
+            self.release_summary();
+        }
+    }
+
+    /// A summary is running (tests wait for the tick's to end).
+    pub fn is_summarizing(&self) -> bool {
+        lock(&self.inner).summary_cancel.is_some()
+    }
+
+    /// The right to run the next summary, when summaries may run and none
+    /// does. Its generation is read first: a switch-off from here on drops
+    /// the run.
+    fn claim_summary(&self, now: SystemTime) -> Option<SummaryClaim> {
+        self.stores.as_ref()?;
+        let generation = self.generations.summary();
+        if !self.can_summarize(now) {
+            return None;
+        }
+        let mut inner = lock(&self.inner);
+        if inner.summary_cancel.is_some() || !inner.started {
+            return None;
+        }
+        let cancel = Cancel::new();
+        inner.summary_cancel = Some(cancel.clone());
+        self.generations.track_summary(Some(cancel.clone()));
+        if generation != self.generations.summary() {
+            cancel.cancel();
+        }
+        Some(SummaryClaim { cancel, generation })
+    }
+
+    fn release_summary(&self) {
+        let mut inner = lock(&self.inner);
+        inner.summary_cancel = None;
+        self.generations.track_summary(None);
+    }
+
+    /// The run of a claimed summary (CloudSync.swift 1296-1356).
+    fn summarize_claimed(&self, claim: &SummaryClaim, now: SystemTime) {
+        let Some(stores) = &self.stores else { return };
+        let current =
+            || claim.generation == self.generations.summary() && !claim.cancel.is_cancelled();
+        let accounts: Vec<CloudAccountInfo> = environment::account_infos(&self.deps.accounts())
+            .into_iter()
+            .filter(|account| {
+                self.deps.five_hour(&account.identity_id).unwrap_or(0.0) < SUMMARY_USAGE_CEILING
+            })
+            .collect();
+        let candidates =
+            CloudSyncPass::summary_candidates(&accounts, stores, stores.summaries.enabled_at());
+        let Some(candidate) = stores.summaries.next_candidate(&candidates, now) else {
+            return;
+        };
+        if !current() {
+            return;
+        }
+        let Some(folder) = self.deps.summary_folder(&candidate.identity_id) else {
+            stores
+                .summaries
+                .record_failure(&candidate.key, NO_FOLDER_REASON, now, NO_FOLDER_WAIT);
+            return;
+        };
+        let owners = stores.ledger.owners(&candidate.session_id);
+        let stretches = SessionOwners::stretches(&candidate.account_key, &owners);
+        let excerpt = build_excerpt(
+            &*stores.files,
+            PathStyle::native(),
+            &candidate.transcript_path,
+            &candidate.session_id,
+            stretches.as_deref(),
+            MAX_EXCERPT_CHARACTERS,
+        );
+        let Some(excerpt) = excerpt else {
+            stores
+                .summaries
+                .record_failure(&candidate.key, NO_CONVERSATION_REASON, now, MAX_RETRY);
+            return;
+        };
+        // Switched off (or signed out) while it was being prepared: nothing
+        // is launched.
+        if !current() || !self.can_summarize(now) {
+            return;
+        }
+        stores.summaries.note_run(now);
+        let request = summary_run::Request {
+            input: summary_run::input(&excerpt),
+            config_dir_env: folder.config_dir_env.clone(),
+            binary: self.deps.claude_binary(),
+        };
+        let outcome = self.summarizer.run(&request, &claim.cancel, now);
+        // Turned off meanwhile: whatever came back isn't wanted.
+        if !current() || !lock(&self.inner).cfg.summaries_enabled {
+            return;
+        }
+        let at = self.clock.now();
+        if !self
+            .deps
+            .summary_folder_still_runs(&folder, &candidate.identity_id)
+        {
+            stores.summaries.record_failure(
+                &candidate.key,
+                FOLDER_CHANGED_REASON,
+                at,
+                Duration::ZERO,
+            );
+            return;
+        }
+        match outcome {
+            Outcome::Summary(summary) => {
+                stores
+                    .summaries
+                    .record(&candidate.key, &summary, candidate.message_count, at);
+                self.sync_soon(at);
+            }
+            Outcome::RateLimited => {
+                lock(&self.inner).summaries_paused_until = Some(at + SUMMARY_PAUSE);
+                stores.summaries.record_failure(
+                    &candidate.key,
+                    RATE_LIMITED_REASON,
+                    at,
+                    SUMMARY_PAUSE,
+                );
+            }
+            Outcome::Unavailable(reason) => {
+                stores
+                    .summaries
+                    .record_failure(&candidate.key, &reason, at, UNAVAILABLE_WAIT);
+            }
+            Outcome::Failed(reason) => {
+                stores
+                    .summaries
+                    .record_failure(&candidate.key, &reason, at, Duration::ZERO);
+            }
+        }
+        self.publish();
     }
 
     // ---- Publishing ----

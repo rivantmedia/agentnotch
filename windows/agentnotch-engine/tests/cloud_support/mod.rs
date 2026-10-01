@@ -425,6 +425,12 @@ impl AssistantLine {
         self
     }
 
+    /// The folder the line was written in (default `/Users/me/code/app`).
+    pub fn cwd(mut self, cwd: &str) -> Self {
+        self.cwd = cwd.to_owned();
+        self
+    }
+
     /// What the reply says (default "Done.").
     pub fn text(mut self, text: &str) -> Self {
         self.text = text.to_owned();
@@ -486,6 +492,19 @@ impl Lines {
             cwd: "/Users/me/code/app".to_owned(),
             text: "Done.".to_owned(),
         }
+    }
+
+    /// A tool's output, as Claude Code records it in a user line.
+    pub fn tool_result(text: &str, session: &str, seconds: f64) -> String {
+        serde_json::json!({
+            "type": "user", "sessionId": session, "timestamp": CloudFixture::stamp(seconds),
+            "cwd": "/Users/me/code/app", "uuid": line_uuid(),
+            "toolUseResult": {"stdout": text},
+            "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": text}
+            ]}
+        })
+        .to_string()
     }
 
     pub fn ai_title(title: &str, session: &str) -> String {
@@ -556,6 +575,8 @@ pub struct FakeCloudDeps {
     pub launching_claude: AtomicBool,
     pub claude_binary: Mutex<Option<ClaudeBinary>>,
     pub settings: Mutex<Vec<(String, Value)>>,
+    /// Every identity a summary folder was asked for, in order.
+    pub folder_requests: Mutex<Vec<IdentityId>>,
 }
 
 impl FakeCloudDeps {
@@ -575,6 +596,7 @@ impl FakeCloudDeps {
                 shim: false,
             })),
             settings: Mutex::new(Vec::new()),
+            folder_requests: Mutex::new(Vec::new()),
         }
     }
 
@@ -610,7 +632,8 @@ impl CloudDeps for FakeCloudDeps {
         locked(&self.five_hour).get(identity).copied()
     }
 
-    fn summary_folder(&self, _identity: &IdentityId) -> Option<RunFolder> {
+    fn summary_folder(&self, identity: &IdentityId) -> Option<RunFolder> {
+        locked(&self.folder_requests).push(identity.clone());
         locked(&self.summary_folder).clone()
     }
 
@@ -694,7 +717,10 @@ impl Harness {
 
     pub fn with(options: HarnessOptions) -> Harness {
         let root = tempfile::tempdir().expect("a temporary folder");
-        let (mut platform, handles) = platform(root.path());
+        // The real path: macOS's temporary folder is reached through a link,
+        // which the backfill refuses to read history through.
+        let base = std::fs::canonicalize(root.path()).expect("a real path");
+        let (mut platform, handles) = platform(&base);
         if let Some(browser) = &options.browser {
             platform.browser = browser.clone();
         }
@@ -703,9 +729,10 @@ impl Harness {
             .http
             .set_handler(|request| Ok(website_answer(request)));
         let deps = Arc::new(FakeCloudDeps::new(vec![CloudFixture::account()]));
+        *locked(&deps.summary_folder) = Some(summary_folder(&handles.roots.home));
         let mut harness = Harness {
             service: Arc::new(CloudSync::new(
-                Self::config_for(root.path(), &handles, &options),
+                Self::config_for(&base, &handles, &options),
                 deps.clone(),
                 &platform,
             )),
@@ -751,7 +778,8 @@ impl Harness {
 
     /// The config `an-core` hands the cloud now (switches as last written).
     pub fn config(&self) -> CloudConfig {
-        let mut cfg = Self::config_for(self.root.path(), &self.handles, &self.options);
+        let base = std::fs::canonicalize(self.root.path()).expect("a real path");
+        let mut cfg = Self::config_for(&base, &self.handles, &self.options);
         if let Some(Value::Bool(on)) = self.deps.setting("cloudSyncEnabled") {
             cfg.sync_enabled = on;
         }
@@ -770,7 +798,9 @@ impl Harness {
     }
 
     pub fn support(&self) -> PathBuf {
-        self.root.path().join("support")
+        std::fs::canonicalize(self.root.path())
+            .expect("a real path")
+            .join("support")
     }
 
     pub fn now(&self) -> SystemTime {
@@ -862,5 +892,198 @@ impl Harness {
         self.service
             .stores()
             .map_or(0, |s| s.recorder.pending_count())
+    }
+
+    // ---- The sync suites' sessions (the Mac's `writeSession`, `observation`) ----
+
+    /// `<home>\.claude\projects\-Users-me-code-app`.
+    pub fn projects(&self) -> PathBuf {
+        self.handles
+            .roots
+            .home
+            .join(".claude")
+            .join("projects")
+            .join("-Users-me-code-app")
+    }
+
+    pub fn transcript(&self, id: &str) -> PathBuf {
+        self.projects().join(format!("{id}.jsonl"))
+    }
+
+    /// A session with a prompt, a tool call and its output, and two
+    /// responses (`extra` more after them).
+    pub fn write_session(&self, id: &str, extra: usize) {
+        let mut lines = vec![
+            Lines::user("MY SECRET PROMPT about the login bug", id, 0.0),
+            Lines::assistant(&format!("{id}-m1"), "r1", id)
+                .usage(100, 50)
+                .cache(1000, 5000)
+                .at(10.0)
+                .text("Looking into it.")
+                .tool_use()
+                .line(),
+            Lines::tool_result("TOOL OUTPUT WITH A PATH /Users/me/secret", id, 11.0),
+            Lines::assistant(&format!("{id}-m2"), "r2", id)
+                .model("claude-haiku-4-5")
+                .usage(10, 5)
+                .at(20.0)
+                .text("Fixed it.")
+                .line(),
+        ];
+        for index in 0..extra {
+            lines.push(
+                Lines::assistant(&format!("{id}-x{index}"), &format!("rx{index}"), id)
+                    .usage(1, 1)
+                    .at(30.0 + index as f64)
+                    .line(),
+            );
+        }
+        Lines::write(&lines, &self.transcript(id), false);
+    }
+
+    /// Appends lines to a session's transcript.
+    pub fn append(&self, id: &str, lines: &[String]) {
+        Lines::write(lines, &self.transcript(id), true);
+    }
+
+    /// The hub's sighting of a running session of `account` whose
+    /// transcript is ours: in the terminal, Claude Code's cost 0.37.
+    pub fn observation_for(&self, id: &str, account: &CloudAccount) -> LiveSessionObservation {
+        let mut observation = live_for(id, account)
+            .entrypoint(Some("cli"))
+            .active(20.0)
+            .cost(0.37)
+            .title("Fix the login bug")
+            .build();
+        observation.transcript_path = Some(self.transcript(id).to_string_lossy().into_owned());
+        observation.config_dir = Some(
+            self.handles
+                .roots
+                .home
+                .join(".claude")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        observation
+    }
+
+    pub fn observation(&self, id: &str) -> LiveSessionObservation {
+        self.observation_for(id, &CloudFixture::account())
+    }
+
+    /// The hub reports `attributed` running, `unsure` running as no one
+    /// for certain, and these ids live, now.
+    pub fn observe(
+        &self,
+        attributed: Vec<LiveSessionObservation>,
+        unsure: &[&str],
+        live_ids: &[&str],
+    ) {
+        let batch = LiveBatch {
+            attributed,
+            unsure: ids(unsure),
+            waiting: BTreeSet::new(),
+            live_ids: ids(live_ids),
+            at: self.now(),
+        };
+        self.service.observe_live(batch, self.now());
+    }
+
+    /// One session seen running, as the Mac's `observeLive([o], liveIDs: [id])`.
+    pub fn observe_one(&self, observation: LiveSessionObservation) {
+        let id = observation.session_id.clone();
+        self.observe(vec![observation], &[], &[&id]);
+    }
+
+    /// A tick, then (bounded) for the summary it started to end.
+    pub fn tick(&self) {
+        self.service.tick(self.now());
+        self.wait_for_summary();
+    }
+
+    /// Waits (at most 10 s) until no summary runs.
+    pub fn wait_for_summary(&self) {
+        let service = self.service.clone();
+        assert!(
+            eventually(Duration::from_secs(10), || !service.is_summarizing()),
+            "a summary still runs"
+        );
+    }
+
+    pub fn sync_now(&self) {
+        self.service.sync_now(self.now(), true);
+    }
+
+    pub fn summarize_next(&self) {
+        self.service.summarize_next(self.now());
+    }
+
+    pub fn sync_requests(&self) -> Vec<HttpRequest> {
+        self.requests_to("/api/app/v1/sync")
+    }
+
+    /// The sessions of a sync request's body.
+    pub fn sessions(request: &HttpRequest) -> Vec<Value> {
+        agentnotch_engine::testkit::http::body_json(request)["sessions"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// The scripted `claude -p` answers the next summary run with.
+    pub fn answer_summary(&self, stdout: &str) {
+        self.handles
+            .runner
+            .push(agentnotch_engine::testkit::Script::ok(
+                stdout.as_bytes().to_vec(),
+            ));
+    }
+}
+
+/// `claude -p --output-format json`'s answer with a summary (the Mac's
+/// stand-in runner's default).
+pub const SUMMARY_ANSWER: &str = r#"{"type":"result","subtype":"success","is_error":false,"num_turns":1,"result":"Fixed the token refresh.","total_cost_usd":0.001,"modelUsage":{"claude-haiku-4-5-20251001":{"outputTokens":12}}}"#;
+
+/// A run folder signed in as the fixture's account, for summaries.
+pub fn summary_folder(home: &std::path::Path) -> RunFolder {
+    let dir = home.join(".claude-summaries");
+    let text = dir.to_string_lossy().into_owned();
+    RunFolder {
+        id: agentnotch_engine::model::AccountId::from(text.as_str()),
+        config_dir: dir,
+        config_dir_env: Some(text),
+        custom_label: None,
+        seen_config_dir_envs: Vec::new(),
+        identity: None,
+        subscription_type: None,
+        color_index: 0,
+        source: agentnotch_engine::model::FolderSource::Discovered,
+        last_seen_at: None,
+        is_hidden: false,
+        kind: FolderKind::Run,
+    }
+}
+
+/// Polls `condition` until it holds or `limit` passes: whether it held.
+pub fn eventually(limit: Duration, condition: impl Fn() -> bool) -> bool {
+    let deadline = std::time::Instant::now() + limit;
+    loop {
+        if condition() {
+            return true;
+        }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// True the first time only: tells a test's first request from the rest.
+#[derive(Default)]
+pub struct FirstOnly(AtomicBool);
+
+impl FirstOnly {
+    pub fn take(&self) -> bool {
+        !self.0.swap(true, Ordering::SeqCst)
     }
 }
