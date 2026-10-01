@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tests Scripts/bump-version.sh in a temporary copy of the two files it touches, never in this
 # checkout: set, --sync, a bad version, a missing line, and that nothing else in
-# tauri.conf.json changes. Run by hand: bash windows/tools/tests/bump-version.test.sh
+# tauri.conf.json changes. Run by fork.yml's Tool tests, or by hand: bash windows/tools/tests/bump-version.test.sh
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -15,15 +15,19 @@ FAILED=0
 ok() { PASSED=$((PASSED + 1)); echo "ok   $1"; }
 bad() { FAILED=$((FAILED + 1)); echo "FAIL $1" >&2; }
 
-# A fresh tree: the real tauri.conf.json and a VERSION that disagrees with it.
+# A fresh tree: the real tauri.conf.json, its version set to 1.0.0 whatever the checkout's is
+# (so the test holds after every release), and a VERSION that disagrees with it.
 fresh() {
     local tree="$WORK/$1"
     rm -rf "$tree"
     mkdir -p "$tree/windows/codenotch"
-    cp "$REPO/windows/codenotch/tauri.conf.json" "$tree/windows/codenotch/tauri.conf.json"
+    sed -E 's/^([[:space:]]*"version"[[:space:]]*:[[:space:]]*")[^"]*(".*)$/\11.0.0\2/' \
+        "$REPO/windows/codenotch/tauri.conf.json" > "$tree/windows/codenotch/tauri.conf.json"
+    chmod "$(mode "$REPO/windows/codenotch/tauri.conf.json")" "$tree/windows/codenotch/tauri.conf.json"
     echo "1.0.1" > "$tree/VERSION"
     echo "$tree"
 }
+mode() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"; }
 conf_version() { sed -n -E 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"([^"]*)".*$/\1/p' "$1/windows/codenotch/tauri.conf.json"; }
 
 # set: both files carry the new version and only that one line differs.
@@ -34,7 +38,6 @@ if [[ "$(cat "$tree/VERSION")" == "1.2.3" && "$(conf_version "$tree")" == "1.2.3
 changed="$(diff "$WORK/set.before" "$tree/windows/codenotch/tauri.conf.json" | grep -c '^>' || true)"
 if [[ "$changed" == "1" ]]; then ok "set changes one line of tauri.conf.json"; else bad "set changes one line (changed: $changed)"; fi
 if grep -q "1.0.1 -> 1.2.3" <<<"$out" && grep -q "1.0.0 -> 1.2.3" <<<"$out"; then ok "set prints what changed"; else bad "set prints what changed: $out"; fi
-mode() { stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"; }
 if [[ "$(mode "$tree/windows/codenotch/tauri.conf.json")" == "$(mode "$REPO/windows/codenotch/tauri.conf.json")" ]]; then ok "set keeps the file mode"; else bad "set keeps the file mode"; fi
 
 # sync: tauri.conf.json follows VERSION, VERSION stays as it is.

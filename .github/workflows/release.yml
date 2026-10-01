@@ -418,7 +418,7 @@ jobs:
               problem "$PREVIOUS_TAG's latest.json names no key the release tool can read; run again, or look at that release's files."
             elif [[ "$previous_id" != "$KEY_ID" ]]; then
               if [[ "$ROTATE_UPDATE_KEY" == true ]]; then
-                echo "::warning::The Windows update key is not the one $PREVIOUS_TAG was signed with ($previous_id, now $KEY_ID), and this run was told to publish anyway: every installed Windows copy refuses this release and has to be reinstalled by hand, unless this is a bridge release."
+                echo "::warning::The Windows update key is not the one $PREVIOUS_TAG was signed with ($previous_id, now $KEY_ID), and this run was told to publish anyway: every installed Windows copy refuses this release and has to be reinstalled by hand."
               else
                 problem "The Windows update key ($KEY_ID) is not the one $PREVIOUS_TAG was signed with ($previous_id): every installed Windows copy would refuse this release and every later one. Put that key back or, if a new key is really meant, start Actions › Release › Run workflow on main with 'Publish although the update key changed' ticked."
               fi

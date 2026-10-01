@@ -238,9 +238,10 @@ jobs:
           python3 windows/tools/release-harness/run.py
           python3 windows/tools/release-harness/identical.py
 
-      # The Windows build, smoke and facts scripts' own tests: their pure parts
-      # run anywhere (PowerShell 7 is on Ubuntu runners). Globs, quoted: Node
-      # takes them as test file patterns, not folders.
+      # The Windows build, smoke and facts scripts' own tests (their pure parts
+      # run anywhere; PowerShell 7 is on Ubuntu runners) and bump-version.sh's,
+      # in a temporary copy. Globs, quoted: Node takes them as test file
+      # patterns, not folders.
       - name: Tool tests
         working-directory: .
         run: |
@@ -248,6 +249,7 @@ jobs:
           node --test "windows/tools/tests/*.test.mjs" "windows/scripts/smoke/*.test.mjs" "windows/scripts/smoke/real-claude/*.test.mjs"
           pwsh -NoProfile -File windows/tools/tests/check-powershell.ps1
           pwsh -NoProfile -File windows/tools/tests/run.ps1
+          bash windows/tools/tests/bump-version.test.sh
 
       # The Rust app's sync request through the website's real route into
       # Postgres, and the answer back (Docker). Gated until the Rust side of

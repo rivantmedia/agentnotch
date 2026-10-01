@@ -50,7 +50,10 @@ jobs:
       FACTS_FILE: windows/agentnotch-engine/tests/fixtures/claude-code-facts.json
       npm_config_update_notifier: 'false'
     steps:
+      # Nothing here pushes; the token stays out of .git/config.
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v6
         with:

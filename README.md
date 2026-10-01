@@ -651,9 +651,12 @@ Windows goes out in the same release as the Mac, from the same *Release* workflo
   previous release's `latest.json` names, unless a manual run ticks *Publish although the update
   key changed*. After the first Windows release, commit the key the run summary prints as
   `Scripts/tauri-update-public-key.txt` (an optional pin file): every later release then has to
-  derive that key. Rotating the Mac key also changes the Windows key: keep the old private key
-  as a second `release` secret, `SPARKLE_ED_PRIVATE_KEY_PREVIOUS`, for one bridge release signed
-  with the old key's derivative, or every installed Windows copy has to be reinstalled by hand.
+  derive that key. Rotating the Mac key also changes the Windows key, and an installed Windows
+  copy takes only an update signed with the key it was built with. Moving them over takes one
+  bridge release whose installer carries the new key but is signed with the old key's
+  derivative; the Release workflow can't make one yet (it signs with `SPARKLE_ED_PRIVATE_KEY`
+  only). So keep the old private key (as `SPARKLE_ED_PRIVATE_KEY_PREVIOUS`) and add that signing
+  path before rotating, or every installed Windows copy has to be reinstalled by hand.
 - **`skip_windows`.** A manual run can tick *Publish without the Windows build*: the last resort
   that keeps a Mac release from waiting on Windows. Installed Windows copies then miss that
   release until the next one, and the run warns when a previous release had Windows files.

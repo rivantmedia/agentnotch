@@ -488,10 +488,11 @@ changing behaviour.
   pushed branch that touches `windows/**`): `gh run list|watch|view -R rivantmedia/agentnotch`.
   The PowerShell and Node tests (`windows/tools/tests`, `windows/scripts/smoke/*.test.mjs`) and
   the release harness (`python3 windows/tools/release-harness/run.py`, `identical.py`) run on
-  `fork.yml`; `bash windows/tools/tests/bump-version.test.sh` runs `bump-version.sh` in a
-  temporary copy.
+  `fork.yml`, as does `bash windows/tools/tests/bump-version.test.sh` (`bump-version.sh` in a
+  temporary copy).
 - **Never run `claude`: the exception.** Real Claude Code runs only in the `real-claude` job
-  of `agentnotch-windows.yml`, on the Windows CI runner, in a temporary profile
+  of `agentnotch-windows.yml`, on a GitHub-hosted Windows runner (`real-claude.ps1` refuses
+  anywhere else, a self-hosted runner included), never in a release build, in a temporary profile
   (`USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `CLAUDE_CONFIG_DIR`), at a pinned version
   (installed from npm with its integrity hash), with a fake API key, against a fake Messages API
   on loopback, firewalled to loopback, with no secrets and no login token anywhere. Its result
@@ -517,9 +518,12 @@ changing behaviour.
     pin the maintainer commits after the first Windows release, when present). The `windows` job
     builds with the public key only and gets no secret; `sign-windows` (ubuntu) signs the
     installer and writes `latest.json` with `requireSignedVersion`. Rotating the Mac seed also
-    changes the Windows key: a bridge release signed with the old seed's derived key needs the
-    old seed kept as `SPARKLE_ED_PRIVATE_KEY_PREVIOUS` for that one release (`rotate_update_key`
-    ticked); `release-make-keys.sh`'s warning says so.
+    changes the Windows key, and installed Windows copies take only an update signed with the
+    key they were built with: the one way to move them is a bridge release whose installer
+    carries the new key but is signed with the old seed's derived key. `release.yml` does not
+    do that yet (it signs with `SPARKLE_ED_PRIVATE_KEY` only), so before any rotation keep the
+    old seed (`SPARKLE_ED_PRIVATE_KEY_PREVIOUS`) and add that signing path, or every installed
+    Windows copy has to be reinstalled by hand. `release-make-keys.sh`'s warning says so.
   - `skip_windows` (a manual run input) publishes the Mac alone; it warns when the previous
     release had Windows files, since installed Windows copies then miss the release.
   - **Code signing is off until the secrets exist.** The `windows-signing` environment (deployment
@@ -545,8 +549,11 @@ changing behaviour.
   - Hook command forms: a string (`C:/Users/me/.claude/hooks/agentnotch-hook.exe hook`, unquoted,
     forward slashes, parses in Git Bash and PowerShell alike) or Claude Code's exec form
     (`command` + `args`), written only when every Claude Code version seen is at least
-    `EXEC_FORM_MIN`. From `claude-code-facts.json` (committed, regenerated weekly): exec form
-    exists from 2.1.139; before 2.1.101 an unknown key made Claude Code ignore a whole settings file.
+    `EXEC_FORM_MIN`. From `claude-code-facts.json` (committed; `claude-code-facts.yml` regenerates
+    it weekly as an artifact, and a person commits a changed one by hand): exec form exists from
+    2.1.139; older versions' hook-entry schema silently drops the unknown `args`, so the command
+    would run without its arguments (the design's HS§3.5 also has an unknown key making older
+    versions ignore a whole settings file). Either way one old or unknown copy keeps string form.
   - Uninstalling removes hooks only on **Delete the application data** or `/REMOVEHOOKS`;
     an update or reinstall never touches a `settings.json`. The official Codenotch's hook entries
     are reported and removed only on request. Both apps can run side by side.
