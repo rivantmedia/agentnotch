@@ -157,8 +157,8 @@ struct A3_ActivityRowsTests {
         let progress = summary.tasks
         #expect(progress?.secondsPerTask == 240)
         #expect(progress?.activeSince == now.addingTimeInterval(-60))
-        // 3 minutes of the active task, then 4 × 4.
-        #expect(progress?.remaining(now: now) == 19.0 * 60)
+        // 3 minutes of the active task, then 4 × 4: 19 minutes.
+        #expect(progress?.remaining(now: now) == 1_140)
         #expect(progress?.percent(now: now) == 40)
         let row = ClaudeHostProjections.activityRow(summary, now: now)
         #expect(row.detail == "3/8 · ~19m left · Writing tests · ctx 42%")

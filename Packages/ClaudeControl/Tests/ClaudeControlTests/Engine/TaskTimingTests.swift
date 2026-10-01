@@ -161,7 +161,7 @@ struct TaskTimingTests {
         #expect(abs(timing.fraction(now: now) - (2 + 1.0 / 3) / 4) < 0.0001)
         #expect(timing.percent(now: now) == 58)
         // The rest of task 3, then task 4.
-        #expect(timing.remaining(now: now) == 60.0 + 90)
+        #expect(timing.remaining(now: now) == 150)
         #expect(TaskTiming.remainingLabel(timing.remaining(now: now)) == "~3m left")
     }
 
@@ -224,8 +224,8 @@ struct TaskTimingTests {
             clock += seconds
             list.apply(update(id, "completed", at: clock))
         }
-        // 60, 60, 60 and 3600 capped at 4 × 60.
-        #expect(list.timing.secondsPerTask == (60.0 * 3 + 240) / 4)
+        // 60, 60, 60 and 3600 capped at 4 × 60: (180 + 240) / 4.
+        #expect(list.timing.secondsPerTask == 105)
     }
 
     @Test func aFirstTaskNeverStartedIsTimedFromItsCreation() {
