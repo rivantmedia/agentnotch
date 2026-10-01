@@ -35,6 +35,7 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
+use agentnotch_engine::hooks::commands::{self, Subcommand};
 use agentnotch_engine::ingress::HookIngress;
 use agentnotch_engine::model::{HeldPermission, HookEvent};
 use agentnotch_engine::platform::{IncomingFrame, TransportEvent};
@@ -287,20 +288,13 @@ impl Drop for TempFolder {
 
 // ---- string commands and the shells that run them ----
 
-/// DESIGN-WIN §4.3's test for a path written into a string command with no quotes: Claude Code
-/// runs a string command through Git Bash or PowerShell, so only characters that mean the same
-/// in both may appear. Letters and digits of any script, `_ . - / :`, and `~` anywhere but first
-/// (8.3 names hold it; at the start both shells expand it).
+/// DESIGN-WIN §4.3's test for a path written into a string command with no quotes, as the
+/// installer applies it (`hooks::commands::carries_unquoted`): Claude Code runs a string command
+/// through Git Bash or PowerShell, so only characters that mean the same in both may appear.
+/// Letters and digits of any script, `_ . - / :`, and `~` anywhere but first (8.3 names hold it;
+/// at the start both shells expand it).
 pub fn unquoted(path: &str) -> bool {
-    !path.is_empty()
-        && path
-            .chars()
-            .enumerate()
-            .all(|(index, c)| c.is_alphanumeric() || "_.-/:".contains(c) || (c == '~' && index > 0))
-}
-
-fn forward_slashes(path: &str) -> String {
-    path.replace('\\', "/")
+    commands::carries_unquoted(path)
 }
 
 /// The 8.3 form of an existing path (`GetShortPathNameW`). On a volume without 8.3 names this
@@ -315,20 +309,14 @@ pub fn short_path(path: &Path) -> Option<String> {
     (length != 0 && length < buffer.len()).then(|| String::from_utf16_lossy(&buffer[..length]))
 }
 
-/// How the installer writes an exe's path into a string command (DESIGN-WIN §4.3): with forward
-/// slashes and no quotes; else its 8.3 form, when that passes the same test; else there is no
-/// string form for it.
-///
-/// The rule is written out here because the engine's builder (`hooks::commands`, WP2) is not on
-/// this branch: once it is, the tests take the strings from it.
-pub fn string_form_path(exe: &Path) -> Option<String> {
-    let long = forward_slashes(exe.to_str()?);
-    if unquoted(&long) {
-        return Some(long);
-    }
-    short_path(exe)
-        .map(|short| forward_slashes(&short))
-        .filter(|short| unquoted(short))
+/// The string command the installer writes for the hook copy at `exe` (DESIGN-WIN §4.3), from
+/// the installer's own builder (`hooks::commands::string_command_for`): the path with forward
+/// slashes and no quotes, followed by the subcommand; else the same with the config folder (the
+/// copy's grandparent) in 8.3 names; `None` when neither passes [`unquoted`].
+pub fn string_command(exe: &Path, subcommand: Subcommand) -> Option<String> {
+    commands::string_command_for(exe, subcommand, &|path: &Path| {
+        short_path(path).map(PathBuf::from)
+    })
 }
 
 /// The two shells Claude Code may run a string command through on Windows.

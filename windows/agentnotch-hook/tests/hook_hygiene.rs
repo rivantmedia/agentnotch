@@ -22,10 +22,11 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use agentnotch_engine::hooks::commands::Subcommand;
 use agentnotch_engine::runtime_types::AnswerResult;
 use agentnotch_proto::{build_hook_message, PermissionResponse};
 use common::{
-    assert_silent_success, begin, fixture, hook_command, hook_env, spawn, string_form_path,
+    assert_silent_success, begin, fixture, hook_command, hook_env, spawn, string_command,
     temp_folder, trace_file, traced, with_hook_env, Finished, Harness, Shell, TempFolder, EXE,
     HARD_TIMEOUT,
 };
@@ -58,11 +59,9 @@ fn tree(parent: &Path, via: Via, pipe: &str, trace: &Path) -> Command {
             command.arg(EXE).args(["hook", "--exec"]);
         }
         Via::Shell(shell) => {
-            let exe = string_form_path(Path::new(EXE))
+            let line = string_command(Path::new(EXE), Subcommand::Hook)
                 .expect("the test exe's path can be written into a string command");
-            command
-                .arg(shell.program())
-                .args(shell.args(&format!("{exe} hook")));
+            command.arg(shell.program()).args(shell.args(&line));
         }
     }
     let mut command = with_hook_env(command, pipe);

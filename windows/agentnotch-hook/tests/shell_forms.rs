@@ -9,9 +9,8 @@
 //! `["hook", "--exec"]`; the status line's command with `["statusline"]`. What the exe was given
 //! is read from its trace, and for a hook from the message the app received.
 //!
-//! The strings are built by `common::string_form_path`, which writes the design's rule out: the
-//! engine's builder (`hooks::commands`, WP2) is not on this branch. At the merge these tests
-//! switch to it.
+//! The strings are the installer's own (`hooks::commands::string_command_for`, through
+//! `common::string_command`), so what runs here is what a settings.json would hold.
 
 #![cfg(windows)]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::print_stderr)]
@@ -22,8 +21,9 @@ use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
 
+use agentnotch_engine::hooks::commands::Subcommand;
 use common::{
-    assert_silent_success, begin, fixture, not_run_here, short_path, spawn, string_form_path,
+    assert_silent_success, begin, fixture, not_run_here, short_path, spawn, string_command,
     temp_folder, trace_file, trace_lines, traced, unique_pipe, unquoted, with_hook_env, Harness,
     Shell, TempFolder, EXE,
 };
@@ -53,47 +53,60 @@ fn profiles(folder: &TempFolder) -> [Profile; 3] {
 }
 
 impl Profile {
-    /// The exe's path as a string command carries it, checked against what the design says this
-    /// kind of folder gets. `None`: this folder has no string form on this volume.
-    fn string_path(&self) -> Option<String> {
+    /// The string command the installer writes for this copy, checked against what the design
+    /// says this kind of folder gets. `None`: this folder has no string form on this volume.
+    fn string_command(&self, subcommand: Subcommand) -> Option<String> {
         let long = self
             .exe
             .to_str()
             .expect("a Unicode path")
             .replace('\\', "/");
-        let form = string_form_path(&self.exe);
+        let arg = subcommand.arg();
+        let command = string_command(&self.exe, subcommand);
         if self.kind != "with a space" {
             assert!(
                 unquoted(&long),
                 "{}: the temporary folder itself can't be written without quotes: {long}",
                 self.kind
             );
-            assert_eq!(form.as_deref(), Some(long.as_str()), "{}", self.kind);
+            assert_eq!(command, Some(format!("{long} {arg}")), "{}", self.kind);
             if self.kind == "not ASCII" {
                 assert!(!long.is_ascii(), "{long}");
             }
-            return form;
+            return command;
         }
         assert!(!unquoted(&long), "{long}");
-        let short = short_path(&self.exe).expect("GetShortPathNameW");
+        // The installer shortens the config folder, which exists before anything is installed;
+        // `hooks` and the exe's name need no short form.
+        let config_dir = self
+            .exe
+            .parent()
+            .and_then(|hooks| hooks.parent())
+            .expect("the copy is in <config>\\hooks");
+        let short = short_path(config_dir).expect("GetShortPathNameW");
         if short.contains(' ') {
             // 8.3 names are off on this volume, so the short path is the long one again. The
             // design gives such a folder no string form (exec form or "can't be hooked here").
-            assert_eq!(form, None, "{short}");
+            assert_eq!(command, None, "{short}");
             not_run_here(&format!(
                 "shell_forms: NOTICE: no 8.3 names on the volume of {}; the 8.3 form is not run",
                 self.exe.display()
             ));
             return None;
         }
-        let form = form.expect("an 8.3 path is a string form");
-        assert_eq!(form, short.replace('\\', "/"));
-        assert!(form.contains('~') && !form.contains(' '), "{form}");
-        assert!(
-            form.to_ascii_lowercase().ends_with(".exe"),
-            "the short name keeps the extension: {form}"
+        let command = command.expect("a folder with an 8.3 name has a string form");
+        let path = command
+            .strip_suffix(&format!(" {arg}"))
+            .expect("the command ends with its subcommand");
+        assert_eq!(
+            path,
+            format!(
+                "{}/hooks/agentnotch-hook.exe",
+                short.replace('\\', "/").trim_end_matches('/')
+            )
         );
-        Some(form)
+        assert!(path.contains('~') && !path.contains(' '), "{path}");
+        Some(command)
     }
 }
 
@@ -148,12 +161,12 @@ fn the_string_command_reaches_the_hook(shell: Shell) {
     let folder = temp_folder("string-form");
     let stdin = fixture("stdin/pre_tool_use.json");
     for profile in profiles(&folder) {
-        let Some(path) = profile.string_path() else {
+        let Some(line) = profile.string_command(Subcommand::Hook) else {
             continue;
         };
-        let what = format!("{shell:?}, {}: {path} hook", profile.kind);
+        let what = format!("{shell:?}, {}: {line}", profile.kind);
         let trace = trace_file();
-        let mut command = with_hook_env(shell.command(&format!("{path} hook")), &app.pipe);
+        let mut command = with_hook_env(shell.command(&line), &app.pipe);
         command.env("AGENTNOTCH_HOOK_TRACE", &trace);
         let done = spawn(command, &stdin).finish();
         assert_silent_success(&done, &what);
@@ -232,12 +245,11 @@ fn the_status_line_command_reaches_the_wrapper(shell: Shell) {
     let folder = temp_folder("status-line");
     let stdin = fixture("stdin/status_line.json");
     for profile in profiles(&folder) {
-        let Some(path) = profile.string_path() else {
+        let Some(line) = profile.string_command(Subcommand::StatusLine) else {
             continue;
         };
-        let what = format!("{shell:?}, {}: {path} statusline", profile.kind);
+        let what = format!("{shell:?}, {}: {line}", profile.kind);
         let trace = trace_file();
-        let line = format!("{path} statusline");
         let mut command = with_hook_env(shell.command(&line), &unique_pipe("status-line"));
         command.env("AGENTNOTCH_HOOK_TRACE", &trace);
         let done = spawn(command, &stdin).finish();
