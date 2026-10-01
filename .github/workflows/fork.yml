@@ -14,7 +14,8 @@ name: Fork
 # an update feed. The Release workflow (release.yml) runs all of this first.
 # The `rust` job checks the Windows port's fork crates on Linux, the Windows
 # target included, so Windows code is linted on every push even when
-# agentnotch-windows.yml's path filter skips one.
+# agentnotch-windows.yml's path filter skips one; it also runs the release
+# workflow harness, the Windows scripts' tests and the Rust contract e2e.
 
 on:
   push:
@@ -224,3 +225,42 @@ jobs:
           node --test scripts/test-ko-i18n.cjs
           node --test test-codex-headline.cjs
           if [[ -d agentnotch-ui-tests ]]; then node --test agentnotch-ui-tests; fi
+
+      # release.yml can only run on main, and there it publishes, so its logic
+      # is tried here: its shell steps run against a fake gh, with the release
+      # tool the tests above built and the design's test seed (never a real
+      # key), and the Mac release steps are compared with the ones 1.0.1
+      # shipped with (DESIGN-WIN R9).
+      - name: Release workflow harness
+        working-directory: .
+        run: |
+          set -euo pipefail
+          python3 windows/tools/release-harness/run.py
+          python3 windows/tools/release-harness/identical.py
+
+      # The Windows build, smoke and facts scripts' own tests (their pure parts
+      # run anywhere; PowerShell 7 is on Ubuntu runners) and bump-version.sh's,
+      # in a temporary copy. Globs, quoted: Node takes them as test file
+      # patterns, not folders.
+      - name: Tool tests
+        working-directory: .
+        run: |
+          set -euo pipefail
+          node --test "windows/tools/tests/*.test.mjs" "windows/scripts/smoke/*.test.mjs" "windows/scripts/smoke/real-claude/*.test.mjs"
+          pwsh -NoProfile -File windows/tools/tests/check-powershell.ps1
+          pwsh -NoProfile -File windows/tools/tests/run.ps1
+          bash windows/tools/tests/bump-version.test.sh
+
+      # The Rust app's sync request through the website's real route into
+      # Postgres, and the answer back (Docker). Gated until the Rust side of
+      # the contract exists (windows/scripts/smoke/gates.json, rustContract).
+      - name: Rust contract e2e
+        working-directory: .
+        run: |
+          set -euo pipefail
+          gates=windows/scripts/smoke/gates.json
+          if [[ "$(jq -r .rustContract "$gates")" != true ]]; then
+            echo "::notice::Rust contract e2e not run: waiting for $(jq -r '._why.rustContract' "$gates")."
+            exit 0
+          fi
+          AGENTNOTCH_CONTRACT_APP=rust Scripts/cloud-contract-e2e.sh

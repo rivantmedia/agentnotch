@@ -284,8 +284,10 @@ while IFS= read -r file; do
         winnames=$((winnames + 1))
     done <<< "$hits"
 done <<< "$fork_files"
+# windows/tools is the fork's own (the release harness's fixtures name upstream's files on
+# purpose, to prove the release refuses them); upstream has no such folder.
 added=$(git diff -U0 "$BASE" -- windows ':!windows/agentnotch-*' ':!windows/codenotch/src/agentnotch' \
-            ':!windows/codenotch/ui/agentnotch' ':!windows/Cargo.lock' | grep -E '^\+[^+]' || true)
+            ':!windows/codenotch/ui/agentnotch' ':!windows/tools' ':!windows/Cargo.lock' | grep -E '^\+[^+]' || true)
 while IFS= read -r line; do
     [[ -n "$line" ]] || continue
     text="${line#+}"

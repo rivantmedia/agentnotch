@@ -1,0 +1,457 @@
+name: Release
+
+# Publishes Agent Notch to this repository's GitHub releases: the disk image
+# the website's download links to, and the zip and appcast.xml that every
+# installed copy checks once a day (its feed is
+# releases/latest/download/appcast.xml, fixed in the app).
+#
+# A release is a push to main that changes VERSION or the update key, or a
+# manual run from main. (The key: the first release goes out on the commit
+# that adds it, once its secret is set; a key commit on a version that is out
+# already is a green run with nothing to do.) The fork's own checks (fork.yml)
+# run first. Then one job builds everything with Scripts/release-build.sh
+# (universal, the update signed with the EdDSA key, optionally a stable
+# signing identity and notarization), creates the release as a draft with its
+# three files, and only then publishes it: latest/download never points at a
+# release whose files are still uploading. A manual run can be a dry run,
+# which builds the same files and keeps them as a run artifact.
+#
+# Tags are agentnotch-v<VERSION>: upstream's v1.x tags are in every clone that
+# fetches upstream, and would collide with the fork's own numbering.
+#
+# Secrets, all in the `release` environment, whose only deployment branch is
+# main. A repository secret reaches a workflow run from any branch, and so
+# the code of any pushed branch; the update key can never be replaced
+# without stranding every installed copy, so it must not be one.
+# Scripts/release-make-keys.sh makes the environment and the secrets, or
+# prints the commands:
+#   SPARKLE_ED_PRIVATE_KEY          required: the update signing key, whose
+#                                   public half is Scripts/sparkle-public-ed-key.txt
+#   MACOS_SIGNING_P12_BASE64, MACOS_SIGNING_P12_PASSWORD
+#                                   optional: a Developer ID or self-signed
+#                                   identity; without it the app is signed ad hoc
+#   APPLE_NOTARY_API_KEY_P8_BASE64, APPLE_NOTARY_API_KEY_ID, APPLE_NOTARY_API_ISSUER_ID
+#                                   optional, Developer ID only: notarization
+
+on:
+  push:
+    branches: [main]
+    paths: [VERSION, Scripts/sparkle-public-ed-key.txt]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Dry run (build the files and keep them as a run artifact; publish nothing)
+        type: boolean
+        default: false
+      rotate_update_key:
+        description: Publish although the update key changed since the latest release (every installed copy stops updating and has to be reinstalled by hand)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# One run at a time, in the order they were started, and none cancelled:
+# not halfway through publishing, and not while it waits either. By default
+# a newly queued run (a dry run too) cancels the one already waiting, and a
+# VERSION push never triggers again. One group for dry runs as well: the
+# checks fork.yml runs inside every Release run share its concurrency group
+# (Release-<ref>, which cancels in progress), so two Release runs on one ref
+# must never overlap.
+concurrency:
+  group: release
+  queue: max
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    name: Checks
+    uses: ./.github/workflows/fork.yml
+
+  release:
+    name: Build and publish
+    needs: checks
+    # Only this repository holds the signing key; a fork of it has nothing to
+    # publish and no feed of its own.
+    if: github.repository == 'rivantmedia/agentnotch'
+    runs-on: macos-26
+    timeout-minutes: 120
+    permissions:
+      contents: write
+    # The update key and the signing secrets are secrets of this environment,
+    # whose only deployment branch is main, so no other branch's code can read
+    # them. GitHub checks that before the job starts: a run from another ref
+    # fails as not allowed to deploy to release, and never gets the secrets.
+    environment: release
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+      # Pinned, so a runner image update cannot move the toolchain or the SDK
+      # under a release. Its toolchain has to ship the Swift back-deployment
+      # libraries for x86_64 too (the Command Line Tools for Swift 6.4 do not);
+      # Scripts/spm-build-app.sh --universal stops early when it doesn't.
+      XCODE_APP: /Applications/Xcode_26.6.app
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          # Nothing here pushes: the release and its tag are made through the API.
+          persist-credentials: false
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          if [[ ! -d "$XCODE_APP" ]]; then
+            echo "::error::$XCODE_APP is not on this runner image; set XCODE_APP to one of:" /Applications/Xcode_*.app
+            exit 1
+          fi
+          sudo xcode-select -s "$XCODE_APP"
+          xcodebuild -version
+          swift --version
+
+      # What a real run would publish, and whether it may. In a dry run the
+      # same questions are only warnings, so the build can be tried at any
+      # time, but only from main: this job holds the update key, and only
+      # main's code may run with it.
+      - name: Plan the release
+        id: plan
+        env:
+          ROTATE_UPDATE_KEY: ${{ github.event_name == 'workflow_dispatch' && inputs.rotate_update_key }}
+        run: |
+          set -euo pipefail
+          # Fatal in a dry run too. The environment's branch rule is what keeps
+          # the key from other branches' code; this stops a run whose
+          # environment has no such rule (GitHub makes a missing one, with no
+          # rules, on the first run that names it) before any step reads it.
+          if [[ "$GITHUB_REF" != refs/heads/main ]]; then
+            echo "::error::Releases and dry runs run from main only, not $GITHUB_REF."
+            exit 1
+          fi
+          problems=0
+          problem() {
+            if [[ "$DRY_RUN" == true ]]; then
+              echo "::warning::$1 (a real run would stop here)"
+            else
+              echo "::error::$1"
+              problems=$((problems + 1))
+            fi
+          }
+
+          version="$(<VERSION)"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error file=VERSION::VERSION must be one line of major.minor.patch numbers, not '$version'"
+            exit 1
+          fi
+          tag="agentnotch-v$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+          # Released already: a re-run, a VERSION commit that went back to it,
+          # or a push that changed only the key file. Green, with nothing to do.
+          if release="$(gh release view "$tag" --json isDraft,name 2>/dev/null)"; then
+            if [[ "$(jq -r .isDraft <<< "$release")" == false ]]; then
+              if [[ "$DRY_RUN" == true ]]; then
+                echo "::warning::Agent Notch $version is released already; a real run would do nothing."
+              else
+                echo "::notice::Agent Notch $version is released already ($tag); nothing to do."
+                echo "skip=true" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            elif [[ "$(jq -r .name <<< "$release")" == "Agent Notch $version" ]]; then
+              # Left by a run that stopped between creating and publishing.
+              echo "::notice::The draft of $tag an interrupted run left behind is replaced."
+              echo "stale_draft=true" >> "$GITHUB_OUTPUT"
+            else
+              problem "A draft release for $tag exists that this workflow did not make; delete it or change VERSION."
+            fi
+          fi
+
+          # Installed copies take only a higher CFBundleVersion, which is VERSION.
+          latest="$(gh release list --exclude-drafts --exclude-pre-releases --limit 1000 --json tagName --jq '.[].tagName' \
+            | sed -n 's/^agentnotch-v\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p' | sort -V | tail -1)"
+          if [[ -n "$latest" ]]; then
+            echo "previous_tag=agentnotch-v$latest" >> "$GITHUB_OUTPUT"
+            highest="$(printf '%s\n%s\n' "$latest" "$version" | sort -V | tail -1)"
+            if [[ "$version" != "$latest" && "$highest" != "$version" ]]; then
+              problem "VERSION $version is below the latest release, $latest: installed copies would never take it."
+            elif [[ "$version" == "$latest" && -z "${release:-}" ]]; then
+              # Listed as released, yet not found by its tag a moment ago.
+              problem "Agent Notch $version is listed as the latest release, but its release could not be read; run again."
+            fi
+
+            # Installed copies check an update against the key they were built
+            # with before unpacking it (SUVerifyUpdateBeforeExtraction), and a
+            # zip has no code signature for Sparkle to fall back on: every one
+            # of them refuses a release signed with another key, and every
+            # later one. So the key stays the one the latest release was built
+            # with, unless a manual run says otherwise.
+            first_key() { awk '!/^[[:space:]]*(#|$)/ { gsub(/[[:space:]]/, ""); print; exit }'; }
+            key="$(first_key < Scripts/sparkle-public-ed-key.txt)"
+            if ! released_key="$(gh api -H 'Accept: application/vnd.github.raw+json' \
+                "repos/$GH_REPO/contents/Scripts/sparkle-public-ed-key.txt?ref=agentnotch-v$latest" | first_key)" \
+                || [[ -z "$released_key" ]]; then
+              problem "Could not read the update key agentnotch-v$latest was built with; run again."
+            elif [[ -n "$key" && "$key" != "$released_key" ]]; then
+              if [[ "$ROTATE_UPDATE_KEY" == true ]]; then
+                echo "::warning::The update key is not the one agentnotch-v$latest was built with ($released_key, now $key), and this run was told to publish anyway: every installed copy stops updating and has to be reinstalled by hand."
+              else
+                problem "The update key in Scripts/sparkle-public-ed-key.txt ($key) is not the one agentnotch-v$latest was built with ($released_key): every installed copy would refuse this release and every later one. Put that key back or, if a new key is really meant, start Actions › Release › Run workflow on main with 'Publish although the update key changed' ticked."
+              fi
+            fi
+          fi
+
+          # The release creates its tag at this commit; one that exists
+          # already has to be this commit.
+          ref="$(gh api "repos/$GH_REPO/git/matching-refs/tags/$tag" --jq ".[] | select(.ref == \"refs/tags/$tag\") | .object.type + \" \" + .object.sha")"
+          if [[ -n "$ref" ]]; then
+            read -r type sha <<< "$ref"
+            if [[ "$type" == tag ]]; then sha="$(gh api "repos/$GH_REPO/git/tags/$sha" --jq .object.sha)"; fi
+            if [[ "$sha" != "$GITHUB_SHA" ]]; then
+              problem "Tag $tag exists already, at ${sha:0:7}, not this commit (${GITHUB_SHA:0:7})."
+            fi
+          fi
+
+          [[ $problems -eq 0 ]] || exit 1
+          echo "Agent Notch $version as $tag$([[ -n "$latest" ]] && echo ", after $latest")$([[ "$DRY_RUN" == true ]] && echo " (dry run)")"
+
+      - name: Check the update signing key
+        if: steps.plan.outputs.skip != 'true'
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          missing=""
+          key_missing=false
+          if [[ -z "$SPARKLE_ED_PRIVATE_KEY" ]]; then missing="the SPARKLE_ED_PRIVATE_KEY secret"; fi
+          if ! grep -qvE '^[[:space:]]*(#|$)' Scripts/sparkle-public-ed-key.txt; then
+            key_missing=true
+            missing="${missing:+$missing and }a public key in Scripts/sparkle-public-ed-key.txt"
+          fi
+          if [[ -n "$missing" ]]; then
+            # shellcheck disable=SC2016 # the backticks are Markdown
+            {
+              echo "### Release setup needed"
+              echo
+              echo "Missing: $missing. Every update is signed with one Ed25519 key, made once:"
+              echo
+              if [[ $key_missing == true ]]; then
+                echo '1. On your Mac: `Scripts/release-make-keys.sh --update-key ~/agentnotch-keys` (a folder outside the repository). Keep a copy of the private key somewhere safe: installs only accept updates signed with it, and a new key strands every installed copy.'
+              else
+                echo '1. The public key is committed already: the secret is the private key you made with it (`sparkle-ed-private-key.txt` in the folder you gave `Scripts/release-make-keys.sh --update-key`).'
+              fi
+              echo '2. Put the secret in the `release` environment, whose only deployment branch is `main`, so no other branch'"'"'s code can read it. The script prints these commands, or runs them with `--set-secrets`:'
+              echo
+              echo '   ```'
+              echo '   gh api -X PUT repos/rivantmedia/agentnotch/environments/release --input - <<< '"'"'{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}'"'"
+              echo '   gh api -X POST repos/rivantmedia/agentnotch/environments/release/deployment-branch-policies -f name=main -f type=branch'
+              echo '   gh secret set SPARKLE_ED_PRIVATE_KEY --env release -R rivantmedia/agentnotch < ~/agentnotch-keys/sparkle-ed-private-key.txt'
+              echo '   ```'
+              echo
+              echo '   The first two only once, for a `release` environment that doesn'"'"'t exist yet or has no branch rule (this run may have made it, with none). Delete any repository-level copy of a secret (`gh secret delete SPARKLE_ED_PRIVATE_KEY -R rivantmedia/agentnotch`): every branch can read those.'
+              if [[ $key_missing == true ]]; then
+                echo '3. Commit the `Scripts/sparkle-public-ed-key.txt` it wrote and push it to `main`: that push starts Release again and publishes this `VERSION`.'
+                echo
+                echo 'Re-running this run won'"'"'t help: a re-run checks out this same commit, which has no public key. If the key file is on `main` already, start *Actions › Release › Run workflow* on `main` with *Dry run* unticked.'
+              else
+                echo '3. Re-run this run: it picks up the new secret.'
+              fi
+              echo
+              echo 'Optional: `--signing-cert <dir>` makes a self-signed identity (MACOS_SIGNING_P12_BASE64, MACOS_SIGNING_P12_PASSWORD, in the same environment), so macOS keeps the app'"'"'s permissions across updates.'
+            } >> "$GITHUB_STEP_SUMMARY"
+            if [[ $key_missing == true ]]; then
+              echo "::error::No update signing key: $missing. Setup steps are in the run summary. Re-running this run won't help (it checks out the same commit): push the key file to main, or, if it is there already, start a new run from main."
+            else
+              echo "::error::No update signing key: $missing. Setup steps are in the run summary; set the secret, then re-run this run."
+            fi
+            exit 1
+          fi
+
+      - name: Build the release
+        id: build
+        if: steps.plan.outputs.skip != 'true'
+        env:
+          SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+          MACOS_SIGNING_P12_BASE64: ${{ secrets.MACOS_SIGNING_P12_BASE64 }}
+          MACOS_SIGNING_P12_PASSWORD: ${{ secrets.MACOS_SIGNING_P12_PASSWORD }}
+          APPLE_NOTARY_API_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_API_KEY_P8_BASE64 }}
+          APPLE_NOTARY_API_KEY_ID: ${{ secrets.APPLE_NOTARY_API_KEY_ID }}
+          APPLE_NOTARY_API_ISSUER_ID: ${{ secrets.APPLE_NOTARY_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          Scripts/release-build.sh --out build/release
+          cat build/release/release-info.env >> "$GITHUB_OUTPUT"
+
+      # Shown on the release page above GitHub's generated list of changes.
+      # The first-open steps only when Apple has not notarized the build.
+      - name: Write the release notes
+        if: steps.plan.outputs.skip != 'true'
+        env:
+          DMG: ${{ steps.build.outputs.DMG }}
+          NOTARIZED: ${{ steps.build.outputs.NOTARIZED }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Install"
+            echo
+            echo "1. Download **$DMG** below and open it."
+            echo "2. Drag **Agent Notch** into **Applications**, then open it from there. It can't update itself while it runs from the disk image or from Downloads."
+            if [[ "$NOTARIZED" != 1 ]]; then
+              echo "3. This build isn't notarized by Apple, so the first time macOS won't open it. Open **System Settings › Privacy & Security**, scroll down and click **Open Anyway**. Or clear the quarantine flag in Terminal:"
+              echo
+              echo '   ```'
+              echo '   xattr -dr com.apple.quarantine "/Applications/Agent Notch.app"'
+              echo '   ```'
+              echo
+              echo "   If macOS says the app is damaged, that is the same quarantine flag: run the command above."
+            fi
+            echo
+            echo "Requires macOS 15 or later, on Apple silicon or Intel."
+            echo
+            echo "## Updates"
+            echo
+            echo "Updates install themselves: the app checks once a day, downloads a new version in the background and installs it when it quits. To update right away, use **Settings › General › Check now**. Copies built from source never update themselves."
+          } > "$RUNNER_TEMP/notes.md"
+          cat "$RUNNER_TEMP/notes.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the files (dry run)
+        if: steps.plan.outputs.skip != 'true' && env.DRY_RUN == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: AgentNotch-${{ steps.plan.outputs.version }}-dry-run
+          path: |
+            build/release/${{ steps.build.outputs.DMG }}
+            build/release/${{ steps.build.outputs.ZIP }}
+            build/release/appcast.xml
+          if-no-files-found: error
+
+      - name: Publish the release
+        if: steps.plan.outputs.skip != 'true' && env.DRY_RUN != 'true'
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+          TAG: ${{ steps.plan.outputs.tag }}
+          PREVIOUS_TAG: ${{ steps.plan.outputs.previous_tag }}
+          STALE_DRAFT: ${{ steps.plan.outputs.stale_draft }}
+          DMG: ${{ steps.build.outputs.DMG }}
+          ZIP: ${{ steps.build.outputs.ZIP }}
+        run: |
+          set -euo pipefail
+          cd build/release
+          if [[ "$STALE_DRAFT" == true ]]; then
+            gh release delete "$TAG" --yes
+          fi
+          notes=(--notes-file "$RUNNER_TEMP/notes.md" --generate-notes)
+          if [[ -n "$PREVIOUS_TAG" ]]; then notes+=(--notes-start-tag "$PREVIOUS_TAG"); fi
+          # A draft first: its files upload while nobody can see it, and
+          # latest/download keeps serving the previous release meanwhile.
+          gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "Agent Notch $VERSION" \
+            "${notes[@]}" "$DMG" "$ZIP" appcast.xml
+          # Every file there and whole before the release goes live.
+          for file in "$DMG" "$ZIP" appcast.xml; do
+            uploaded="$(gh release view "$TAG" --json assets \
+              --jq ".assets[] | select(.name == \"$file\" and .state == \"uploaded\") | .size")"
+            if [[ "$uploaded" != "$(stat -f%z "$file")" ]]; then
+              echo "::error::$file on the draft is '${uploaded:-missing}', not the $(stat -f%z "$file") bytes built; the draft stays unpublished."
+              exit 1
+            fi
+          done
+          gh release edit "$TAG" --draft=false --latest
+          echo "::notice::Published Agent Notch $VERSION: $GITHUB_SERVER_URL/$GH_REPO/releases/tag/$TAG"
+
+      # What every installed copy fetches. A warning rather than a failure:
+      # the release is out either way, and GitHub's redirect can lag a little.
+      - name: Check the feed installs read
+        if: steps.plan.outputs.skip != 'true' && env.DRY_RUN != 'true'
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          feed="https://github.com/$GH_REPO/releases/latest/download/appcast.xml"
+          for _ in 1 2 3 4 5 6; do
+            if curl -fsSL "$feed" | grep -q "<sparkle:version>$VERSION</sparkle:version>"; then
+              echo "$feed serves $VERSION"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::warning::$feed does not serve $VERSION yet; check the Releases page."
+
+  # The website caches GitHub's list of releases for 5 minutes, so /download
+  # would go on offering the previous release (or none) for that long. This
+  # clears that cache. It runs after every run that isn't a dry run, a run that
+  # found its VERSION out already too, so starting Release on main by hand also
+  # refreshes the website.
+  #
+  # The job proves who is asking with its OIDC token, meant for the website and
+  # naming this repository, main, this workflow and the release environment
+  # (which only main can deploy to); the website checks it against GitHub's keys,
+  # so no secret is shared with it. A job of its own, so no step that builds or
+  # signs can mint such a token, and one that never fails the run: the cache
+  # expires by itself anyway.
+  #
+  # The website is app-config.json's websiteURL at the released commit, the
+  # address the Mac app is built with (Scripts/spm-build-app.sh). Its origin
+  # must be the website's own: NEXT_PUBLIC_SITE_URL, else its Vercel production
+  # domain (web/src/lib/site-url.js).
+  website:
+    name: Refresh the website's download page
+    needs: release
+    if: needs.release.result == 'success' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    permissions:
+      contents: read
+      id-token: write
+    environment: release
+    steps:
+      # app-config.json alone. Should the checkout fail, the next step finds no
+      # file and says so in a warning.
+      - name: Get app-config.json
+        uses: actions/checkout@v7
+        continue-on-error: true
+        timeout-minutes: 2
+        with:
+          sparse-checkout: /app-config.json
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Refresh
+        run: |
+          set -u
+          warn() { echo "::warning::$1 /download shows the latest release within 5 minutes anyway."; exit 0; }
+          config=app-config.json
+          [[ -f "$config" ]] || warn "There is no $config in this commit, so the website's address is unknown."
+          # Exactly one JSON object with a websiteURL string, or nothing (-s
+          # reads every value in the file, so a second one is refused too).
+          WEBSITE="$(jq -rs 'if length == 1 and (.[0] | type) == "object" then .[0].websiteURL | strings else empty end' "$config" 2>/dev/null)" || WEBSITE=""
+          [[ -n "$WEBSITE" ]] || warn "$config has no websiteURL (or isn't JSON), so the website's address is unknown."
+          # The origin, as the website reads its own address's: lowercase
+          # scheme and host, no path, no default port.
+          origin="$(python3 - "$WEBSITE" <<'PY'
+          import sys, urllib.parse as u
+          p = u.urlsplit(sys.argv[1].strip())
+          default = {"https": 443, "http": 80}.get(p.scheme.lower())
+          if default and p.hostname:
+              port = f":{p.port}" if p.port and p.port != default else ""
+              print(f"{p.scheme.lower()}://{p.hostname}{port}")
+          PY
+          )" || origin=""
+          [[ -n "$origin" ]] || warn "$config's websiteURL ($WEBSITE) isn't a web address."
+          audience="$(jq -rn --arg a "$origin" '$a | @uri')"
+          if ! answer="$(curl -fsS --connect-timeout 10 --max-time 30 \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL:-}&audience=$audience")"; then
+            warn "GitHub gave no OIDC token."
+          fi
+          token="$(jq -r '.value // empty' <<< "$answer" 2>/dev/null || true)"
+          [[ -n "$token" ]] || warn "GitHub's OIDC answer had no token."
+          echo "::add-mask::$token"
+          body="$RUNNER_TEMP/refresh.json"
+          rm -f "$body"
+          status="$(curl -sS -o "$body" -w '%{http_code}' --connect-timeout 10 --max-time 30 \
+            -X POST -H "Authorization: Bearer $token" "$origin/api/releases/refresh" || true)"
+          if [[ "$status" == 200 ]]; then
+            echo "$origin/download refreshed"
+          else
+            warn "$origin/api/releases/refresh answered ${status:-nothing}: $(head -c 300 "$body" 2>/dev/null || true)."
+          fi

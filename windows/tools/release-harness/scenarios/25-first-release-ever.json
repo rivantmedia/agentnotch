@@ -1,0 +1,48 @@
+{
+  "name": "no earlier agentnotch release at all: published without --notes-start-tag",
+  "expect": {
+    "jobs": {
+      "plan": "success",
+      "release-tool": "success",
+      "keys": "success",
+      "mac": "success",
+      "windows": "success",
+      "sign-windows": "success",
+      "publish": "success"
+    },
+    "outputs": {
+      "plan": {
+        "previous_tag": "",
+        "previous_has_feed": "false"
+      }
+    },
+    "noAnnotations": [
+      "error",
+      "warning"
+    ],
+    "gh": {
+      "notCalled": [
+        "--notes-start-tag",
+        "release download"
+      ]
+    },
+    "release": {
+      "tag": "agentnotch-v1.1.0",
+      "isDraft": false,
+      "isLatest": true,
+      "assets": [
+        "AgentNotch-1.1.0.dmg",
+        "AgentNotch-1.1.0.zip",
+        "appcast.xml",
+        "AgentNotch-1.1.0-Setup.exe",
+        "AgentNotch-1.1.0-Setup.exe.sig",
+        "latest.json"
+      ],
+      "name": "Agent Notch 1.1.0",
+      "targetCommitish": "c0ffeec0ffeec0ffeec0ffeec0ffeec0ffeeabcd",
+      "generateNotes": true,
+      "notesStartTag": ""
+    },
+    "website": true
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "the previous release's key file can't be read: plan stops",
+  "previous": {
+    "version": "1.0.1"
+  },
+  "faults": {
+    "failCalls": [
+      "api -H Accept: application/vnd.github.raw+json"
+    ]
+  },
+  "expect": {
+    "jobs": {
+      "plan": "failure"
+    },
+    "annotations": [
+      {
+        "level": "error",
+        "job": "plan",
+        "contains": "Could not read the update key"
+      }
+    ],
+    "website": false
+  }
+}

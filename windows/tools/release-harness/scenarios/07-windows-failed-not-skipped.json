@@ -1,0 +1,29 @@
+{
+  "name": "Windows build fails and skip_windows is not ticked: nothing is published without the feed",
+  "previous": {
+    "version": "1.0.1",
+    "feed": "test-key"
+  },
+  "windows": {
+    "result": "failure"
+  },
+  "expect": {
+    "jobs": {
+      "plan": "success",
+      "keys": "success",
+      "mac": "success",
+      "windows": "failure",
+      "sign-windows": "skipped",
+      "publish": "skipped"
+    },
+    "gh": {
+      "notCalled": [
+        "release create"
+      ]
+    },
+    "noRelease": [
+      "agentnotch-v1.1.0"
+    ],
+    "website": false
+  }
+}

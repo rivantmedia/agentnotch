@@ -1,0 +1,31 @@
+{
+  "name": "an upload the wrong size: the draft stays unpublished",
+  "previous": {
+    "version": "1.0.1"
+  },
+  "faults": {
+    "uploadShort": "latest.json"
+  },
+  "expect": {
+    "jobs": {
+      "publish": "failure"
+    },
+    "annotations": [
+      {
+        "level": "error",
+        "job": "publish",
+        "contains": "latest.json on the draft is"
+      }
+    ],
+    "gh": {
+      "notCalled": [
+        "release edit"
+      ]
+    },
+    "release": {
+      "tag": "agentnotch-v1.1.0",
+      "isDraft": true
+    },
+    "website": false
+  }
+}

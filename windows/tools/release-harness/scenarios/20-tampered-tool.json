@@ -1,0 +1,27 @@
+{
+  "name": "the release-tool artifact changed after it was hashed: never run",
+  "previous": {
+    "version": "1.0.1"
+  },
+  "toolTampered": true,
+  "expect": {
+    "jobs": {
+      "keys": "failure",
+      "publish": "skipped"
+    },
+    "steps": {
+      "keys": {
+        "Check the release tool": "failure",
+        "Derive the Windows update key": "skipped"
+      }
+    },
+    "annotations": [
+      {
+        "level": "error",
+        "job": "keys",
+        "contains": "it is not run"
+      }
+    ],
+    "website": false
+  }
+}

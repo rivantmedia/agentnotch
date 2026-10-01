@@ -1,0 +1,10 @@
+{
+  "hasCompletedOnboarding": true,
+  "oauthAccount": {
+    "accountUuid": "22222222-2222-4222-8222-222222222222",
+    "emailAddress": "smoke-work@example.invalid",
+    "organizationUuid": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    "organizationName": "Smoke Work Org",
+    "displayName": "Smoke Work"
+  }
+}

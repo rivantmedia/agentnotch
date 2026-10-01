@@ -1,0 +1,21 @@
+{
+  "name": "the tag exists at another commit: plan stops",
+  "previous": {
+    "version": "1.0.1"
+  },
+  "tag": "other",
+  "expect": {
+    "jobs": {
+      "plan": "failure",
+      "publish": "skipped"
+    },
+    "annotations": [
+      {
+        "level": "error",
+        "job": "plan",
+        "contains": "exists already, at badc0de, not this commit (c0ffeec)"
+      }
+    ],
+    "website": false
+  }
+}

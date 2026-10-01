@@ -1,20 +1,31 @@
 name: Release
 
-# Publishes Agent Notch to this repository's GitHub releases: the disk image
-# the website's download links to, and the zip and appcast.xml that every
-# installed copy checks once a day (its feed is
-# releases/latest/download/appcast.xml, fixed in the app).
+# Publishes Agent Notch to this repository's GitHub releases: for the Mac, the
+# disk image the website's download links to, and the zip and appcast.xml that
+# every installed copy checks once a day (its feed is
+# releases/latest/download/appcast.xml, fixed in the app); for Windows (a
+# preview), the installer, its update signature and latest.json, the feed
+# installed Windows copies read (releases/latest/download/latest.json).
 #
 # A release is a push to main that changes VERSION or the update key, or a
 # manual run from main. (The key: the first release goes out on the commit
 # that adds it, once its secret is set; a key commit on a version that is out
 # already is a green run with nothing to do.) The fork's own checks (fork.yml)
-# run first. Then one job builds everything with Scripts/release-build.sh
-# (universal, the update signed with the EdDSA key, optionally a stable
-# signing identity and notarization), creates the release as a draft with its
-# three files, and only then publishes it: latest/download never points at a
-# release whose files are still uploading. A manual run can be a dry run,
-# which builds the same files and keeps them as a run artifact.
+# run first, and `plan` decides what a run publishes and whether it may. Then
+# `mac` builds the Mac files with Scripts/release-build.sh (universal, the
+# update signed with the EdDSA key, optionally a stable signing identity and
+# notarization), exactly as before Windows existed. For Windows,
+# `release-tool` builds windows/agentnotch-release with no secret in reach,
+# `keys` derives the Windows update key from the same seed (DESIGN-WIN §6.4)
+# and checks it against the previous release's, `windows` builds and
+# smoke-tests the installer with that public key (agentnotch-windows.yml; the
+# seed never comes near it) and `sign-windows` signs it and writes
+# latest.json. `publish` creates the release as a draft with every file, and
+# only then publishes it: latest/download never points at a release whose
+# files are still uploading, and both feeds switch together. A manual run can
+# be a dry run, which builds the same files and keeps them as a run artifact;
+# one can also leave Windows out (skip_windows), the last resort that keeps a
+# Mac release from waiting on Windows.
 #
 # Tags are agentnotch-v<VERSION>: upstream's v1.x tags are in every clone that
 # fetches upstream, and would collide with the fork's own numbering.
@@ -26,12 +37,24 @@ name: Release
 # Scripts/release-make-keys.sh makes the environment and the secrets, or
 # prints the commands:
 #   SPARKLE_ED_PRIVATE_KEY          required: the update signing key, whose
-#                                   public half is Scripts/sparkle-public-ed-key.txt
+#                                   public half is Scripts/sparkle-public-ed-key.txt.
+#                                   Read by `mac`, `keys` and `sign-windows`
+#                                   only, the last two through a prebuilt,
+#                                   hash-checked tool on its stdin; it also
+#                                   signs Windows updates (a key derived from it)
 #   MACOS_SIGNING_P12_BASE64, MACOS_SIGNING_P12_PASSWORD
 #                                   optional: a Developer ID or self-signed
 #                                   identity; without it the app is signed ad hoc
 #   APPLE_NOTARY_API_KEY_P8_BASE64, APPLE_NOTARY_API_KEY_ID, APPLE_NOTARY_API_ISSUER_ID
 #                                   optional, Developer ID only: notarization
+# Optional, in the separate `windows-signing` environment (main only), which
+# agentnotch-windows.yml's build job selects in a release build; this workflow
+# passes it no secret:
+#   WINDOWS_SIGN_*                  Authenticode for the installer, the app and
+#                                   the hook (a .pfx pair, or the six Azure
+#                                   Artifact Signing values); without them the
+#                                   Windows build is unsigned and its release
+#                                   notes say so
 
 on:
   push:
@@ -45,6 +68,10 @@ on:
         default: false
       rotate_update_key:
         description: Publish although the update key changed since the latest release (every installed copy stops updating and has to be reinstalled by hand)
+        type: boolean
+        default: false
+      skip_windows:
+        description: "Publish without the Windows build: Windows copies miss this release until the next one"
         type: boolean
         default: false
 
@@ -68,67 +95,53 @@ jobs:
     name: Checks
     uses: ./.github/workflows/fork.yml
 
-  release:
-    name: Build and publish
-    needs: checks
+  # What a real run would publish, and whether it may. In a dry run the
+  # same questions are only warnings, so the build can be tried at any
+  # time, but only from main: the jobs after this one hold the update key,
+  # and only main's code may run with it. No secret and no environment here.
+  plan:
+    name: Plan the release
     # Only this repository holds the signing key; a fork of it has nothing to
     # publish and no feed of its own.
     if: github.repository == 'rivantmedia/agentnotch'
-    runs-on: macos-26
-    timeout-minutes: 120
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
-      contents: write
-    # The update key and the signing secrets are secrets of this environment,
-    # whose only deployment branch is main, so no other branch's code can read
-    # them. GitHub checks that before the job starts: a run from another ref
-    # fails as not allowed to deploy to release, and never gets the secrets.
-    environment: release
+      contents: read
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
-      # Pinned, so a runner image update cannot move the toolchain or the SDK
-      # under a release. Its toolchain has to ship the Swift back-deployment
-      # libraries for x86_64 too (the Command Line Tools for Swift 6.4 do not);
-      # Scripts/spm-build-app.sh --universal stops early when it doesn't.
-      XCODE_APP: /Applications/Xcode_26.6.app
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      skip: ${{ steps.plan.outputs.skip }}
+      stale_draft: ${{ steps.plan.outputs.stale_draft }}
+      previous_tag: ${{ steps.plan.outputs.previous_tag }}
+      previous_has_feed: ${{ steps.plan.outputs.previous_has_feed }}
+      windows: ${{ steps.plan.outputs.windows }}
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0
-          # Nothing here pushes: the release and its tag are made through the API.
           persist-credentials: false
 
-      - name: Select Xcode
-        run: |
-          set -euo pipefail
-          if [[ ! -d "$XCODE_APP" ]]; then
-            echo "::error::$XCODE_APP is not on this runner image; set XCODE_APP to one of:" /Applications/Xcode_*.app
-            exit 1
-          fi
-          sudo xcode-select -s "$XCODE_APP"
-          xcodebuild -version
-          swift --version
-
-      # What a real run would publish, and whether it may. In a dry run the
-      # same questions are only warnings, so the build can be tried at any
-      # time, but only from main: this job holds the update key, and only
-      # main's code may run with it.
       - name: Plan the release
         id: plan
         env:
           ROTATE_UPDATE_KEY: ${{ github.event_name == 'workflow_dispatch' && inputs.rotate_update_key }}
+          SKIP_WINDOWS: ${{ github.event_name == 'workflow_dispatch' && inputs.skip_windows }}
         run: |
           set -euo pipefail
           # Fatal in a dry run too. The environment's branch rule is what keeps
           # the key from other branches' code; this stops a run whose
           # environment has no such rule (GitHub makes a missing one, with no
-          # rules, on the first run that names it) before any step reads it.
+          # rules, on the first run that names it) before any job reads it.
           if [[ "$GITHUB_REF" != refs/heads/main ]]; then
             echo "::error::Releases and dry runs run from main only, not $GITHUB_REF."
             exit 1
           fi
           problems=0
+          previous_has_feed=false
           problem() {
             if [[ "$DRY_RUN" == true ]]; then
               echo "::warning::$1 (a real run would stop here)"
@@ -199,7 +212,31 @@ jobs:
                 problem "The update key in Scripts/sparkle-public-ed-key.txt ($key) is not the one agentnotch-v$latest was built with ($released_key): every installed copy would refuse this release and every later one. Put that key back or, if a new key is really meant, start Actions › Release › Run workflow on main with 'Publish although the update key changed' ticked."
               fi
             fi
+
+            # Whether Windows has shipped: installed Windows copies read
+            # releases/latest/download/latest.json, and `keys` checks the new
+            # Windows key against that file's.
+            if ! assets="$(gh release view "agentnotch-v$latest" --json assets --jq '.assets[].name')"; then
+              problem "Could not read the files of agentnotch-v$latest; run again."
+            elif grep -qxF latest.json <<< "$assets"; then
+              previous_has_feed=true
+            fi
           fi
+          echo "previous_has_feed=$previous_has_feed" >> "$GITHUB_OUTPUT"
+
+          # The last resort that keeps the Mac from waiting on Windows. Once
+          # Windows has shipped, a release without latest.json leaves every
+          # installed Windows copy with no feed until the next one that has it.
+          windows=true
+          if [[ "$SKIP_WINDOWS" == true ]]; then
+            windows=false
+            if [[ $previous_has_feed == true ]]; then
+              echo "::warning::Publishing without the Windows build, although agentnotch-v$latest has one: installed Windows copies find no update feed (releases/latest/download/latest.json) and miss this release until the next one."
+            else
+              echo "::notice::Publishing without the Windows build (skip_windows)."
+            fi
+          fi
+          echo "windows=$windows" >> "$GITHUB_OUTPUT"
 
           # The release creates its tag at this commit; one that exists
           # already has to be this commit.
@@ -213,10 +250,262 @@ jobs:
           fi
 
           [[ $problems -eq 0 ]] || exit 1
-          echo "Agent Notch $version as $tag$([[ -n "$latest" ]] && echo ", after $latest")$([[ "$DRY_RUN" == true ]] && echo " (dry run)")"
+          echo "Agent Notch $version as $tag$([[ -n "$latest" ]] && echo ", after $latest")$([[ $windows == false ]] && echo ", without Windows")$([[ "$DRY_RUN" == true ]] && echo " (dry run)")"
+
+  # windows/agentnotch-release, built where there is nothing to steal: no
+  # environment, no secret, so the build scripts of its dependencies run with
+  # nothing to read. `keys` and `sign-windows` take the binary, check its hash
+  # and pipe the seed into it; they never build anything.
+  release-tool:
+    name: Build the release tool
+    needs: [checks, plan]
+    if: needs.plan.outputs.skip != 'true' && needs.plan.outputs.windows == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      sha256: ${{ steps.tool.outputs.sha256 }}
+    defaults:
+      run:
+        working-directory: windows
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Pinned like fork.yml's; no cache in a release build, so nothing an
+      # earlier run stored goes into the binary that sees the seed.
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: 1.98.1
+
+      - name: Build
+        id: tool
+        run: |
+          set -euo pipefail
+          cargo build --locked --release -p agentnotch-release
+          tool="${CARGO_TARGET_DIR:-target}/release/agentnotch-release"
+          sha256="$(sha256sum "$tool" | cut -d' ' -f1)"
+          mkdir -p "$RUNNER_TEMP/release-tool"
+          cp "$tool" "$RUNNER_TEMP/release-tool/agentnotch-release"
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+          echo "agentnotch-release $sha256"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-tool
+          path: ${{ runner.temp }}/release-tool/agentnotch-release
+          retention-days: 1
+          if-no-files-found: error
+
+  # The Windows update key, derived from the update seed (DESIGN-WIN §6.4):
+  # only its public half leaves this job. No checkout of build tooling, no
+  # cargo, no npm: the two committed key files, and the tool `release-tool`
+  # built, checked against its hash.
+  keys:
+    name: Windows update key
+    needs: [plan, release-tool]
+    if: needs.plan.outputs.skip != 'true' && needs.plan.outputs.windows == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    environment: release
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+    outputs:
+      pubkey: ${{ steps.derive.outputs.pubkey }}
+      key_id: ${{ steps.derive.outputs.key_id }}
+    steps:
+      # The Mac key file and, once the maintainer commits it, the pin of the
+      # Windows key. Nothing else of the repository.
+      - name: Get the committed keys
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            /Scripts/sparkle-public-ed-key.txt
+            /Scripts/tauri-update-public-key.txt
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-tool
+          path: ${{ runner.temp }}/release-tool
+
+      - name: Check the release tool
+        env:
+          SHA256: ${{ needs.release-tool.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          tool="$RUNNER_TEMP/release-tool/agentnotch-release"
+          actual="$(sha256sum "$tool" | cut -d' ' -f1)"
+          if [[ -z "$SHA256" || "$actual" != "$SHA256" ]]; then
+            echo "::error::The release tool's SHA-256 is $actual, not ${SHA256:-missing}, the one release-tool built; it is not run."
+            exit 1
+          fi
+          chmod +x "$tool"
+
+      # The only step with the seed, and the seed only on the tool's stdin.
+      - name: Derive the Windows update key
+        id: derive
+        env:
+          SEED: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$SEED" ]]; then
+            echo "::error::No SPARKLE_ED_PRIVATE_KEY secret in the release environment; the mac job's run summary has the setup steps."
+            exit 1
+          fi
+          derived="$(printf '%s' "$SEED" | "$RUNNER_TEMP/release-tool/agentnotch-release" derive-public)"
+          {
+            echo "pubkey=$(jq -r .pubkey <<< "$derived")"
+            echo "key_id=$(jq -r .key_id <<< "$derived")"
+            echo "sparkle_public_key=$(jq -r .sparkle_public_key <<< "$derived")"
+          } >> "$GITHUB_OUTPUT"
+
+      # Independent of the derivation code: the seed is the one the committed
+      # Mac key belongs to; the derived key is the one the latest release's
+      # latest.json was signed with (installed Windows copies accept nothing
+      # else), unless a manual run says otherwise; and the pinned key, once
+      # there is one.
+      - name: Check the key
+        env:
+          PUBKEY: ${{ steps.derive.outputs.pubkey }}
+          KEY_ID: ${{ steps.derive.outputs.key_id }}
+          SPARKLE_PUBLIC_KEY: ${{ steps.derive.outputs.sparkle_public_key }}
+          PREVIOUS_TAG: ${{ needs.plan.outputs.previous_tag }}
+          PREVIOUS_HAS_FEED: ${{ needs.plan.outputs.previous_has_feed }}
+          ROTATE_UPDATE_KEY: ${{ github.event_name == 'workflow_dispatch' && inputs.rotate_update_key }}
+        run: |
+          set -euo pipefail
+          problems=0
+          problem() {
+            if [[ "$DRY_RUN" == true ]]; then
+              echo "::warning::$1 (a real run would stop here)"
+            else
+              echo "::error::$1"
+              problems=$((problems + 1))
+            fi
+          }
+          first_key() { awk '!/^[[:space:]]*(#|$)/ { gsub(/[[:space:]]/, ""); print; exit }'; }
+          for value in "$PUBKEY" "$KEY_ID" "$SPARKLE_PUBLIC_KEY"; do
+            if [[ -z "$value" || "$value" == null ]]; then
+              echo "::error::The release tool derived no key."
+              exit 1
+            fi
+          done
+
+          # Scripts/release-build.sh refuses the same mismatch in the mac job.
+          mac_key="$(first_key < Scripts/sparkle-public-ed-key.txt)"
+          if [[ -z "$mac_key" ]]; then
+            echo "::error::Scripts/sparkle-public-ed-key.txt holds no key; the mac job's run summary has the setup steps."
+            exit 1
+          elif [[ "$mac_key" != "$SPARKLE_PUBLIC_KEY" ]]; then
+            echo "::error::The update seed is not the one Scripts/sparkle-public-ed-key.txt belongs to (its public key is $SPARKLE_PUBLIC_KEY, the file says $mac_key)."
+            exit 1
+          fi
+
+          if [[ "$PREVIOUS_HAS_FEED" == true ]]; then
+            previous="$RUNNER_TEMP/previous"
+            mkdir -p "$previous"
+            if ! gh release download "$PREVIOUS_TAG" --pattern latest.json --dir "$previous" --clobber; then
+              problem "Could not download $PREVIOUS_TAG's latest.json; run again."
+            elif ! previous_id="$("$RUNNER_TEMP/release-tool/agentnotch-release" key-id-of-feed "$previous/latest.json")"; then
+              problem "$PREVIOUS_TAG's latest.json names no key the release tool can read; run again, or look at that release's files."
+            elif [[ "$previous_id" != "$KEY_ID" ]]; then
+              if [[ "$ROTATE_UPDATE_KEY" == true ]]; then
+                echo "::warning::The Windows update key is not the one $PREVIOUS_TAG was signed with ($previous_id, now $KEY_ID), and this run was told to publish anyway: every installed Windows copy refuses this release and has to be reinstalled by hand."
+              else
+                problem "The Windows update key ($KEY_ID) is not the one $PREVIOUS_TAG was signed with ($previous_id): every installed Windows copy would refuse this release and every later one. Put that key back or, if a new key is really meant, start Actions › Release › Run workflow on main with 'Publish although the update key changed' ticked."
+              fi
+            fi
+          fi
+
+          pin=Scripts/tauri-update-public-key.txt
+          pinned=""
+          if [[ -f "$pin" ]]; then
+            pinned="$(first_key < "$pin")"
+            if [[ "$pinned" != "$PUBKEY" ]]; then
+              echo "::error::The Windows update key derived from the seed ($KEY_ID) is not the one $pin pins."
+              exit 1
+            fi
+          fi
+
+          # shellcheck disable=SC2016 # the backticks are Markdown
+          {
+            echo "### Windows update key"
+            echo
+            echo "Key id: \`$KEY_ID\`"
+            echo
+            if [[ -n "$pinned" ]]; then
+              echo "Pinned by \`$pin\`."
+            else
+              echo 'Commit this as `Scripts/tauri-update-public-key.txt` to pin it (every later release then has to derive the same key):'
+              echo
+              echo '```'
+              echo "# Agent Notch's Windows update key (key id $KEY_ID): the updater public key"
+              echo "# of release builds, derived from the update seed. Release refuses another."
+              echo "$PUBKEY"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          [[ $problems -eq 0 ]] || exit 1
+          echo "Windows update key $KEY_ID"
+
+  # The Mac release, built exactly as before Windows existed (DESIGN-WIN R9):
+  # the steps from Select Xcode to Build the release are byte for byte those
+  # of the former single job, except two references to the plan, which moved
+  # into its own job:
+  #   Check the update signing key  if: steps.plan.outputs.skip -> needs.plan.outputs.skip
+  #   Build the release             if: steps.plan.outputs.skip -> needs.plan.outputs.skip
+  # Its files go to `publish` as the artifact mac-release.
+  mac:
+    name: Build for the Mac
+    needs: [checks, plan]
+    if: needs.plan.outputs.skip != 'true'
+    runs-on: macos-26
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    # The update key and the signing secrets are secrets of this environment,
+    # whose only deployment branch is main, so no other branch's code can read
+    # them. GitHub checks that before the job starts: a run from another ref
+    # fails as not allowed to deploy to release, and never gets the secrets.
+    environment: release
+    env:
+      # Pinned, so a runner image update cannot move the toolchain or the SDK
+      # under a release. Its toolchain has to ship the Swift back-deployment
+      # libraries for x86_64 too (the Command Line Tools for Swift 6.4 do not);
+      # Scripts/spm-build-app.sh --universal stops early when it doesn't.
+      XCODE_APP: /Applications/Xcode_26.6.app
+    outputs:
+      DMG: ${{ steps.build.outputs.DMG }}
+      ZIP: ${{ steps.build.outputs.ZIP }}
+      NOTARIZED: ${{ steps.build.outputs.NOTARIZED }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          # Nothing here pushes: the release and its tag are made through the API.
+          persist-credentials: false
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          if [[ ! -d "$XCODE_APP" ]]; then
+            echo "::error::$XCODE_APP is not on this runner image; set XCODE_APP to one of:" /Applications/Xcode_*.app
+            exit 1
+          fi
+          sudo xcode-select -s "$XCODE_APP"
+          xcodebuild -version
+          swift --version
 
       - name: Check the update signing key
-        if: steps.plan.outputs.skip != 'true'
+        if: needs.plan.outputs.skip != 'true'
         env:
           SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
         run: |
@@ -269,7 +558,7 @@ jobs:
 
       - name: Build the release
         id: build
-        if: steps.plan.outputs.skip != 'true'
+        if: needs.plan.outputs.skip != 'true'
         env:
           SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
           MACOS_SIGNING_P12_BASE64: ${{ secrets.MACOS_SIGNING_P12_BASE64 }}
@@ -282,15 +571,224 @@ jobs:
           Scripts/release-build.sh --out build/release
           cat build/release/release-info.env >> "$GITHUB_OUTPUT"
 
-      # Shown on the release page above GitHub's generated list of changes.
-      # The first-open steps only when Apple has not notarized the build.
-      - name: Write the release notes
-        if: steps.plan.outputs.skip != 'true'
+      - name: Hand the files to publish
+        uses: actions/upload-artifact@v7
+        with:
+          name: mac-release
+          path: |
+            build/release/${{ steps.build.outputs.DMG }}
+            build/release/${{ steps.build.outputs.ZIP }}
+            build/release/appcast.xml
+            build/release/release-info.env
+          retention-days: 3
+          if-no-files-found: error
+
+  # The installer, built and smoke-tested on Windows with the derived public
+  # key (the update feed on, the doctor showing the key id). A reusable
+  # workflow, so this job can name no environment; it passes no secret either
+  # (never `secrets: inherit`: the seed must not come near the Windows build).
+  # Code signing comes from the windows-signing environment the called build
+  # job selects itself.
+  windows:
+    name: Windows
+    needs: [plan, keys]
+    if: needs.plan.outputs.windows == 'true' && needs.plan.outputs.skip != 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/agentnotch-windows.yml
+    with:
+      release: true
+      updater_pubkey: ${{ needs.keys.outputs.pubkey }}
+      expected_key_id: ${{ needs.keys.outputs.key_id }}
+
+  # The Windows update signature and latest.json, on a runner that never ran
+  # the Windows build's npm, bundler or build scripts.
+  sign-windows:
+    name: Sign the Windows update
+    needs: [plan, release-tool, keys, windows]
+    if: needs.plan.outputs.windows == 'true' && needs.plan.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    environment: release
+    env:
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      TAG: ${{ needs.plan.outputs.tag }}
+    outputs:
+      authenticode: ${{ steps.installer.outputs.authenticode }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-tool
+          path: ${{ runner.temp }}/release-tool
+
+      - name: Check the release tool
         env:
-          DMG: ${{ steps.build.outputs.DMG }}
-          NOTARIZED: ${{ steps.build.outputs.NOTARIZED }}
+          SHA256: ${{ needs.release-tool.outputs.sha256 }}
         run: |
           set -euo pipefail
+          tool="$RUNNER_TEMP/release-tool/agentnotch-release"
+          actual="$(sha256sum "$tool" | cut -d' ' -f1)"
+          if [[ -z "$SHA256" || "$actual" != "$SHA256" ]]; then
+            echo "::error::The release tool's SHA-256 is $actual, not ${SHA256:-missing}, the one release-tool built; it is not run."
+            exit 1
+          fi
+          chmod +x "$tool"
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows-unsigned
+          path: ${{ runner.temp }}/windows
+
+      # What the build says it made (its windows-release-info.env, written on
+      # Windows, so with CRLF line ends) must be this release's installer.
+      - name: Check the installer
+        id: installer
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/windows"
+          if [[ ! -f windows-release-info.env ]]; then
+            echo "::error::The Windows build handed over no windows-release-info.env."
+            exit 1
+          fi
+          info() { tr -d '\r' < windows-release-info.env | sed -n "s/^$1=//p" | tail -1; }
+          expected="AgentNotch-$VERSION-Setup.exe"
+          built="$(info VERSION)"
+          installer="$(info INSTALLER)"
+          authenticode="$(info AUTHENTICODE)"
+          if [[ "$built" != "$VERSION" ]]; then
+            echo "::error::The Windows build is version '$built', not $VERSION."
+            exit 1
+          elif [[ "$installer" != "$expected" || ! -f "$installer" ]]; then
+            echo "::error::The Windows build handed over '$installer', not $expected."
+            exit 1
+          elif [[ -z "$authenticode" ]]; then
+            echo "::error::windows-release-info.env does not say whether the installer is code-signed."
+            exit 1
+          fi
+          echo "installer=$installer" >> "$GITHUB_OUTPUT"
+          echo "authenticode=$authenticode" >> "$GITHUB_OUTPUT"
+          echo "$installer ($(wc -c < "$installer" | tr -d ' ') bytes, Authenticode: $authenticode)"
+
+      # The only step with the seed, and the seed only on the tool's stdin.
+      # The tool verifies what it signed before writing it.
+      - name: Sign
+        env:
+          SEED: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
+          INSTALLER: ${{ steps.installer.outputs.installer }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$SEED" ]]; then
+            echo "::error::No SPARKLE_ED_PRIVATE_KEY secret in the release environment; the mac job's run summary has the setup steps."
+            exit 1
+          fi
+          cd "$RUNNER_TEMP/windows"
+          printf '%s' "$SEED" | "$RUNNER_TEMP/release-tool/agentnotch-release" sign \
+            --file "$INSTALLER" --version "$VERSION" --out "$INSTALLER.sig"
+
+      # Again, against the public key `keys` handed the Windows build, and with
+      # the key id installed copies know.
+      - name: Verify
+        env:
+          INSTALLER: ${{ steps.installer.outputs.installer }}
+          PUBKEY: ${{ needs.keys.outputs.pubkey }}
+          KEY_ID: ${{ needs.keys.outputs.key_id }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/windows"
+          verified="$("$RUNNER_TEMP/release-tool/agentnotch-release" verify \
+            --pubkey "$PUBKEY" --file "$INSTALLER" --sig "$INSTALLER.sig" --version "$VERSION")"
+          signed_by="$(jq -r .key_id <<< "$verified")"
+          if [[ "$signed_by" != "$KEY_ID" ]]; then
+            echo "::error::The signature is by key $signed_by, not $KEY_ID."
+            exit 1
+          fi
+          echo "$INSTALLER.sig verifies: $(jq -r .trusted_comment <<< "$verified")"
+
+      # latest.json, with the installer's tag-specific address (never
+      # latest/download, like the appcast's enclosure); the tool re-reads what
+      # it wrote and verifies the signature from the JSON.
+      - name: Write the feed
+        env:
+          INSTALLER: ${{ steps.installer.outputs.installer }}
+          PUBKEY: ${{ needs.keys.outputs.pubkey }}
+          KEY_ID: ${{ needs.keys.outputs.key_id }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/windows"
+          written="$("$RUNNER_TEMP/release-tool/agentnotch-release" feed \
+            --version "$VERSION" --tag "$TAG" --repo "$GH_REPO" --installer "$INSTALLER" \
+            --sig "$INSTALLER.sig" --pubkey "$PUBKEY" --file "$INSTALLER" \
+            --notes-url "$GITHUB_SERVER_URL/$GH_REPO/releases/tag/$TAG" --out latest.json)"
+          if [[ "$(jq -r .key_id <<< "$written")" != "$KEY_ID" ]]; then
+            echo "::error::latest.json carries another key than $KEY_ID."
+            exit 1
+          fi
+          echo "latest.json points at $(jq -r .url <<< "$written")"
+
+      - name: Hand the files to publish
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-release
+          path: |
+            ${{ runner.temp }}/windows/${{ steps.installer.outputs.installer }}
+            ${{ runner.temp }}/windows/${{ steps.installer.outputs.installer }}.sig
+            ${{ runner.temp }}/windows/latest.json
+            ${{ runner.temp }}/windows/windows-release-info.env
+          retention-days: 3
+          if-no-files-found: error
+
+  # The only job that writes to the repository, and it runs nothing of it (no
+  # checkout): it puts the files the jobs above made into one release. Mac and
+  # Windows go out together, or, with skip_windows ticked, the Mac alone.
+  publish:
+    name: Publish
+    needs: [plan, mac, sign-windows]
+    if: >-
+      !cancelled()
+      && needs.plan.outputs.skip != 'true'
+      && needs.mac.result == 'success'
+      && (needs.sign-windows.result == 'success'
+          || (needs.plan.outputs.windows == 'false' && needs.sign-windows.result == 'skipped'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      WINDOWS: ${{ needs.plan.outputs.windows }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: mac-release
+          path: ${{ runner.temp }}/release
+
+      - uses: actions/download-artifact@v8
+        if: needs.plan.outputs.windows == 'true'
+        with:
+          name: windows-release
+          path: ${{ runner.temp }}/release
+
+      # Shown on the release page above GitHub's generated list of changes.
+      # The first-open steps only when Apple has not notarized the build. The
+      # Mac part is the one releases had before Windows; the Windows part only
+      # when the release has it, its SmartScreen steps only when the installer
+      # isn't code-signed.
+      - name: Write the release notes
+        env:
+          DMG: ${{ needs.mac.outputs.DMG }}
+          NOTARIZED: ${{ needs.mac.outputs.NOTARIZED }}
+        run: |
+          set -euo pipefail
+          authenticode=""
+          if [[ "$WINDOWS" == true ]]; then
+            authenticode="$(tr -d '\r' < "$RUNNER_TEMP/release/windows-release-info.env" | sed -n 's/^AUTHENTICODE=//p' | tail -1)"
+          fi
           {
             echo "## Install"
             echo
@@ -311,32 +809,88 @@ jobs:
             echo "## Updates"
             echo
             echo "Updates install themselves: the app checks once a day, downloads a new version in the background and installs it when it quits. To update right away, use **Settings › General › Check now**. Copies built from source never update themselves."
+            if [[ "$WINDOWS" == true ]]; then
+              echo
+              echo "## Windows (preview)"
+              echo
+              echo "The Windows app is new in this release and still a preview: it is built and tested automatically, but it has not been used by people yet. Please report anything odd."
+              echo
+              echo "1. Download **AgentNotch-$VERSION-Setup.exe** below and run it. It installs for your user only (no administrator) into %LOCALAPPDATA%\\Agent Notch, and fetches Microsoft's WebView2 if needed."
+              if [[ "$authenticode" == unsigned || -z "$authenticode" ]]; then
+                echo "2. The installer isn't code-signed yet, so Windows SmartScreen may say \"Windows protected your PC\": choose **More info**, then **Run anyway**. With **Smart App Control** turned on (Windows 11), unsigned apps are blocked with no way around it; Agent Notch can't be used there until it is code-signed."
+              fi
+              echo
+              echo "Requires Windows 10 or 11 (x64)."
+              echo
+              echo "To remove Agent Notch's Claude Code hooks when uninstalling, turn Claude Code control off in Settings first, or tick \"Delete the application data\" in the uninstaller."
+              echo
+              echo "## Updates (Windows)"
+              echo
+              echo "The app checks for updates shortly after it starts; install one from **Settings › General**. Every update is verified with Agent Notch's own signing key before it runs. Copies built from source never update themselves."
+            fi
           } > "$RUNNER_TEMP/notes.md"
           cat "$RUNNER_TEMP/notes.md" >> "$GITHUB_STEP_SUMMARY"
 
+      # The release's files, in the order they are attached: the Mac's three,
+      # then (unless skipped) the Windows installer, its signature and feed.
+      - name: List the files
+        id: files
+        env:
+          DMG: ${{ needs.mac.outputs.DMG }}
+          ZIP: ${{ needs.mac.outputs.ZIP }}
+        run: |
+          set -euo pipefail
+          files=("$DMG" "$ZIP" appcast.xml)
+          if [[ "$WINDOWS" == true ]]; then
+            files+=("AgentNotch-$VERSION-Setup.exe" "AgentNotch-$VERSION-Setup.exe.sig" latest.json)
+          fi
+          for file in "${files[@]}"; do
+            if [[ -z "$file" || ! -f "$RUNNER_TEMP/release/$file" ]]; then
+              echo "::error::'$file' is not among the built files."
+              exit 1
+            fi
+          done
+          {
+            echo "list<<EOF"
+            for file in "${files[@]}"; do echo "$RUNNER_TEMP/release/$file"; done
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Keep the files (dry run)
-        if: steps.plan.outputs.skip != 'true' && env.DRY_RUN == 'true'
+        if: env.DRY_RUN == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: AgentNotch-${{ steps.plan.outputs.version }}-dry-run
-          path: |
-            build/release/${{ steps.build.outputs.DMG }}
-            build/release/${{ steps.build.outputs.ZIP }}
-            build/release/appcast.xml
+          name: AgentNotch-${{ needs.plan.outputs.version }}-dry-run
+          path: ${{ steps.files.outputs.list }}
           if-no-files-found: error
 
       - name: Publish the release
-        if: steps.plan.outputs.skip != 'true' && env.DRY_RUN != 'true'
+        if: env.DRY_RUN != 'true'
         env:
-          VERSION: ${{ steps.plan.outputs.version }}
-          TAG: ${{ steps.plan.outputs.tag }}
-          PREVIOUS_TAG: ${{ steps.plan.outputs.previous_tag }}
-          STALE_DRAFT: ${{ steps.plan.outputs.stale_draft }}
-          DMG: ${{ steps.build.outputs.DMG }}
-          ZIP: ${{ steps.build.outputs.ZIP }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          PREVIOUS_TAG: ${{ needs.plan.outputs.previous_tag }}
+          STALE_DRAFT: ${{ needs.plan.outputs.stale_draft }}
+          FILES: ${{ steps.files.outputs.list }}
         run: |
           set -euo pipefail
-          cd build/release
+          cd "$RUNNER_TEMP/release"
+          files=()
+          while IFS= read -r path; do
+            [[ -n "$path" ]] && files+=("${path##*/}")
+          done <<< "$FILES"
+          # Exactly the contract's files, and nothing named after upstream's
+          # app: its README links releases/latest/download/Codenotch.dmg.
+          if [[ "$WINDOWS" == true ]]; then expected=6; else expected=3; fi
+          if [[ ${#files[@]} -ne $expected ]]; then
+            echo "::error::${#files[@]} files to publish, not $expected."
+            exit 1
+          fi
+          for file in "${files[@]}"; do
+            if grep -qi codenotch <<< "$file"; then
+              echo "::error::$file must not be published: its name says Codenotch."
+              exit 1
+            fi
+          done
           if [[ "$STALE_DRAFT" == true ]]; then
             gh release delete "$TAG" --yes
           fi
@@ -345,13 +899,24 @@ jobs:
           # A draft first: its files upload while nobody can see it, and
           # latest/download keeps serving the previous release meanwhile.
           gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "Agent Notch $VERSION" \
-            "${notes[@]}" "$DMG" "$ZIP" appcast.xml
-          # Every file there and whole before the release goes live.
-          for file in "$DMG" "$ZIP" appcast.xml; do
+            "${notes[@]}" "${files[@]}"
+          # Exactly these files on the draft, every one whole, before the
+          # release goes live.
+          attached="$(gh release view "$TAG" --json assets --jq '.assets[].name' | sort)"
+          if [[ "$attached" != "$(printf '%s\n' "${files[@]}" | sort)" ]]; then
+            echo "::error::The draft holds $(tr '\n' ' ' <<< "$attached")instead of ${files[*]}; it stays unpublished."
+            exit 1
+          fi
+          if grep -qi codenotch <<< "$attached"; then
+            echo "::error::The draft holds a file named Codenotch; it stays unpublished."
+            exit 1
+          fi
+          for file in "${files[@]}"; do
+            size="$(wc -c < "$file" | tr -d '[:space:]')"
             uploaded="$(gh release view "$TAG" --json assets \
               --jq ".assets[] | select(.name == \"$file\" and .state == \"uploaded\") | .size")"
-            if [[ "$uploaded" != "$(stat -f%z "$file")" ]]; then
-              echo "::error::$file on the draft is '${uploaded:-missing}', not the $(stat -f%z "$file") bytes built; the draft stays unpublished."
+            if [[ "$uploaded" != "$size" ]]; then
+              echo "::error::$file on the draft is '${uploaded:-missing}', not the $size bytes built; the draft stays unpublished."
               exit 1
             fi
           done
@@ -360,26 +925,34 @@ jobs:
 
       # What every installed copy fetches. A warning rather than a failure:
       # the release is out either way, and GitHub's redirect can lag a little.
-      - name: Check the feed installs read
-        if: steps.plan.outputs.skip != 'true' && env.DRY_RUN != 'true'
-        env:
-          VERSION: ${{ steps.plan.outputs.version }}
+      - name: Check the feeds installs read
+        if: env.DRY_RUN != 'true'
         run: |
-          feed="https://github.com/$GH_REPO/releases/latest/download/appcast.xml"
-          for _ in 1 2 3 4 5 6; do
-            if curl -fsSL "$feed" | grep -q "<sparkle:version>$VERSION</sparkle:version>"; then
+          feeds=(appcast.xml)
+          if [[ "$WINDOWS" == true ]]; then feeds+=(latest.json); fi
+          for name in "${feeds[@]}"; do
+            feed="https://github.com/$GH_REPO/releases/latest/download/$name"
+            served=false
+            for _ in 1 2 3 4 5 6; do
+              if [[ "$name" == appcast.xml ]]; then
+                if curl -fsSL "$feed" | grep -q "<sparkle:version>$VERSION</sparkle:version>"; then served=true; break; fi
+              elif curl -fsSL "$feed" | jq -e --arg v "$VERSION" '.version == $v' > /dev/null; then
+                served=true; break
+              fi
+              sleep 10
+            done
+            if [[ $served == true ]]; then
               echo "$feed serves $VERSION"
-              exit 0
+            else
+              echo "::warning::$feed does not serve $VERSION yet; check the Releases page."
             fi
-            sleep 10
           done
-          echo "::warning::$feed does not serve $VERSION yet; check the Releases page."
 
   # The website caches GitHub's list of releases for 5 minutes, so /download
   # would go on offering the previous release (or none) for that long. This
   # clears that cache. It runs after every run that isn't a dry run, a run that
-  # found its VERSION out already too, so starting Release on main by hand also
-  # refreshes the website.
+  # found its VERSION out already too (plan said skip; publish then never
+  # runs), so starting Release on main by hand also refreshes the website.
   #
   # The job proves who is asking with its OIDC token, meant for the website and
   # naming this repository, main, this workflow and the release environment
@@ -394,8 +967,12 @@ jobs:
   # domain (web/src/lib/site-url.js).
   website:
     name: Refresh the website's download page
-    needs: release
-    if: needs.release.result == 'success' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+    needs: [checks, plan, publish]
+    if: >-
+      !cancelled()
+      && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+      && (needs.publish.result == 'success'
+          || (needs.checks.result == 'success' && needs.plan.result == 'success' && needs.plan.outputs.skip == 'true'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     continue-on-error: true

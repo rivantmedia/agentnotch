@@ -242,6 +242,10 @@ function assetKind(name: string): { platform: Platform; rank: number } | null {
   // Upstream's own builds (Codenotch-Setup.exe and the like) are not this app.
   if (lower === "" || lower.includes("codenotch")) return null;
   if (NOT_INSTALLER.test(lower)) return null;
+  // Tauri's updater archives (Setup.nsis.zip, .msi.zip) hold an installer for the updater, not
+  // for people, and would otherwise pass as the Mac's Sparkle zip. The release doesn't publish
+  // them; this keeps one that someone adds by hand from becoming a download.
+  if (/\.(?:nsis|msi)\.zip$/.test(lower)) return null;
   const words = lower.split(/[^a-z0-9]+/).filter(Boolean);
   if (words.some((word) => NOT_INSTALLER_WORDS.has(word))) return null;
   const says = (set: Set<string>) => words.some((word) => set.has(word));

@@ -9,7 +9,20 @@ name: Windows
 #
 # The Release workflow calls this with `release: true` and the updater's public
 # key; every other build carries no key and no feed, so a copy built from
-# source never updates itself. No secret is ever read here.
+# source never updates itself. The update seed never comes near this workflow.
+#
+# Code signing (Authenticode, Maintainer decision Q4) is the only secret here,
+# and only in a release build: the WINDOWS_SIGN_* values (a .pfx pair, or the
+# six Azure Artifact Signing values; agentnotch-build.ps1 lists them). They
+# live in the `windows-signing` environment (deployment branches: main only),
+# which the build job selects only when `release` is true: a job that calls a
+# reusable workflow can't name an environment, but the called job can, and its
+# environment's secrets win over any the caller passes (GitHub's rule). The
+# workflow_call secrets below are declared so a caller may pass them too;
+# release.yml passes none, never `secrets: inherit`. Only the "Build the
+# installer" step sees them, and the build script takes them out of its
+# environment before anything compiles. Without them the installer is
+# unsigned and windows-release-info.env says AUTHENTICODE=unsigned.
 #
 # Every branch whose push touches the port runs it: a work package is proven on
 # Windows by this workflow going green on its own branch (DESIGN-WIN §8). `**`
@@ -52,6 +65,16 @@ on:
         description: A release build (no cache, the installer as the only artifact)
         type: boolean
         default: false
+    secrets:
+      WINDOWS_SIGN_PFX_BASE64: { required: false }
+      WINDOWS_SIGN_PFX_PASSWORD: { required: false }
+      WINDOWS_SIGN_TIMESTAMP_URL: { required: false }
+      WINDOWS_SIGN_AZURE_ENDPOINT: { required: false }
+      WINDOWS_SIGN_AZURE_ACCOUNT: { required: false }
+      WINDOWS_SIGN_AZURE_PROFILE: { required: false }
+      WINDOWS_SIGN_AZURE_TENANT_ID: { required: false }
+      WINDOWS_SIGN_AZURE_CLIENT_ID: { required: false }
+      WINDOWS_SIGN_AZURE_CLIENT_SECRET: { required: false }
 
 permissions:
   contents: read
@@ -73,7 +96,14 @@ jobs:
     # Pinned, like Xcode 26.6 for the Mac: an image roll-over must not change a
     # release build.
     runs-on: windows-2025
+    # The code signing secrets' home, in a release build only (an empty name is
+    # no environment).
+    environment: ${{ inputs.release && 'windows-signing' || '' }}
     timeout-minutes: 90
+    # For the real-claude job: the installer it downloads from this run's artifact.
+    outputs:
+      version: ${{ steps.installer.outputs.version }}
+      name: ${{ steps.installer.outputs.name }}
     defaults:
       run:
         shell: pwsh
@@ -185,46 +215,37 @@ jobs:
             exit 1
           fi
 
-      # The hook carries its C runtime (Claude Code may run it where
-      # vcruntime140.dll is missing) and has its own target dir (the bundler
-      # copies resources beside the app in target\release). The overlay pins the
-      # version (VERSION), and in a release build adds the update key and feed.
+      # The test-only executables the smoke test needs (fake-claude, pipe-test-server):
+      # cargo builds them for an integration test, which this crate may not have yet,
+      # so they are built on their own. Never bundled (not in the installer).
+      - name: Build the test executables
+        run: cargo build --locked -p agentnotch-win --bins
+
+      # agentnotch-build.ps1 (DESIGN-WIN §6.1 step 12): VERSION == tauri.conf.json,
+      # the hook with its C runtime in its own target dir, the overlay (the
+      # version; in a release build the update key and feed), the pinned Tauri
+      # CLI (npm ci in windows/tools), compile, then bundle. The signing values
+      # reach only this step, only in a release build, and the script hands them
+      # to the bundling alone. Writes out\windows-release-info.env and the
+      # outputs version, name and authenticode.
       - name: Build the installer
         id: installer
         env:
           UPDATER_PUBKEY: ${{ inputs.updater_pubkey }}
+          WINDOWS_SIGN_PFX_BASE64: ${{ inputs.release && secrets.WINDOWS_SIGN_PFX_BASE64 || '' }}
+          WINDOWS_SIGN_PFX_PASSWORD: ${{ inputs.release && secrets.WINDOWS_SIGN_PFX_PASSWORD || '' }}
+          WINDOWS_SIGN_TIMESTAMP_URL: ${{ inputs.release && secrets.WINDOWS_SIGN_TIMESTAMP_URL || '' }}
+          WINDOWS_SIGN_AZURE_ENDPOINT: ${{ inputs.release && secrets.WINDOWS_SIGN_AZURE_ENDPOINT || '' }}
+          WINDOWS_SIGN_AZURE_ACCOUNT: ${{ inputs.release && secrets.WINDOWS_SIGN_AZURE_ACCOUNT || '' }}
+          WINDOWS_SIGN_AZURE_PROFILE: ${{ inputs.release && secrets.WINDOWS_SIGN_AZURE_PROFILE || '' }}
+          WINDOWS_SIGN_AZURE_TENANT_ID: ${{ inputs.release && secrets.WINDOWS_SIGN_AZURE_TENANT_ID || '' }}
+          WINDOWS_SIGN_AZURE_CLIENT_ID: ${{ inputs.release && secrets.WINDOWS_SIGN_AZURE_CLIENT_ID || '' }}
+          WINDOWS_SIGN_AZURE_CLIENT_SECRET: ${{ inputs.release && secrets.WINDOWS_SIGN_AZURE_CLIENT_SECRET || '' }}
         run: |
-          $V = (Get-Content ..\VERSION -Raw).Trim()
-          $conf = Get-Content codenotch\tauri.conf.json -Raw | ConvertFrom-Json
-          if ($conf.version -ne $V) { throw "tauri.conf.json says $($conf.version), VERSION says $V" }
-          $env:RUSTFLAGS = '-C target-feature=+crt-static'
-          cargo build --release --locked -p agentnotch-hook --bin agentnotch-hook --target-dir target/hook
-          if ($LASTEXITCODE) { exit 1 }
-          Remove-Item Env:RUSTFLAGS
-          $overlay = [ordered]@{ version = $V }
-          if ($env:UPDATER_PUBKEY) {
-            $overlay.plugins = @{ updater = [ordered]@{
-              pubkey = $env:UPDATER_PUBKEY
-              endpoints = @('https://github.com/rivantmedia/agentnotch/releases/latest/download/latest.json')
-              requireSignedVersion = $true
-              windows = @{ installMode = 'passive' } } }
-          }
-          $overlayPath = Join-Path $env:RUNNER_TEMP 'agentnotch.build.json'
-          $overlay | ConvertTo-Json -Depth 6 | Set-Content -Path $overlayPath -Encoding utf8NoBOM
-          Push-Location codenotch
-          npx --yes @tauri-apps/cli@2.11.4 build --config tauri.bundle.conf.json --config $overlayPath -- --locked
-          $built = $LASTEXITCODE
-          Pop-Location
-          if ($built) { exit 1 }
-          $setup = @(Get-ChildItem target\release\bundle\nsis\*-setup.exe)
-          if ($setup.Count -ne 1) { throw "expected one installer, found $($setup.Count)" }
-          New-Item -ItemType Directory -Force out | Out-Null
-          $name = "AgentNotch-$V-Setup.exe"
-          Copy-Item $setup[0].FullName "out\$name"
-          $product = (Get-Item "out\$name").VersionInfo.ProductVersion
-          if (-not $product.StartsWith($V)) { throw "the installer's ProductVersion is $product, not $V" }
-          "version=$V" >> $env:GITHUB_OUTPUT
-          "name=$name" >> $env:GITHUB_OUTPUT
+          $build = @{ Out = 'out' }
+          if ($env:UPDATER_PUBKEY) { $build.UpdaterPubkey = $env:UPDATER_PUBKEY }
+          ./scripts/agentnotch-build.ps1 @build
+          Get-Content out\windows-release-info.env
 
       # The built app, sealed (fixture data only), before anything is installed:
       # its self-test at 100, 125 and 150 % and one snapshot run. The script
@@ -235,99 +256,41 @@ jobs:
           scripts\agentnotch-selftest.ps1 -Exe target\release\agentnotch.exe -Out out\smoke\selftest
           if ($LASTEXITCODE) { exit 1 }
 
-      # What a user gets, on a runner that has never seen Agent Notch: the
-      # install, a sealed launch (fixture data only: no Claude folder, no
-      # network, no child process) that stays up and shows its notch, the
-      # doctor, a hook that fails open with no app, and the uninstall. Stops
-      # only its own processes, by id.
+      # What a user gets, on a runner that has never seen Agent Notch (DESIGN-WIN
+      # §7.5): the install, a temporary Claude setup the app is pointed at, the
+      # doctor, a sealed launch, a hook that fails open with no app, autostart and
+      # the uninstall. Phases that wait for a package are gated in
+      # scripts/smoke/gates.json: reported here, never silently skipped, and a
+      # release run refuses a closed gate. Never runs claude (only the fake the
+      # fork's test build made, in target\debug) and stops only its own processes,
+      # by handle.
       - name: Smoke test
         env:
           V: ${{ steps.installer.outputs.version }}
           INSTALLER: out\${{ steps.installer.outputs.name }}
+          UPDATER_PUBKEY: ${{ inputs.updater_pubkey }}
+          EXPECTED_KEY_ID: ${{ inputs.expected_key_id }}
+          RELEASE: ${{ inputs.release }}
         run: |
-          $smoke = New-Item -ItemType Directory -Force out\smoke
-          $dir = Join-Path $env:LOCALAPPDATA 'Agent Notch'
-          $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Agent Notch'
-          $data = Join-Path $env:APPDATA 'Agent Notch'
-          $sealedData = Join-Path $env:APPDATA 'Agent Notch Sealed'
-          function Wait-Until([scriptblock]$ready, [int]$seconds, [string]$what) {
-            $deadline = (Get-Date).AddSeconds($seconds)
-            while (-not (& $ready)) {
-              if ((Get-Date) -gt $deadline) { throw "timed out: $what" }
-              Start-Sleep -Milliseconds 500
-            }
+          $smoke = @{
+            Installer = $env:INSTALLER
+            Version   = $env:V
+            Updates   = $(if ($env:UPDATER_PUBKEY) { 'on' } else { 'off' })
+            Artifacts = 'out\smoke'
+            Bins      = 'target\debug'
           }
+          if ($env:EXPECTED_KEY_ID) { $smoke.KeyId = $env:EXPECTED_KEY_ID }
+          if ($env:RELEASE -eq 'true') { $smoke.Release = $true }
+          ./scripts/agentnotch-smoke.ps1 @smoke
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
-          # 1. Install, per user, silently.
-          Start-Process -FilePath $env:INSTALLER -ArgumentList '/S' -Wait
-          Wait-Until { (Test-Path "$dir\agentnotch.exe") -and (Test-Path "$dir\agentnotch-hook.exe") -and (Test-Path "$dir\uninstall.exe") } 60 'the installed files'
-          $key = Get-ItemProperty $uninstallKey
-          if ($key.DisplayName -ne 'Agent Notch') { throw "uninstall key DisplayName is '$($key.DisplayName)'" }
-          if ($key.DisplayVersion -ne $env:V) { throw "uninstall key DisplayVersion is '$($key.DisplayVersion)'" }
-          if ($key.Publisher -ne 'Rivant Media') { throw "uninstall key Publisher is '$($key.Publisher)'" }
-          $open = (Get-ItemProperty 'HKCU:\Software\Classes\agentnotch\shell\open\command').'(default)'
-          if ($open -ne "`"$dir\agentnotch.exe`" `"%1`"") { throw "agentnotch: is registered as '$open'" }
-
-          # 2. A sealed launch stays up for 20 s and shows a window.
-          Remove-Item -Recurse -Force $sealedData -ErrorAction SilentlyContinue
-          $env:AGENTNOTCH_SAFE_MODE = '1'
-          $app = Start-Process -FilePath "$dir\agentnotch.exe" -PassThru
-          Remove-Item Env:AGENTNOTCH_SAFE_MODE
-          Start-Sleep -Seconds 20
-          if ($app.HasExited) { throw "the sealed app exited with $($app.ExitCode)" }
-          Add-Type -Namespace AgentNotch -Name Windows -MemberDefinition @'
-          delegate bool EnumProc(System.IntPtr hwnd, System.IntPtr param);
-          [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc proc, System.IntPtr param);
-          [DllImport("user32.dll")] static extern bool IsWindowVisible(System.IntPtr hwnd);
-          [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(System.IntPtr hwnd, out uint pid);
-          public static int Visible(uint pid) {
-            int count = 0;
-            EnumWindows((h, p) => { uint owner; GetWindowThreadProcessId(h, out owner); if (owner == pid && IsWindowVisible(h)) count++; return true; }, System.IntPtr.Zero);
-            return count;
-          }
-          '@
-          $visible = [AgentNotch.Windows]::Visible([uint32]$app.Id)
-          Stop-Process -Id $app.Id -Force
-          $app.WaitForExit(10000) | Out-Null
-          if ($visible -lt 1) { throw 'the sealed app shows no window' }
-          Copy-Item "$sealedData\run.log" "$smoke\sealed-run.log" -ErrorAction SilentlyContinue
-          $runLog = Get-Content "$sealedData\run.log" -Raw -ErrorAction SilentlyContinue
-          if ($runLog -notmatch 'an: hub started \(sealed\)') { throw "the sealed hub did not start: $runLog" }
-          if (Test-Path $data) { throw "a sealed run wrote to $data" }
-          Remove-Item -Recurse -Force $sealedData -ErrorAction SilentlyContinue
-
-          # 3. The doctor: exit 0, and never a credential or a token in its text.
-          $doctor = Start-Process -FilePath "$dir\agentnotch.exe" -ArgumentList 'doctor' -Wait -PassThru
-          $report = Get-Content "$data\doctor.log" -Raw -ErrorAction SilentlyContinue
-          Set-Content "$smoke\doctor.log" $report
-          $report
-          if ($doctor.ExitCode -ne 0) { throw "doctor exited with $($doctor.ExitCode)" }
-          if (-not $report) { throw 'the doctor wrote no doctor.log' }
-          foreach ($secret in '.credentials.json', 'claudeAiOauth', 'accessToken') {
-            if ($report.Contains($secret)) { throw "the doctor's report names $secret" }
-          }
-
-          # 4. The hook fails open with no app beside it: exit 0, nothing printed.
-          $hook = Join-Path $env:RUNNER_TEMP 'agentnotch-hook.exe'
-          Copy-Item "$dir\agentnotch-hook.exe" $hook
-          foreach ($argv in @('hook', 'hook --exec', 'statusline', 'bogus', '')) {
-            $psi = [Diagnostics.ProcessStartInfo]::new($hook, $argv)
-            $psi.UseShellExecute = $false
-            $psi.RedirectStandardInput = $true
-            $psi.RedirectStandardOutput = $true
-            $run = [Diagnostics.Process]::Start($psi)
-            $run.StandardInput.Write('{ not json')
-            $run.StandardInput.Close()
-            if (-not $run.WaitForExit(3000)) { $run.Kill(); throw "the hook hung ($argv)" }
-            $printed = $run.StandardOutput.ReadToEnd()
-            if ($run.ExitCode -ne 0) { throw "the hook exited with $($run.ExitCode) ($argv)" }
-            if ($printed) { throw "the hook printed '$printed' ($argv)" }
-          }
-
-          # 5. Uninstall; the NSIS uninstaller re-launches itself, so -Wait returns early.
-          Start-Process -FilePath "$dir\uninstall.exe" -ArgumentList '/S' -Wait
-          Wait-Until { -not (Test-Path "$dir\agentnotch.exe") -and -not (Test-Path $uninstallKey) } 60 'the uninstall'
-          if (Test-Path 'HKCU:\Software\Classes\agentnotch') { throw 'the agentnotch: scheme is still registered' }
+      # The signing path a release takes once WINDOWS_SIGN_* exist, proven on
+      # every branch with a throwaway self-signed certificate: the same bundling
+      # step and signCommand, then every signature checked. The installer above
+      # stays unsigned; the app and hook bytes are put back afterwards.
+      - name: Code signing path (throwaway certificate)
+        if: ${{ !inputs.release }}
+        run: ./scripts/agentnotch-build.ps1 -CheckSigning
 
       - name: Upload the installer and the smoke test's files
         if: ${{ !inputs.release && always() && steps.installer.outputs.name != '' }}
@@ -340,13 +303,16 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
-      # Signed and published by release.yml's own jobs, never here.
+      # The update signature and the publishing are release.yml's own jobs, never
+      # here; the release info says whether the installer is code-signed.
       - name: Hand the installer to the release
         if: ${{ inputs.release }}
         uses: actions/upload-artifact@v7
         with:
           name: windows-unsigned
-          path: windows/out/${{ steps.installer.outputs.name }}
+          path: |
+            windows/out/${{ steps.installer.outputs.name }}
+            windows/out/windows-release-info.env
           retention-days: 3
           if-no-files-found: error
 
@@ -354,3 +320,57 @@ jobs:
         if: ${{ !inputs.release }}
         run: |
           "Unsigned, no update feed (built from source). SmartScreen: More info, then Run anyway. Never attach it to a release." >> $env:GITHUB_STEP_SUMMARY
+
+  # The installed app against the real, pinned Claude Code (Maintainer decision Q3): the ONE
+  # place real Claude Code ever runs, on a fresh runner, inside a temporary profile, with a fake
+  # key and a fake Messages API on 127.0.0.1, its executable firewalled from everything but
+  # loopback; npm's download of the pinned package is the only network use. No secret reaches
+  # this job. Never part of a release build. While the realClaude gate of smoke/gates.json is
+  # closed it prints a notice and installs nothing. scripts/smoke/real-claude.ps1 says what it
+  # proves; its job summary records exec-form evidence for the facts file.
+  real-claude:
+    if: ${{ github.repository != 'vinzdg/codenotch' && !inputs.release }}
+    needs: build
+    name: Real Claude Code (hermetic)
+    runs-on: windows-2025
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: windows
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Gate
+        id: gate
+        run: ./scripts/smoke/real-claude.ps1 -GateOnly
+
+      - uses: actions/setup-node@v6
+        if: ${{ steps.gate.outputs.open == 'true' }}
+        with:
+          node-version: 22
+
+      - uses: actions/download-artifact@v8
+        if: ${{ steps.gate.outputs.open == 'true' }}
+        with:
+          name: AgentNotch-Setup-${{ needs.build.outputs.version }}-${{ github.sha }}
+          path: windows/dl
+
+      - name: Run the pinned Claude Code against the installed app
+        if: ${{ steps.gate.outputs.open == 'true' }}
+        env:
+          INSTALLER: dl\${{ needs.build.outputs.name }}
+        run: |
+          ./scripts/smoke/real-claude.ps1 -Installer $env:INSTALLER -Artifacts out\real-claude
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Upload the fake API's logs, Claude Code's events and the app's logs
+        if: ${{ always() && steps.gate.outputs.open == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: real-claude-${{ github.sha }}
+          path: windows/out/real-claude/**
+          retention-days: 14
+          if-no-files-found: warn

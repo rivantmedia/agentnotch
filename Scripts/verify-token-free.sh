@@ -92,6 +92,9 @@ PATTERNS=(
 # the XCTest that pins the keychain remap to leave Claude's item alone.
 ALLOWED_LINES=(
     'XCTAssertEqual(Fork.keychainService("Claude Code-credentials"), "Claude Code-credentials")'
+    # The Windows smoke script's assertion that the doctor's report never names a credential
+    # (DESIGN-WIN §7.5 phase 3). The one line of the script that may name them.
+    "foreach (\$secret in '.credentials.json', 'claudeAiOauth', 'accessToken') {"
 )
 # The Windows fork's code: the Mac's patterns plus these (DESIGN-WIN §6.7).
 WIN_PATTERNS=(
@@ -158,6 +161,8 @@ done
 is_allowed_line() {
     local line="$1" allowed
     line="${line#"${line%%[![:space:]]*}"}"
+    # .ps1 files are checked out with CRLF (.gitattributes): the line end is not the line.
+    line="${line%$'\r'}"
     for allowed in "${ALLOWED_LINES[@]}"; do [[ "$line" == "$allowed" ]] && return 0; done
     return 1
 }
