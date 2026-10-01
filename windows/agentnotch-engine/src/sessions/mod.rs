@@ -4,9 +4,9 @@
 //!
 //! Owner: WP5. In so far: the pure modules (`attention`, `background`,
 //! `chat`, `completion`, `locator`, `phase`, `summary`, `tasks`, `tool_input`, `tool_results`,
-//! `transcript`, `registry`, `desktop`).
+//! `transcript`, `registry`, `desktop`, `session`).
 //! Still WP0's stub: [`SessionStore`] (the §3.4 signatures, keeps no
-//! sessions); the real store comes in wp5-6..wp5-10.
+//! sessions); the real store comes in wp5-7..wp5-10.
 
 pub mod attention;
 pub mod background;
@@ -16,6 +16,7 @@ pub mod desktop;
 pub mod locator;
 pub mod phase;
 pub mod registry;
+pub mod session;
 pub mod summary;
 pub mod tasks;
 pub mod tool_input;
@@ -26,12 +27,7 @@ use crate::model::{ChatHistory, SessionId, SessionView};
 use crate::runtime_types::{SessionEffects, SessionInput};
 use std::time::SystemTime;
 
-/// The engine's per-session record (SessionState.swift's port). Its fields
-/// are WP5's; everything else reads a session through [`SessionView`].
-#[derive(Debug, Clone, Default)]
-pub struct Session {
-    _private: (),
-}
+pub use session::Session;
 
 #[derive(Default)]
 pub struct SessionStore {
