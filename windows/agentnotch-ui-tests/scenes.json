@@ -781,7 +781,7 @@
       "global": "agentnotchSettings",
       "scene": "settings-full",
       "width": 680,
-      "height": 1500
+      "height": 3600
     },
     {
       "name": "settings-first-run",
@@ -814,6 +814,38 @@
       "scene": "settings-unnamed-accounts",
       "width": 680,
       "height": 1700
+    },
+    {
+      "name": "settings-cloud-signed-out",
+      "page": "settings.html",
+      "global": "agentnotchSettings",
+      "scene": "settings-cloud-signed-out",
+      "width": 680,
+      "height": 420
+    },
+    {
+      "name": "settings-cloud-signed-in",
+      "page": "settings.html",
+      "global": "agentnotchSettings",
+      "scene": "settings-cloud-signed-in",
+      "width": 680,
+      "height": 900
+    },
+    {
+      "name": "settings-cloud-overridden",
+      "page": "settings.html",
+      "global": "agentnotchSettings",
+      "scene": "settings-cloud-overridden",
+      "width": 680,
+      "height": 420
+    },
+    {
+      "name": "settings-cloud-no-website",
+      "page": "settings.html",
+      "global": "agentnotchSettings",
+      "scene": "settings-cloud-no-website",
+      "width": 680,
+      "height": 420
     }
   ]
 }

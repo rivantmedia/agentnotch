@@ -17,7 +17,8 @@
 //       region "consent"        the consent card (every settings.json it writes) or the scope notice
 //       region "accounts"       one row per account, suggestions, unsigned folders, adding accounts
 //       region "hooks"          hooks and status line, the pipe, Claude Code, the official app's hooks
-//       regions "usage" "cloud" "attention" "notifications" "advanced"   drawn by `slots.<name>`
+//       regions "usage" "cloud" "attention" "notifications" "advanced"   drawn by `slots.<name>`,
+//                               which settings-sections.js fills
 //   Each region is patched with `agentnotchCommon.morph`, so a focused field, its caret and a
 //   half-typed name survive every snapshot.
 //
@@ -120,9 +121,9 @@
 
   var REGIONS = ['status', 'consent', 'accounts', 'hooks', 'usage', 'cloud', 'attention', 'notifications', 'advanced'];
   var regions = Object.create(null);
-  /** Sub-task 10's sections: `slots.<region> = function (settings, api) { return html; }`. */
+  /** settings-sections.js's sections: `slots.<region> = function (settings, api) { return html; }`. */
   var SLOTS = Object.create(null);
-  /** Scenes sub-task 10 adds: `scenes[name] = function (settingsCopy) { return {tab, …} }`. */
+  /** settings-sections.js's scenes: `scenes[name] = function (settingsCopy) { return {tab, scroll, …} }`. */
   var SLOT_SCENES = Object.create(null);
   var ACTIONS = Object.create(null);
 
@@ -1202,7 +1203,16 @@
       } catch (e) { /* the scene still draws */ }
     }
     render();
+    if (typeof extra.scroll === 'string' && has(regions, extra.scroll)) scrollTo(regions[extra.scroll]);
     return true;
+  }
+
+  /** A scene of one section (the Mac's settings-cloud-* sheets) starts at that section. */
+  function scrollTo(el) {
+    var body = document.getElementById('body');
+    if (!body || !el.getBoundingClientRect || !body.getBoundingClientRect) return;
+    var top = el.getBoundingClientRect().top - body.getBoundingClientRect().top;
+    body.scrollTop = Math.max(0, (body.scrollTop || 0) + top - 8);
   }
 
   function insideAcross(inner, outer, slack) {
@@ -1275,8 +1285,11 @@
       state.failure = C.callError(error);
       render();
     });
-    C.load(base, ['rebrand.js'], function () {
+    // The rebrand, and the second half of the pane (Usage, Cloud, Sessions and attention,
+    // Notifications, Advanced: settings-sections.js fills `slots`), then a draw with them.
+    C.load(base, ['rebrand.js', 'settings-sections.js'], function () {
       wireRebrand();
+      render();
     });
   }
 
@@ -1285,7 +1298,7 @@
     render: function () { render(); },
     showScene: showScene,
     layoutReport: layoutReport,
-    /** Sub-task 10: section renderers (`slots.usage = fn(settings, api)`) and their scenes. */
+    /** settings-sections.js: section renderers (`slots.usage = fn(settings, api)`) and their scenes. */
     slots: SLOTS,
     scenes: SLOT_SCENES,
     actions: ACTIONS,

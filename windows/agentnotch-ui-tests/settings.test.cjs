@@ -136,7 +136,7 @@ test('page order: upstream\'s script then settings.js in one context, no clash, 
   const page = harness.loadPage('settings.html', {});
   await page.settle();
   clean(page);
-  assert.deepEqual(page.loaded, ['agentnotch/settings.js', 'agentnotch/common.js', 'agentnotch/rebrand.js']);
+  assert.deepEqual(page.loaded, ['agentnotch/settings.js', 'agentnotch/common.js', 'agentnotch/rebrand.js', 'agentnotch/settings-sections.js']);
   // Upstream's globals are still there, and ours beside them.
   assert.equal(page.run('typeof showTab + typeof toast + typeof ui + TABS.join()'), 'functionfunctionfunctionclaude,accounts,appearance,general');
   assert.equal(page.run('typeof agentnotchSettings.showScene + typeof agentnotchSettings.layoutReport'), 'functionfunction');
@@ -160,15 +160,15 @@ test('a load asks for the settings and nothing else; the tab opens on the pane o
   clean(first);
 });
 
-test('the sections stand in the Mac\'s order, with named empty containers for the rest', async () => {
+test('the sections stand in the Mac\'s order; settings-sections.js draws the second half', async () => {
   const page = await open();
   const names = page.$$('#pane-claude > [data-an-section]').map((el) => el.getAttribute('data-an-section'));
   assert.deepEqual(names, ['status', 'consent', 'accounts', 'hooks', 'usage', 'cloud', 'attention', 'notifications', 'advanced']);
-  for (const name of ['usage', 'cloud', 'attention', 'notifications', 'advanced']) assert.equal(region(page, name).hidden, true, name);
+  for (const name of ['usage', 'cloud', 'attention', 'notifications', 'advanced']) assert.equal(region(page, name).hidden, false, name);
   assert.equal(region(page, 'consent').hidden, true);
   assert.equal(text(region(page, 'status')), 'Sealed: this window shows sample data.');
   const titles = page.$$('#pane-claude .sec').map(text);
-  assert.deepEqual(titles, ['Accounts', 'Hooks and status line']);
+  assert.deepEqual(titles, ['Accounts', 'Hooks and status line', 'Usage', 'Cloud', 'Sessions and attention', 'Notifications', 'Advanced']);
 });
 
 test('the sealed line goes away when the hub is not sealed; a hub that does not answer is said', async () => {

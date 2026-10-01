@@ -118,6 +118,40 @@
 /* ---- hooks and status line ---- */
 #pane-claude .an-hooks .an-footnote { color: var(--text3); }
 
+/* ---- Usage, Cloud, Sessions and attention, Notifications, Advanced (settings-sections.js) ---- */
+/* A row whose only content is its buttons, on the right (Refresh now, Open the sessions panel). */
+#pane-claude .item.an-end { justify-content: flex-end; }
+/* Buttons keep their width (the words beside them wrap instead); a long value beside them is cut. */
+#pane-claude .item > .an-btns { flex: none; max-width: 65%; }
+#pane-claude .item > .an-btns > .an-value { min-width: 0; flex: 0 1 auto; }
+#pane-claude .an-nums { font-variant-numeric: tabular-nums; }
+#pane-claude .an-usage-acct .an-acct-name { flex: 0 1 auto; }
+#pane-claude .an-usage-acct .an-sdot { width: 7px; height: 7px; }
+#pane-claude .an-usage-acct > .an-value { flex: 0 1 auto; }
+/* "Open dashboard" over "Share accounts…", as the Mac stacks them. */
+#pane-claude .item > .an-btns.an-stack-btns { flex-direction: column; align-items: stretch; flex: none; }
+#pane-claude .an-btns .btn { white-space: nowrap; }
+#pane-claude .an-cap .link { font-size: inherit; padding: 0; }
+#pane-claude .item.an-dim > .an-col { color: var(--text3); }
+/* A segmented control wider than the pane ("When one needs you or is done") wraps inside its
+   pill, right-aligned, instead of running out of the window; each choice stays whole. */
+#pane-claude .seg { flex-wrap: wrap; justify-content: flex-end; max-width: 100%; }
+#pane-claude .seg button { color: var(--text); white-space: nowrap; }
+/* Three long choices ("Open the sessions panel") stand one under another. */
+#pane-claude .seg.an-seg-col { flex-direction: column; align-items: stretch; }
+#pane-claude .seg.an-seg-col button { text-align: left; }
+#pane-claude .seg button.on { color: var(--on-accent); }
+/* The busy ring: twelve steps, and it stops after a minute (a sign-in or a refresh that takes
+   longer is still said by its words); still in snapshots and with reduced motion. */
+#pane-claude .an-busy {
+  width: 12px; height: 12px; flex: none; border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--text2) 30%, transparent); border-top-color: var(--text2);
+  animation: an-settings-busy 1.2s steps(12) 50;
+}
+@keyframes an-settings-busy { to { transform: rotate(360deg); } }
+html.an-static #pane-claude .an-busy { animation: none; }
+@media (prefers-reduced-motion: reduce) { #pane-claude .an-busy { animation: none; } }
+
 /* Snapshot scenes and Windows' "Animation effects" off: the switch knob does not slide. */
 html.an-static #pane-claude .switch::after { transition: none; }
 @media (prefers-reduced-motion: reduce) { #pane-claude .switch::after { transition: none; } }
