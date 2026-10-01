@@ -891,3 +891,48 @@ fn a_resolved_shared_path_falls_back_to_the_environment() {
         paths.default_config_dir()
     );
 }
+
+/// Dates past the year 9999 are no dates: Windows' clock ends in the year
+/// 30828, and the store adds its delays (5 s, 90 s, 30 min…) to the times an
+/// entry gives, so a file naming one could otherwise overflow them (a panic
+/// in the registry job or the store). `procStart` with a signed year is
+/// what chrono reads as such a year.
+#[test]
+fn dates_past_the_year_9999_are_no_dates() {
+    // 9999-12-31T23:59:59Z in milliseconds, and the next millisecond on.
+    const LAST_MS: u64 = 253_402_300_799_000;
+    let entry = parse_entry(&json!({
+        "pid": 1, "sessionId": "s",
+        "startedAt": LAST_MS + 1000, "updatedAt": 1.6e15, "statusUpdatedAt": 9.0e14,
+        "procStart": "Wed Sep 3 04:43:16 +50000",
+    }))
+    .unwrap();
+    assert_eq!(
+        (entry.started_at, entry.updated_at, entry.status_updated_at),
+        (None, None, None)
+    );
+    assert_eq!(entry.status_changed_at(), None);
+    let last = parse_entry(&json!({"pid": 1, "sessionId": "s", "startedAt": LAST_MS})).unwrap();
+    assert_eq!(last.started_at, Some(from_ms(LAST_MS)));
+
+    for text in ["Wed Sep 3 04:43:16 +50000", "Wed Sep 3 04:43:16 +10000"] {
+        assert_eq!(parse_proc_start(text), None, "{text}");
+    }
+    assert!(parse_proc_start("Fri Dec 31 23:59:59 9999").is_some());
+
+    // The liveness rule never adds past the end of the clock: an entry
+    // started at the last representable moment is compared, not overflowed.
+    let latest = from_ms(LAST_MS);
+    assert!(check_live(
+        Liveness::Alive,
+        Some(latest),
+        None,
+        Some(latest)
+    ));
+    assert!(check_live(
+        Liveness::Alive,
+        Some(latest),
+        Some("Wed Sep 3 04:43:16 +50000"),
+        None
+    ));
+}

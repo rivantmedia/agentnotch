@@ -26,6 +26,7 @@ use crate::model::{RegistryEntry, RegistrySnapshot, SessionId};
 use crate::platform::{EnvRead, Liveness, Processes, SecureFiles};
 use crate::sessions::desktop::valid_host_session_id;
 use crate::sessions::tasks::json_string;
+use crate::sessions::{file_time, has_signed_year};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
@@ -59,10 +60,11 @@ fn number(value: Option<&Value>) -> Option<f64> {
     number.is_finite().then_some(number)
 }
 
-/// Epoch milliseconds as a time; missing, zero and negative are none.
+/// Epoch milliseconds as a time; missing, zero, negative and past the year
+/// 9999 ([`file_time`]) are none.
 fn time_from_ms(value: Option<&Value>) -> Option<SystemTime> {
     let ms = number(value).filter(|ms| *ms > 0.0)?;
-    from_secs_f64(ms / 1000.0)
+    from_secs_f64(ms / 1000.0).and_then(file_time)
 }
 
 /// A process id: 1 up to `i32::MAX`, anything else (out of range, zero,
@@ -105,18 +107,19 @@ pub fn parse_entry(json: &Value) -> Option<RegistryEntry> {
 }
 
 /// Parses `ps -o lstart` text such as `Wed Sep  3 04:43:16 2026` (UTC). The
-/// day may be space-padded; the weekday is read past, not checked.
+/// day may be space-padded; the weekday is read past, not checked. A year
+/// spelt with a sign (chrono reads `+50000`) or past 9999 is no date.
 pub fn parse_proc_start(text: &str) -> Option<SystemTime> {
     let tokens: Vec<&str> = text.split_whitespace().collect();
-    if tokens.len() != 5 {
+    if tokens.len() != 5 || has_signed_year(tokens[4]) {
         return None;
     }
     let rest = tokens[1..].join(" ");
     let parsed = chrono::NaiveDateTime::parse_from_str(&rest, "%b %d %H:%M:%S %Y").ok()?;
-    let seconds = parsed.and_utc().timestamp();
-    u64::try_from(seconds)
-        .ok()
-        .map(|s| SystemTime::UNIX_EPOCH + Duration::from_secs(s))
+    let seconds = u64::try_from(parsed.and_utc().timestamp()).ok()?;
+    SystemTime::UNIX_EPOCH
+        .checked_add(Duration::from_secs(seconds))
+        .and_then(file_time)
 }
 
 // ---- Liveness ----
@@ -151,7 +154,10 @@ pub fn check_live(
         return gap <= PROC_START_TOLERANCE;
     }
     if let Some(started_at) = started_at {
-        return creation <= started_at + STARTED_AT_TOLERANCE;
+        // Past the end of the clock nothing started later.
+        return started_at
+            .checked_add(STARTED_AT_TOLERANCE)
+            .is_none_or(|latest| creation <= latest);
     }
     true
 }

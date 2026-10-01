@@ -359,3 +359,33 @@ fn dates_are_epoch_second_doubles() {
     // Compact: no whitespace outside strings.
     assert!(!String::from_utf8(bytes).unwrap().contains(['\n', ' ']));
 }
+
+/// A date past the year 9999 is no date (Windows' clock ends in the year
+/// 30828; a restored wait or completion that late would overflow the
+/// store's deadlines): the field is left out, the record kept. A record
+/// whose `updatedAt` is that late is dropped, like any unusable one.
+#[test]
+fn dates_past_the_year_9999_are_left_out() {
+    let now = at(1_790_000_000);
+    let bytes = br#"{"version":2,"lastAliveAt":1.6e12,"sessions":{
+        "kept":{"completedAt":1.6e12,"backgroundWaitSince":9.0e11,"reviewedAt":1789999000,
+                "failedAt":253402300800,"stopError":"Overloaded","updatedAt":1789999990},
+        "late":{"completedAt":1789999000,"updatedAt":9.0e11}}}"#;
+    let store = ReviewStore::load(Some(bytes), now);
+    assert_eq!(store.len(), 1);
+    assert_eq!(store.last_alive_at(), None);
+    let kept = store.record("kept").unwrap();
+    assert_eq!(kept.completed_at, None);
+    assert_eq!(kept.background_wait_since, None);
+    assert_eq!(kept.failed_at, None);
+    assert_eq!(kept.reviewed_at, Some(at(1_789_999_000)));
+    assert_eq!(kept.stop_error.as_deref(), Some("Overloaded"));
+    // The last second of the year 9999 is still a date.
+    let last =
+        br#"{"version":2,"sessions":{"s":{"completedAt":253402300799,"updatedAt":1789999990}}}"#;
+    let store = ReviewStore::load(Some(last), now);
+    assert_eq!(
+        store.record("s").unwrap().completed_at,
+        Some(at(253_402_300_799))
+    );
+}

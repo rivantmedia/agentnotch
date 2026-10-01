@@ -1154,3 +1154,53 @@ fn a_line_longer_than_a_chunk_is_read_whole() {
     assert_eq!(seen[0], huge);
     assert_eq!(seen[1], "small");
 }
+
+/// A date past the year 9999 (chrono reads one with a sign) is no date: on
+/// Windows the clock ends in the year 30828 and turning such a date into a
+/// time would overflow (a panic in the read job). Checked by the decoder
+/// before converting, so this holds on every platform.
+#[test]
+fn a_date_past_the_year_9999_is_no_date() {
+    let at = |entries: &[TranscriptEntry]| {
+        entries.iter().find_map(|entry| match entry {
+            TranscriptEntry::HumanPrompt { at, .. } | TranscriptEntry::Assistant { at, .. } => {
+                Some(*at)
+            }
+            _ => None,
+        })
+    };
+    for stamp in [
+        "+50000-01-01T00:00:00",
+        "-50000-01-01T00:00:00",
+        "+10000-01-01T00:00:00.000",
+    ] {
+        let prompt = json!({
+            "type": "user", "uuid": "u1", "timestamp": stamp,
+            "message": {"role": "user", "content": "hello"},
+        });
+        assert_eq!(
+            at(&decode_line(prompt.to_string().as_bytes())),
+            Some(None),
+            "{stamp}"
+        );
+        let reply = json!({
+            "type": "assistant", "uuid": "a1", "timestamp": stamp,
+            "message": {"role": "assistant", "model": "claude-opus-4-5",
+                        "content": [{"type": "text", "text": "hi"}]},
+        });
+        assert_eq!(
+            at(&decode_line(reply.to_string().as_bytes())),
+            Some(None),
+            "{stamp}"
+        );
+    }
+    // The last moment of the year 9999 is still a date.
+    let prompt = json!({
+        "type": "user", "uuid": "u1", "timestamp": "9999-12-31T23:59:59Z",
+        "message": {"role": "user", "content": "hello"},
+    });
+    assert_eq!(
+        at(&decode_line(prompt.to_string().as_bytes())),
+        Some(parse_iso8601("9999-12-31T23:59:59Z"))
+    );
+}

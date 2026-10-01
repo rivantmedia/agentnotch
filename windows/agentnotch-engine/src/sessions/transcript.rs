@@ -257,6 +257,16 @@ fn flag(object: &Map<String, Value>, key: &str) -> bool {
     object.get(key).and_then(Value::as_bool) == Some(true)
 }
 
+/// A line's `timestamp`. A date past the year 9999 is none: chrono reads one
+/// spelt with a sign and turns it into a time without a check, which on
+/// Windows (whose clock ends in the year 30828) would panic.
+fn line_time(text: &str) -> Option<SystemTime> {
+    if crate::sessions::has_signed_year(text) {
+        return None;
+    }
+    parse_iso8601(text).and_then(crate::sessions::file_time)
+}
+
 fn text_of<'a>(object: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
     object.get(key).and_then(Value::as_str)
 }
@@ -385,7 +395,7 @@ impl Decoder {
             Some("user" | "assistant") => {}
             _ => return,
         }
-        let at = text_of(object, "timestamp").and_then(parse_iso8601);
+        let at = text_of(object, "timestamp").and_then(line_time);
         if is_clear_command(&json) {
             // Everything before the /clear is gone from the conversation.
             out.push(TranscriptEntry::Injected { at });

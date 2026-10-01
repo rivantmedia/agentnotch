@@ -20,7 +20,8 @@
 use crate::core::time::EpochSeconds;
 use crate::model::ReviewItem;
 use crate::persist::review::{
-    PersistedReviewRecord, ReviewStateFile, MAX_MESSAGE_LENGTH as FILE_MAX_MESSAGE_LENGTH, VERSION,
+    file_date, PersistedReviewRecord, ReviewStateFile,
+    MAX_MESSAGE_LENGTH as FILE_MAX_MESSAGE_LENGTH, VERSION,
 };
 use std::collections::BTreeMap;
 use std::time::{Duration, SystemTime};
@@ -69,7 +70,7 @@ impl ReviewStore {
             .filter_map(|(id, record)| Some((id.clone(), record.to_model()?)))
             .collect();
         store.prune(now);
-        store.last_alive_at = file.last_alive_at.and_then(EpochSeconds::to_time);
+        store.last_alive_at = file_date(file.last_alive_at);
         store.previous_run_alive_at = store.last_alive_at;
         store
     }

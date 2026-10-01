@@ -35,3 +35,26 @@ pub mod transcript;
 
 pub use session::Session;
 pub use store::SessionStore;
+
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+/// The last moment a date read from a file may name: 9999-12-31T23:59:59Z.
+/// Windows' clock ends in the year 30828, chrono turns a date into a time by
+/// adding without a check, and the store adds its delays (5 s, 90 s, 30
+/// min…) to the dates it keeps: a later date from a transcript, a registry
+/// entry or the review file would panic there, so it is taken for none.
+pub const LATEST_FILE_DATE: Duration = Duration::from_secs(253_402_300_799);
+
+/// `time` when it is no later than [`LATEST_FILE_DATE`].
+pub fn file_time(time: SystemTime) -> Option<SystemTime> {
+    UNIX_EPOCH
+        .checked_add(LATEST_FILE_DATE)
+        .filter(|latest| time <= *latest)
+        .map(|_| time)
+}
+
+/// A year past 9999 (or before year 0) is spelt with a sign: refused before
+/// chrono converts it.
+pub(crate) fn has_signed_year(text: &str) -> bool {
+    text.trim_start().starts_with(['+', '-'])
+}
