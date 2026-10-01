@@ -145,3 +145,60 @@ fn cloud_folder_logins_json() {
     assert_equivalent(&bytes, &written, "cloud-folder-logins.json");
     assert_eq!(written, bytes);
 }
+
+#[test]
+fn cloud_scan_state_json() {
+    use agentnotch_engine::cloud::scanner::State;
+    let bytes = fixture("cloud-scan-state.json");
+    let state: State = serde_json::from_slice(&bytes).expect("parses");
+    assert_eq!(state.version, State::CURRENT_VERSION);
+    assert_eq!(state.files.len(), 3);
+    let personal = "8ca65b0df91fc776aded7f419f011fc1e99e2fd120e893692cfaf83f0fa994c0";
+    let main = &state.files
+        ["/Users/me/.claude/projects/-Users-me-code-app/a1b2c3d4-e5f6-4789-8abc-def012345678.jsonl"];
+    assert!(main.is_main);
+    assert_eq!(main.inode, 8_590_012_345);
+    // The Mac knows no volume; it stays absent when written back.
+    assert_eq!(main.volume, None);
+    assert_eq!((main.size, main.offset), (2048, 2048));
+    assert_eq!(main.mtime.0, 1_790_323_240.5);
+    assert_eq!(main.ai_title.as_deref(), Some("Fix the parser bug"));
+    assert_eq!(main.entrypoint.as_deref(), Some("claude-vscode"));
+    assert_eq!(main.claimed.len(), 2);
+    assert_eq!(main.recent.len(), 2);
+    assert_eq!(main.owners, [SessionOwner::new(None, personal)]);
+    let part = &main.parts[personal];
+    assert_eq!(
+        (part.responses, part.cost, part.unpriced),
+        (2, 2_215_000, 0)
+    );
+    assert_eq!(part.totals.input, 15);
+    assert_eq!(part.model_counts["claude-haiku-4-5"], 1);
+    assert_eq!(
+        part.first.map(date::to_string).as_deref(),
+        Some("2026-09-25T08:00:00.000Z")
+    );
+    // An unpriced response: no cost on it, and one counted unpriced.
+    let agent = &state.files["/Users/me/.claude/projects/-Users-me-code-app/a1b2c3d4-e5f6-4789-8abc-def012345678/subagents/agent-one.jsonl"];
+    assert!(!agent.is_main);
+    assert_eq!(agent.recent[0].cost, None);
+    assert_eq!(agent.parts[personal].unpriced, 1);
+    // A session two accounts ran: the second owner starts at a time.
+    let split = &state.files
+        ["/Users/me/.claude/projects/-Users-me-code-app/0f9e8d7c-6b5a-4493-8271-605f4e3d2c1b.jsonl"];
+    assert_eq!(split.owners.len(), 2);
+    assert_eq!(split.first, None);
+
+    let written = serde_json::to_vec(&state).expect("encodes");
+    assert_equivalent(&bytes, &written, "cloud-scan-state.json");
+    // A file the engine wrote on Windows carries the volume, and the Mac's
+    // reader (which ignores unknown keys) still takes the rest.
+    let mut windows = state.clone();
+    windows
+        .files
+        .values_mut()
+        .for_each(|f| f.volume = Some(0xA1B2));
+    let again: State =
+        serde_json::from_slice(&serde_json::to_vec(&windows).expect("encodes")).expect("parses");
+    assert_eq!(again, windows);
+}

@@ -361,3 +361,156 @@ pub fn session_view(session_id: &str) -> SessionView {
         transcript_path: None,
     }
 }
+
+// ---- Transcript lines (the Mac's `CloudTranscriptLines`) ----
+
+/// JSON lines as Claude Code writes them in a transcript.
+pub struct Lines;
+
+static LINE_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn line_uuid() -> String {
+    let n = LINE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("00000000-0000-4000-8000-{n:012x}")
+}
+
+/// An assistant line under construction: `Lines::assistant(id, request,
+/// session)`, then the usage and the time.
+pub struct AssistantLine {
+    id: String,
+    request: String,
+    session: String,
+    model: String,
+    input: i64,
+    output: i64,
+    cache_creation: i64,
+    cache_read: i64,
+    stamp: String,
+    tool_use: bool,
+    sidechain: bool,
+    cwd: String,
+}
+
+impl AssistantLine {
+    pub fn model(mut self, model: &str) -> Self {
+        self.model = model.to_owned();
+        self
+    }
+
+    pub fn usage(mut self, input: i64, output: i64) -> Self {
+        self.input = input;
+        self.output = output;
+        self
+    }
+
+    pub fn cache(mut self, creation: i64, read: i64) -> Self {
+        self.cache_creation = creation;
+        self.cache_read = read;
+        self
+    }
+
+    pub fn at(mut self, seconds: f64) -> Self {
+        self.stamp = CloudFixture::stamp(seconds);
+        self
+    }
+
+    pub fn tool_use(mut self) -> Self {
+        self.tool_use = true;
+        self
+    }
+
+    pub fn sidechain(mut self) -> Self {
+        self.sidechain = true;
+        self
+    }
+
+    pub fn line(self) -> String {
+        let mut content = vec![serde_json::json!({"type": "text", "text": "Done."})];
+        if self.tool_use {
+            content.push(serde_json::json!({
+                "type": "tool_use", "id": format!("toolu_{}", self.id), "name": "Bash",
+                "input": {"command": "cat secrets.txt"}
+            }));
+        }
+        serde_json::json!({
+            "type": "assistant", "sessionId": self.session, "timestamp": self.stamp,
+            "requestId": self.request, "cwd": self.cwd, "isSidechain": self.sidechain,
+            "uuid": line_uuid(),
+            "message": {
+                "id": self.id, "role": "assistant", "model": self.model, "content": content,
+                "usage": {
+                    "input_tokens": self.input, "output_tokens": self.output,
+                    "cache_creation_input_tokens": self.cache_creation,
+                    "cache_read_input_tokens": self.cache_read
+                }
+            }
+        })
+        .to_string()
+    }
+}
+
+impl Lines {
+    pub fn user(text: &str, session: &str, seconds: f64) -> String {
+        Self::user_in(text, session, seconds, "/Users/me/code/app", "cli")
+    }
+
+    pub fn user_in(text: &str, session: &str, seconds: f64, cwd: &str, entrypoint: &str) -> String {
+        serde_json::json!({
+            "type": "user", "sessionId": session, "timestamp": CloudFixture::stamp(seconds),
+            "cwd": cwd, "entrypoint": entrypoint, "uuid": line_uuid(),
+            "message": {"role": "user", "content": text}
+        })
+        .to_string()
+    }
+
+    pub fn assistant(id: &str, request: &str, session: &str) -> AssistantLine {
+        AssistantLine {
+            id: id.to_owned(),
+            request: request.to_owned(),
+            session: session.to_owned(),
+            model: "claude-opus-4-5".to_owned(),
+            input: 0,
+            output: 0,
+            cache_creation: 0,
+            cache_read: 0,
+            stamp: CloudFixture::stamp(0.0),
+            tool_use: false,
+            sidechain: false,
+            cwd: "/Users/me/code/app".to_owned(),
+        }
+    }
+
+    pub fn ai_title(title: &str, session: &str) -> String {
+        serde_json::json!({"type": "ai-title", "sessionId": session, "aiTitle": title}).to_string()
+    }
+
+    /// `line` as `/branch` copies it into a fork: the fork's session id, and
+    /// where it came from.
+    pub fn forked(line: &str, into: &str, from: &str) -> String {
+        let mut object: Value = serde_json::from_str(line).expect("a JSON line");
+        let uuid = object
+            .get("uuid")
+            .cloned()
+            .unwrap_or_else(|| Value::String(line_uuid()));
+        object["sessionId"] = Value::String(into.to_owned());
+        object["forkedFrom"] = serde_json::json!({"sessionId": from, "messageUuid": uuid});
+        object.to_string()
+    }
+
+    /// Writes (or appends) the lines, making the folders.
+    pub fn write(lines: &[String], path: &std::path::Path, append: bool) {
+        use std::io::Write;
+        let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        std::fs::create_dir_all(path.parent().expect("a parent")).expect("folders made");
+        if append {
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(path)
+                .expect("opened");
+            file.write_all(text.as_bytes()).expect("appended");
+        } else {
+            std::fs::write(path, text).expect("written");
+        }
+    }
+}

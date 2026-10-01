@@ -76,6 +76,8 @@ let package = Package(
         .testTarget(
             name: "ClaudeControlTests",
             dependencies: ["ClaudeControl"],
+            // Read from source through TestPaths.packageRoot, not bundled.
+            exclude: ["Fixtures"],
             swiftSettings: [.defaultIsolation(MainActor.self)]
         ),
     ],

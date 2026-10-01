@@ -15,6 +15,7 @@ pub mod folder_logins;
 pub mod keys;
 pub mod ledger;
 pub mod pricing;
+pub mod scanner;
 pub mod website;
 
 use crate::hub::DeepLinkOutcome;
