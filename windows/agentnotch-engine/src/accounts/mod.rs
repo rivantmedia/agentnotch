@@ -2,78 +2,39 @@
 //! ("the email decides"), naming, monograms, ring ids, `accounts.json`,
 //! the default folder's timeline, process attribution.
 //!
-//! Owner: WP3. WP0 stub: the §3.4 signatures; it knows no account.
+//! An account is a signed-in identity, not a folder. Claude Code keeps one
+//! login per config folder (`CLAUDE_CONFIG_DIR`, `~\.claude` when unset), so
+//! the folders found on disk ([`snapshot`], [`classify`]) are grouped by who
+//! is signed in to them ([`identities`]), named apart ([`naming`]) and kept,
+//! with what the user chose for each, by the [`registry`]. [`for_cloud`] is
+//! what the cloud thread reads of it, [`inspect`] the read-only report of
+//! `agentnotch.exe inspect-accounts`, and [`watch`] the cheap look that
+//! notices a new VS Code window of Claude Parallel Profiles.
+//!
+//! Claude Parallel Profiles does nothing on native Windows (AU§0.2): there
+//! every folder is a run folder, and the rules for its stores, window copies
+//! and mirrored `~\.claude` are kept, pure and tested, for the setups they
+//! describe.
+//!
+//! Owner: WP3.
 
-use crate::model::{
-    Account, AccountAction, AccountId, AccountSighting, Attribution, BackfillFolder,
-    FolderSnapshot, IdentityId, RunFolder,
+pub mod classify;
+pub mod folder;
+pub mod for_cloud;
+pub mod identities;
+pub mod inspect;
+pub mod naming;
+pub mod registry;
+pub mod snapshot;
+pub mod timeline;
+pub mod watch;
+
+pub use classify::{FolderSuggestion, Layout, SuggestionReason};
+pub use folder::Folder;
+pub use identities::{IdentityAccount, IdentityPrefs};
+pub use registry::{
+    AccountError, AccountRegistry, CreatedAccount, FolderRings, DISCOVERY_INTERVAL, SAVE_DELAY,
+    SIGHTING_RESOLUTION,
 };
-use crate::platform::{Processes, Roots, SecureFiles};
-use crate::runtime_types::AccountsChanged;
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
-use std::time::SystemTime;
-
-#[derive(Default)]
-pub struct AccountRegistry {
-    _folders: Vec<RunFolder>,
-}
-
-impl AccountRegistry {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn discover(&mut self, snap: FolderSnapshot, now: SystemTime) -> AccountsChanged {
-        let _ = (snap, now);
-        AccountsChanged::default()
-    }
-
-    pub fn record(&mut self, s: AccountSighting, now: SystemTime) -> AccountsChanged {
-        let _ = (s, now);
-        AccountsChanged::default()
-    }
-
-    pub fn accounts(&self) -> Vec<Account> {
-        Vec::new()
-    }
-
-    pub fn folders(&self) -> Vec<RunFolder> {
-        Vec::new()
-    }
-
-    pub fn attribution(&self, folder: &AccountId, started: Option<SystemTime>) -> Attribution {
-        let _ = (folder, started);
-        Attribution::Known(None)
-    }
-
-    pub fn apply_user(&mut self, a: AccountAction) -> Result<AccountsChanged, String> {
-        let _ = a;
-        Err("Accounts can't be changed in this build yet.".into())
-    }
-
-    /// key() → login hash; `None` until the folders were read (CL§5.2).
-    pub fn folder_logins(&self) -> Option<BTreeMap<String, String>> {
-        None
-    }
-
-    /// CL§7.2's rules.
-    pub fn backfill_folders(&self, allowed: &BTreeSet<IdentityId>) -> Vec<BackfillFolder> {
-        let _ = allowed;
-        Vec::new()
-    }
-}
-
-/// One read of the home folder for discovery (a Job on `an-io`).
-pub fn read_folder_snapshot(
-    roots: &Roots,
-    explicit: &[PathBuf],
-    files: &dyn SecureFiles,
-    procs: &dyn Processes,
-) -> FolderSnapshot {
-    let _ = (explicit, files, procs);
-    FolderSnapshot {
-        home: roots.home.to_string_lossy().into_owned(),
-        ..FolderSnapshot::default()
-    }
-}
+pub use snapshot::{read_folder_snapshot, DiskProbe, FolderMarkers, FolderProbe};
+pub use timeline::{FolderAttribution, FolderIdentityTimeline};

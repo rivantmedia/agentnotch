@@ -7,8 +7,9 @@
 //! identifier) + `Claude`; Claude Desktop's folders the way Electron finds its userData (the Known
 //! Folder, never the environment).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use crate::process::desktop_package_names;
 use agentnotch_engine::platform::Roots;
 use windows::core::GUID;
 use windows::Win32::System::Com::CoTaskMemFree;
@@ -36,11 +37,14 @@ pub fn roots(
             .join(app_identifier)
             .join("Claude"),
     };
-    // Claude Desktop's own folder. Its Microsoft Store package keeps a second one under
-    // Packages\…\LocalCache\Roaming\Claude; finding those is part of account discovery.
-    let claude_desktop = known_folder(&FOLDERID_RoamingAppData)
+    // Claude Desktop's own folder, then the copy its Microsoft Store package keeps under
+    // Packages\<name>\LocalCache\Roaming\Claude (the package redirects its AppData there).
+    let mut claude_desktop: Vec<PathBuf> = known_folder(&FOLDERID_RoamingAppData)
         .map(|roaming| vec![roaming.join("Claude")])
         .unwrap_or_default();
+    if let Some(local) = known_folder(&FOLDERID_LocalAppData) {
+        claude_desktop.extend(store_package_folders(&local.join("Packages")));
+    }
     // `C:` + `\Users`, not `Path::join`: joining onto a bare drive gives the drive-relative
     // `C:Users`.
     let system_users = non_empty_env("SystemDrive").map(|drive| {
@@ -58,6 +62,29 @@ pub fn roots(
     })
 }
 
+/// The existing Claude Desktop folder of each Store package under `packages`. A missing or
+/// unreadable Packages folder gives none: most machines have no Store package of Claude.
+fn store_package_folders(packages: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(packages) else {
+        return Vec::new();
+    };
+    let children: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .collect();
+    desktop_package_names(children.iter().map(String::as_str))
+        .into_iter()
+        .map(|name| {
+            packages
+                .join(name)
+                .join("LocalCache")
+                .join("Roaming")
+                .join("Claude")
+        })
+        .filter(|folder| folder.is_dir())
+        .collect()
+}
+
 fn non_empty_env(name: &str) -> Option<PathBuf> {
     std::env::var_os(name)
         .filter(|v| !v.is_empty())
@@ -73,4 +100,35 @@ fn known_folder(id: &GUID) -> Option<PathBuf> {
     // SAFETY: `raw` came from SHGetKnownFolderPath and is not used after this.
     unsafe { CoTaskMemFree(Some(raw.0 as *const _)) };
     path.filter(|p| !p.as_os_str().is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // One test function: it removes an environment variable, which must not race a reader.
+    #[test]
+    fn roots_resolve_the_home_the_support_folder_and_claude_desktops_folder() {
+        // SAFETY: this is the only test of this binary that touches the environment.
+        unsafe { std::env::remove_var("AGENTNOTCH_SUPPORT_DIR") };
+        let roots = roots("com.rivantmedia.agentnotch", PathBuf::from("data"), None)
+            .expect("the folders resolve");
+        assert!(roots.home.is_dir(), "home {:?}", roots.home);
+        assert!(
+            roots
+                .support
+                .ends_with(Path::new("com.rivantmedia.agentnotch").join("Claude")),
+            "support {:?}",
+            roots.support
+        );
+        let first = roots
+            .claude_desktop
+            .first()
+            .expect("a Claude Desktop folder");
+        assert!(first.ends_with("Claude"), "first {first:?}");
+        for extra in &roots.claude_desktop[1..] {
+            assert!(extra.is_dir(), "{extra:?}");
+            assert!(extra.ends_with(Path::new("LocalCache").join("Roaming").join("Claude")));
+        }
+    }
 }

@@ -274,6 +274,62 @@ impl Paths {
         self.same(ancestor, path) || self.strip_prefix(ancestor, path).is_some()
     }
 
+    /// `path` is strictly inside `ancestor` (a root holds every other path
+    /// on its drive or share).
+    pub fn is_ancestor(&self, ancestor: &str, path: &str) -> bool {
+        self.strip_prefix(ancestor, path).is_some()
+    }
+
+    /// A path that names one place whatever the current folder: `C:\x`,
+    /// `\\server\share\x`, `/x`. Drive-relative `C:x`, root-relative `\x` and
+    /// plain relative paths are not.
+    pub fn is_absolute(&self, path: &str) -> bool {
+        let split = split(self.style, path);
+        match self.style {
+            PathStyle::Posix => split.root == "/",
+            PathStyle::Windows => split.is_absolute() && split.root != "\\",
+        }
+    }
+
+    /// `target` as the OS resolves it from `base`: an absolute target stays
+    /// itself, a root-relative one (`\x` on Windows) takes `base`'s drive or
+    /// share, anything else is joined onto `base`. What a relative symbolic
+    /// link inside `base` points to.
+    pub fn resolve(&self, base: &str, target: &str) -> String {
+        if self.is_absolute(target) {
+            return self.normalize(target);
+        }
+        if self.style == PathStyle::Windows && target.starts_with(['\\', '/']) {
+            let root = split(self.style, &self.expand_tilde(base)).root;
+            // A drive root (`C:\`) or a share root already ends with a separator.
+            let root = root.trim_end_matches('\\');
+            let rest = target.trim_start_matches(['\\', '/']);
+            return self.normalize(&format!("{root}\\{rest}"));
+        }
+        self.join(base, target)
+    }
+
+    /// Two folder or file names are one name here (Windows names compare
+    /// case-insensitively).
+    pub fn names_equal(&self, a: &str, b: &str) -> bool {
+        if self.style.case_insensitive() {
+            a.to_lowercase() == b.to_lowercase()
+        } else {
+            a == b
+        }
+    }
+
+    /// `name` starts with `prefix`, compared as names are here. The prefixes
+    /// the engine looks for are ASCII (`.claude-`), so comparing that many
+    /// bytes is exact.
+    pub fn name_has_prefix(&self, name: &str, prefix: &str) -> bool {
+        match name.get(..prefix.len()) {
+            Some(head) if self.style.case_insensitive() => head.eq_ignore_ascii_case(prefix),
+            Some(head) => head == prefix,
+            None => false,
+        }
+    }
+
     /// A drive, share or `/` root.
     pub fn is_root(&self, path: &str) -> bool {
         let split = split(self.style, &self.expand_tilde(path));

@@ -1,0 +1,13 @@
+{
+  "numStartups": 4,
+  "oauthAccount": {
+    "accountUuid": "c7d8e9f0-a1b2-4c3d-8e4f-5a6b7c8d9e0f",
+    "emailAddress": "sam.home@example.com",
+    "organizationType": "claude_max"
+  },
+  "cachedUsageUtilization": {
+    "accountUuid": "00000000-1111-4222-8333-444455556666",
+    "fetchedAtMs": 1790000200000,
+    "utilization": { "five_hour": { "utilization": 9, "resets_at": "2099-01-01T00:00:00Z" } }
+  }
+}

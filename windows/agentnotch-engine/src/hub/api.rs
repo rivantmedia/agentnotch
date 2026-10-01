@@ -599,8 +599,7 @@ impl Hub {
 
     /// Read-only account inspection; no hub needed.
     pub fn inspect_accounts(roots: &Roots, platform: &Platform) -> String {
-        let _ = (roots, platform);
-        "Account inspection isn't in this build yet.".to_owned()
+        crate::accounts::inspect::report(roots, platform.files.as_ref())
     }
 
     /// Removes this app's hooks from every folder it wrote (the

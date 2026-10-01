@@ -1,0 +1,19 @@
+{
+  "numStartups": 12,
+  "oauthAccount": {
+    "accountUuid": "5b1c2d3e-4f50-4a61-8b72-93a4b5c6d7e8",
+    "emailAddress": "sam.work@example.com",
+    "organizationUuid": "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+    "organizationName": "Example Works",
+    "organizationType": "claude_team",
+    "displayName": "Sam"
+  },
+  "cachedUsageUtilization": {
+    "accountUuid": "5b1c2d3e-4f50-4a61-8b72-93a4b5c6d7e8",
+    "fetchedAtMs": 1790000100000,
+    "utilization": {
+      "five_hour": { "utilization": 41, "resets_at": "2099-01-01T00:00:00Z", "note": "SENTINEL-NEVER-PRINTED" },
+      "seven_day": { "utilization": 63, "resets_at": "2099-01-05T00:00:00Z" }
+    }
+  }
+}

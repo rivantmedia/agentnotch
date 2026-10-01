@@ -320,3 +320,176 @@ fn native_style_matches_the_build() {
     let native = PathStyle::native();
     assert_eq!(native == PathStyle::Windows, cfg!(windows));
 }
+
+// ---- is_ancestor, is_absolute, resolve, names_equal, name_has_prefix ----
+
+#[test]
+fn posix_is_ancestor_is_strict_and_case_sensitive() {
+    let p = mac();
+    assert!(p.is_ancestor("/Users/me", "/Users/me/.claude"));
+    assert!(p.is_ancestor("~", "/Users/me/.claude"));
+    // A path is not its own ancestor, and a longer name is not a child.
+    assert!(!p.is_ancestor("/Users/me", "/Users/me"));
+    assert!(!p.is_ancestor("/Users/me", "/Users/meadow"));
+    assert!(!p.is_ancestor("/Users/me/.claude", "/Users/me"));
+    assert!(!p.is_ancestor("/Users/Me", "/Users/me/.claude"));
+    // The root holds every other path.
+    assert!(p.is_ancestor("/", "/Users"));
+    assert!(!p.is_ancestor("/", "/"));
+}
+
+#[test]
+fn windows_is_ancestor_is_strict_and_per_drive() {
+    let p = win();
+    assert!(p.is_ancestor(r"C:\Users\me", r"c:\USERS\me\.claude"));
+    assert!(p.is_ancestor(r"C:\Users\me", "C:/Users/me/.claude"));
+    assert!(p.is_ancestor(r"~", r"C:\Users\me\.claude"));
+    assert!(!p.is_ancestor(r"C:\Users\me", r"C:\Users\ME"));
+    assert!(!p.is_ancestor(r"C:\Users\me", r"C:\Users\meadow"));
+    assert!(!p.is_ancestor(r"C:\Users\me", r"D:\Users\me\.claude"));
+    // A drive root or a share root holds everything on it, and only that.
+    assert!(p.is_ancestor(r"C:\", r"C:\Users"));
+    assert!(!p.is_ancestor(r"C:\", r"D:\Users"));
+    assert!(!p.is_ancestor(r"C:\", r"C:\"));
+    assert!(p.is_ancestor(r"\\server\share", r"\\SERVER\Share\me\.claude"));
+    assert!(!p.is_ancestor(r"\\server\share", r"\\server\other\me"));
+    assert!(!p.is_ancestor(r"\\server\share", r"C:\server\share\me"));
+}
+
+#[test]
+fn posix_is_absolute() {
+    let p = mac();
+    for path in ["/", "/Users/me", "/a/../b"] {
+        assert!(p.is_absolute(path), "{path:?}");
+    }
+    for path in ["", "x", "./x", "../x", "~", "~/x", r"C:\x"] {
+        assert!(!p.is_absolute(path), "{path:?}");
+    }
+}
+
+#[test]
+fn windows_is_absolute_needs_a_drive_or_share() {
+    let p = win();
+    for path in [
+        r"C:\",
+        r"C:\x",
+        "c:/x/y",
+        r"\\server\share",
+        r"\\server\share\x",
+        "//server/share/x",
+        r"\\?\C:\x",
+        r"\\?\UNC\server\share\x",
+    ] {
+        assert!(p.is_absolute(path), "{path:?}");
+    }
+    // Drive-relative (`C:x`), root-relative (`\x`) and plain relative paths
+    // depend on the current folder or drive.
+    for path in [
+        "", "x", r".\x", r"..\x", "C:", "C:x", r"C:x\y", r"\x", "/x", r"\", "~",
+    ] {
+        assert!(!p.is_absolute(path), "{path:?}");
+    }
+}
+
+#[test]
+fn posix_resolve() {
+    let p = mac();
+    // Relative: joined onto the base, `..` climbing out of it.
+    assert_eq!(
+        p.resolve("/Users/me/.claude", "shared"),
+        "/Users/me/.claude/shared"
+    );
+    assert_eq!(
+        p.resolve("/Users/me/.claude", "../.claude-shared/projects"),
+        "/Users/me/.claude-shared/projects"
+    );
+    assert_eq!(
+        p.resolve("/Users/me/.claude", "./x/"),
+        "/Users/me/.claude/x"
+    );
+    // Absolute: itself, normalised.
+    assert_eq!(p.resolve("/Users/me/.claude", "/opt/x/../y/"), "/opt/y");
+    assert_eq!(
+        p.resolve("/Users/me/.claude", "~/y"),
+        "/Users/me/.claude/~/y"
+    );
+}
+
+#[test]
+fn windows_resolve_on_a_drive() {
+    let p = win();
+    let base = r"D:\Data\.claude";
+    // Relative.
+    assert_eq!(p.resolve(base, "shared"), r"D:\Data\.claude\shared");
+    assert_eq!(
+        p.resolve(base, r"..\.claude-shared\projects"),
+        r"D:\Data\.claude-shared\projects"
+    );
+    assert_eq!(p.resolve(base, "../x/"), r"D:\Data\x");
+    // Absolute: itself, on whatever drive it names.
+    assert_eq!(p.resolve(base, r"C:\Users\me\x\..\y"), r"C:\Users\me\y");
+    assert_eq!(p.resolve(base, "e:/z"), r"E:\z");
+    assert_eq!(p.resolve(base, r"\\server\share\x"), r"\\server\share\x");
+    // Root-relative: the base's drive, not the current one.
+    assert_eq!(p.resolve(base, r"\shared\x"), r"D:\shared\x");
+    assert_eq!(p.resolve(base, "/shared/x/"), r"D:\shared\x");
+    assert_eq!(p.resolve(r"c:\Users\me", r"\x"), r"C:\x");
+    // Drive-relative (`C:x`) is not absolute: it is joined like any relative
+    // path, never taken as `C:\x`.
+    assert_ne!(p.resolve(base, "C:x"), r"C:\x");
+}
+
+#[test]
+fn windows_resolve_on_a_unc_share() {
+    let p = win();
+    let base = r"\\server\share\me\.claude";
+    assert_eq!(
+        p.resolve(base, "shared"),
+        r"\\server\share\me\.claude\shared"
+    );
+    assert_eq!(p.resolve(base, r"..\x"), r"\\server\share\me\x");
+    // Root-relative: the share's root.
+    assert_eq!(p.resolve(base, r"\shared\x"), r"\\server\share\shared\x");
+    assert_eq!(p.resolve(r"\\server\share", r"\x"), r"\\server\share\x");
+    // Absolute stays put, even onto another drive.
+    assert_eq!(p.resolve(base, r"C:\x"), r"C:\x");
+    assert_eq!(p.resolve(base, r"\\other\share\x"), r"\\other\share\x");
+    // Cannot climb out of the share.
+    assert_eq!(p.resolve(base, r"..\..\..\..\x"), r"\\server\share\x");
+}
+
+#[test]
+fn names_equal_folds_case_on_windows_only() {
+    let m = mac();
+    assert!(m.names_equal(".claude", ".claude"));
+    assert!(!m.names_equal(".claude", ".Claude"));
+    assert!(!m.names_equal("a", "b"));
+    assert!(m.names_equal("", ""));
+    let w = win();
+    assert!(w.names_equal(".claude", ".claude"));
+    assert!(w.names_equal(".Claude-Work", ".claude-work"));
+    assert!(w.names_equal("PROJECTS", "projects"));
+    assert!(!w.names_equal(".claude", ".claude-work"));
+    assert!(!w.names_equal("a", ""));
+}
+
+#[test]
+fn name_has_prefix_folds_case_on_windows_only() {
+    let m = mac();
+    assert!(m.name_has_prefix(".claude-work", ".claude-"));
+    assert!(m.name_has_prefix(".claude-", ".claude-"));
+    assert!(!m.name_has_prefix(".Claude-work", ".claude-"));
+    assert!(!m.name_has_prefix(".claude", ".claude-"));
+    assert!(!m.name_has_prefix("", ".claude-"));
+    let w = win();
+    assert!(w.name_has_prefix(".claude-work", ".claude-"));
+    assert!(w.name_has_prefix(".CLAUDE-Work", ".claude-"));
+    assert!(w.name_has_prefix(".claude-", ".CLAUDE-"));
+    assert!(!w.name_has_prefix(".claude", ".claude-"));
+    assert!(!w.name_has_prefix("claude-work", ".claude-"));
+    assert!(!w.name_has_prefix("", ".claude-"));
+    // A name whose byte at the prefix length is inside a character is not
+    // a match, and must not panic.
+    assert!(!w.name_has_prefix("é-work", ".claude-"));
+    assert!(!m.name_has_prefix(".clau\u{e9}de", ".claude-"));
+}
