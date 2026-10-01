@@ -1,0 +1,163 @@
+{
+  "scenario": "goal",
+  "about": "A blocking Stop hook (/goal) continues the turn after our Stop: the session reads working throughout and is done once, at the end.",
+  "python": "scenario_goal",
+  "sessions": [
+    {
+      "name": "goal",
+      "account": "personal",
+      "cwd": "/Users/dev/@org/api-server",
+      "title": "Make every test pass",
+      "prefix": "6888"
+    }
+  ],
+  "steps": [
+    {
+      "op": "hook",
+      "event": "UserPromptSubmit",
+      "session": "goal",
+      "fields": {
+        "prompt": "/goal all tests green",
+        "source": "user"
+      }
+    },
+    {
+      "op": "transcript",
+      "session": "goal",
+      "lines": [
+        {
+          "assistant_turn": {
+            "text": "First pass done; 2 tests still fail.",
+            "context_tokens": 70000
+          }
+        }
+      ]
+    },
+    {
+      "op": "hook",
+      "event": "Stop",
+      "session": "goal",
+      "fields": {
+        "last_assistant_message": "First pass done; 2 tests still fail.",
+        "background_tasks": []
+      },
+      "mirror": false
+    },
+    {
+      "op": "expect",
+      "session": "goal",
+      "state": "working",
+      "completion_pending": true,
+      "ready_for_review_news": 0
+    },
+    {
+      "op": "advance",
+      "advance_ms": 1500
+    },
+    {
+      "op": "expect",
+      "session": "goal",
+      "state": "working",
+      "completion_pending": true,
+      "ready_for_review_news": 0
+    },
+    {
+      "op": "transcript",
+      "session": "goal",
+      "lines": [
+        {
+          "assistant_turn": {
+            "text": "Fixing the remaining two.",
+            "context_tokens": 71000,
+            "tool_uses": [
+              {
+                "id": "toolu_goal_01",
+                "name": "Bash",
+                "input": {
+                  "command": "npm test -- --only-failed"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "op": "hook",
+      "event": "PreToolUse",
+      "session": "goal",
+      "fields": {
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "npm test -- --only-failed"
+        },
+        "tool_use_id": "toolu_goal_01"
+      }
+    },
+    {
+      "op": "expect",
+      "session": "goal",
+      "state": "working",
+      "completion_pending": false,
+      "ready_for_review_news": 0
+    },
+    {
+      "op": "hook",
+      "event": "PostToolUse",
+      "session": "goal",
+      "fields": {
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "npm test -- --only-failed"
+        },
+        "tool_use_id": "toolu_goal_01",
+        "tool_response": {
+          "stdout": "all green"
+        }
+      }
+    },
+    {
+      "op": "transcript",
+      "session": "goal",
+      "lines": [
+        {
+          "assistant_turn": {
+            "text": "All tests pass.",
+            "context_tokens": 72000
+          }
+        }
+      ]
+    },
+    {
+      "op": "hook",
+      "event": "Stop",
+      "session": "goal",
+      "fields": {
+        "last_assistant_message": "All tests pass.",
+        "background_tasks": [],
+        "stop_hook_active": true
+      }
+    },
+    {
+      "op": "advance",
+      "advance_ms": 1500
+    },
+    {
+      "op": "expect",
+      "session": "goal",
+      "state": "ready_for_review",
+      "last_assistant_message": "All tests pass.",
+      "ready_for_review_news": 1
+    },
+    {
+      "op": "advance",
+      "advance_ms": 5000
+    },
+    {
+      "op": "expect",
+      "session": "goal",
+      "state": "ready_for_review",
+      "ready_for_review_news": 1
+    }
+  ]
+}

@@ -1,0 +1,137 @@
+{
+  "scenario": "review",
+  "about": "A turn ends ready for review; late events after the Stop must not bring it back to working.",
+  "python": "scenario_review",
+  "sessions": [
+    {
+      "name": "rev",
+      "account": "personal",
+      "cwd": "/Users/dev/@org/api-server",
+      "title": "Fix flaky login test",
+      "prefix": "d444"
+    }
+  ],
+  "steps": [
+    {
+      "op": "hook",
+      "event": "UserPromptSubmit",
+      "session": "rev",
+      "fields": {
+        "prompt": "the login test is flaky, fix it",
+        "source": "user"
+      }
+    },
+    {
+      "op": "transcript",
+      "session": "rev",
+      "lines": [
+        {
+          "assistant_turn": {
+            "text": "Replacing the sleep with an explicit wait.",
+            "context_tokens": 64000,
+            "tool_uses": [
+              {
+                "id": "toolu_rev_01",
+                "name": "Edit",
+                "input": {
+                  "file_path": "/Users/dev/@org/api-server/tests/login.test.ts",
+                  "old_string": "sleep(100)",
+                  "new_string": "await ready()"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "op": "hook",
+      "event": "PreToolUse",
+      "session": "rev",
+      "fields": {
+        "tool_name": "Edit",
+        "tool_input": {
+          "file_path": "/Users/dev/@org/api-server/tests/login.test.ts",
+          "old_string": "sleep(100)",
+          "new_string": "await ready()"
+        },
+        "tool_use_id": "toolu_rev_01"
+      }
+    },
+    {
+      "op": "hook",
+      "event": "PostToolUse",
+      "session": "rev",
+      "fields": {
+        "tool_name": "Edit",
+        "tool_input": {
+          "file_path": "/Users/dev/@org/api-server/tests/login.test.ts",
+          "old_string": "sleep(100)",
+          "new_string": "await ready()"
+        },
+        "tool_use_id": "toolu_rev_01",
+        "tool_response": {
+          "filePath": "/Users/dev/@org/api-server/tests/login.test.ts"
+        }
+      }
+    },
+    {
+      "op": "transcript",
+      "session": "rev",
+      "lines": [
+        {
+          "assistant_turn": {
+            "text": "The login test now waits for readiness instead of sleeping.",
+            "context_tokens": 66000
+          }
+        }
+      ]
+    },
+    {
+      "op": "hook",
+      "event": "Stop",
+      "session": "rev",
+      "fields": {
+        "last_assistant_message": "Fixed the flaky login test: it now awaits ready() instead of sleeping 100 ms. 3/3 runs green.",
+        "background_tasks": [],
+        "stop_hook_active": false
+      }
+    },
+    {
+      "op": "hook",
+      "event": "PostToolUse",
+      "session": "rev",
+      "fields": {
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "npm test"
+        },
+        "tool_use_id": "toolu_late_bg",
+        "tool_response": {}
+      }
+    },
+    {
+      "op": "hook",
+      "event": "Notification",
+      "session": "rev",
+      "fields": {
+        "notification_type": "idle_prompt",
+        "message": "Claude is waiting for your input"
+      }
+    },
+    {
+      "op": "advance",
+      "advance_ms": 1500
+    },
+    {
+      "op": "expect",
+      "session": "rev",
+      "state": "ready_for_review",
+      "bucket": "ready_for_review",
+      "last_assistant_message_starts_with": "Fixed the flaky login test",
+      "ready_for_review_news": 1,
+      "review_file": true,
+      "review_file_message_starts_with": "Fixed the flaky login test"
+    }
+  ]
+}

@@ -1,0 +1,95 @@
+{
+  "scenario": "statusline",
+  "about": "Status lines give context % and a model to existing sessions, and track one known only from its status line.",
+  "python": "scenario_statusline",
+  "after": [
+    "permission",
+    "question",
+    "tasks"
+  ],
+  "sessions": [
+    {
+      "name": "stat",
+      "account": "personal",
+      "cwd": "/Users/dev/notes",
+      "title": "Weekly notes",
+      "prefix": "f666"
+    }
+  ],
+  "steps": [
+    {
+      "op": "status_line",
+      "session": "perm",
+      "used_5h": 23,
+      "used_7d": 41,
+      "context_pct": 21,
+      "cost": 0.42
+    },
+    {
+      "op": "expect",
+      "session": "perm",
+      "context_pct": 21.0,
+      "model": "Opus 4.5"
+    },
+    {
+      "op": "status_line",
+      "session": "ques",
+      "used_5h": 67,
+      "used_7d": 55,
+      "context_pct": 33,
+      "cost": 1.1
+    },
+    {
+      "op": "expect",
+      "session": "ques",
+      "context_pct": 33.0,
+      "model": "Opus 4.5"
+    },
+    {
+      "op": "status_line",
+      "session": "tasks",
+      "used_5h": 91,
+      "used_7d": 80,
+      "context_pct": 44,
+      "cost": 2.35
+    },
+    {
+      "op": "expect",
+      "session": "tasks",
+      "context_pct": 44.0,
+      "model": "Opus 4.5"
+    },
+    {
+      "op": "status_line",
+      "session": "stat",
+      "used_5h": 12,
+      "used_7d": 40,
+      "context_pct": 8,
+      "cost": 0.05
+    },
+    {
+      "op": "expect",
+      "session": "stat",
+      "state": "idle",
+      "phase": "idle",
+      "context_pct": 8.0,
+      "tracked": true
+    },
+    {
+      "op": "registry",
+      "session": "stat",
+      "status": "idle"
+    },
+    {
+      "op": "advance",
+      "advance_ms": 3500
+    },
+    {
+      "op": "expect",
+      "session": "stat",
+      "state": "idle",
+      "phase": "idle",
+      "registry_status": "idle"
+    }
+  ]
+}

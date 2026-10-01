@@ -1,0 +1,57 @@
+{
+  "scenario": "registry",
+  "about": "A VS Code session the hooks never reported shows from its registry file, blocked on a dialog; a background session is ignored.",
+  "python": "scenario_registry",
+  "sessions": [
+    {
+      "name": "reg",
+      "account": "work",
+      "cwd": "/Users/dev/work/mobile",
+      "title": "Upgrade React Native",
+      "prefix": "9777"
+    },
+    {
+      "name": "regbg",
+      "account": "work",
+      "cwd": "/Users/dev/work/mobile",
+      "title": "Nightly job",
+      "prefix": "9777"
+    }
+  ],
+  "steps": [
+    {
+      "op": "registry",
+      "session": "reg",
+      "status": "waiting",
+      "waiting_for": "permission prompt",
+      "entrypoint": "claude-vscode",
+      "name": "Upgrade React Native",
+      "name_source": "user"
+    },
+    {
+      "op": "registry",
+      "session": "regbg",
+      "status": "busy",
+      "kind": "bg"
+    },
+    {
+      "op": "advance",
+      "advance_ms": 3500
+    },
+    {
+      "op": "expect",
+      "session": "reg",
+      "state": "needs_you",
+      "reason": "dialog:permission prompt",
+      "phase": "waiting_for_input",
+      "title": "Upgrade React Native",
+      "account": "work",
+      "registry_status": "waiting"
+    },
+    {
+      "op": "expect",
+      "session": "regbg",
+      "tracked": false
+    }
+  ]
+}

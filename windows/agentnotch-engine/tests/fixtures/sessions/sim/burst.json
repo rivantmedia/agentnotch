@@ -1,0 +1,79 @@
+{
+  "scenario": "burst",
+  "about": "30 sessions x 4 turns as fast as possible (throughput: every one must end ready for review).",
+  "python": "scenario_burst",
+  "hook_latency_ms": 0,
+  "sessions": [
+    {
+      "name": "burst",
+      "count": 30,
+      "accounts": [
+        "work",
+        "personal"
+      ],
+      "cwd": "/Users/dev/burst/p{i}",
+      "title": "Burst {i}",
+      "prefix": "4000"
+    }
+  ],
+  "steps": [
+    {
+      "op": "each",
+      "group": "burst",
+      "turns": 4,
+      "steps": [
+        {
+          "op": "hook",
+          "event": "UserPromptSubmit",
+          "fields": {
+            "prompt": "turn {turn}",
+            "source": "user"
+          }
+        },
+        {
+          "op": "hook",
+          "event": "PreToolUse",
+          "fields": {
+            "tool_name": "Bash",
+            "tool_input": {
+              "command": "true"
+            },
+            "tool_use_id": "toolu_burst{i}_{turn}"
+          }
+        },
+        {
+          "op": "hook",
+          "event": "PostToolUse",
+          "fields": {
+            "tool_name": "Bash",
+            "tool_input": {
+              "command": "true"
+            },
+            "tool_use_id": "toolu_burst{i}_{turn}",
+            "tool_response": {}
+          }
+        },
+        {
+          "op": "hook",
+          "event": "Stop",
+          "fields": {
+            "last_assistant_message": "turn {turn} done",
+            "background_tasks": []
+          }
+        }
+      ]
+    },
+    {
+      "op": "advance",
+      "advance_ms": 10000
+    },
+    {
+      "op": "expect",
+      "group": "burst",
+      "count": 30,
+      "state": "ready_for_review",
+      "last_assistant_message": "turn 3 done",
+      "held": 0
+    }
+  ]
+}

@@ -4,6 +4,8 @@
 //! `SecureFiles` (links and file identities a Windows runner can't create).
 #![allow(dead_code)]
 
+pub mod frames;
+
 use agentnotch_engine::core::atomic::StdSecureFiles;
 use agentnotch_engine::core::time::iso8601;
 use agentnotch_engine::platform::{Expect, FileIdentity, SecureFiles, WriteMode, WriteResult};
