@@ -181,6 +181,8 @@ NAME_OK=(
     'windows/codenotch/src/agentnotch/engine.rs:const UPSTREAM_NAME: &str = "Codenotch";'
     # Windows: the panel's note about the official app's own hooks (they stay; Settings removes them).
     "windows/codenotch/ui/agentnotch/panel.js:var OFFICIAL_APP = 'Codenotch';"
+    # Windows: Settings' "Remove Codenotch's hooks" names the official app whose hooks it removes.
+    "windows/codenotch/ui/agentnotch/settings.js:var OFFICIAL_APP = 'Codenotch';"
 )
 name_ok() {
     local file="$1" text="$2" ok okFile okText

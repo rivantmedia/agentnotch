@@ -1,5 +1,7 @@
 /* Agent Notch's additions to upstream's Settings page (DESIGN-WIN §5.4). Loaded by seam WSS5,
-   after the page's own <style>. */
+   after the page's own <style>, so these rules sit on upstream's tokens (--text, --text2, --text3,
+   --accent, --group, --line, --seg-bg, --btn, --danger…) and blocks (.sec .group .item .switch
+   .btn .link #toast). The fork's pane is scoped under #pane-claude, its classes prefixed an-. */
 
 /* The Claude Code tab's badge, beside upstream's blue, indigo and grey ones: Claude's orange. */
 .badge.b-claude { background: linear-gradient(#e8916f, #c96442); }
@@ -10,3 +12,112 @@
 .acct-sub:has([data-remote="hooks"]) + .acct-detail { display: none; }
 
 #pane-claude .an-caption { color: var(--text2); }
+
+/* ---- tones: the Mac's review green, amber and critical red, readable on both appearances ---- */
+#pane-claude {
+  --an-ok: #30d158; --an-warning: #ffb340; --an-critical: #ff6961;
+  --an-mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
+}
+:root[data-theme="light"] #pane-claude { --an-ok: #1e7f37; --an-warning: #a35c00; --an-critical: #c42b1c; }
+
+#pane-claude .an-tone-ok { color: var(--an-ok); }
+#pane-claude .an-tone-warning { color: var(--an-warning); }
+#pane-claude .an-tone-critical { color: var(--an-critical); }
+#pane-claude .an-tone-neutral { color: var(--text2); }
+#pane-claude .an-tertiary { color: var(--text3); }
+
+/* ---- the regions: each holds its .sec and .group, spaced as upstream's panes are ---- */
+#pane-claude > .an-region > .group:first-child { margin-top: 14px; }
+#pane-claude > .an-region:first-child > .group:first-child { margin-top: 6px; }
+
+/* ---- text pieces ---- */
+#pane-claude .an-cap { font-size: 12px; color: var(--text2); overflow-wrap: anywhere; }
+#pane-claude .an-cap.an-inline { display: inline; white-space: nowrap; flex: none; }
+#pane-claude .an-cap.an-tone-ok { color: var(--an-ok); }
+#pane-claude .an-cap.an-tone-warning { color: var(--an-warning); }
+#pane-claude .an-cap.an-tone-critical { color: var(--an-critical); }
+#pane-claude .an-cap.an-tertiary { color: var(--text3); }
+#pane-claude .an-pre { white-space: pre-wrap; }
+#pane-claude .an-mono { font-family: var(--an-mono); font-size: 12px; }
+#pane-claude .an-select { user-select: text; cursor: text; }
+#pane-claude .an-title { font-size: 14.5px; font-weight: 600; }
+#pane-claude .an-title-small { font-size: 13.5px; }
+#pane-claude .an-callout { font-size: 12.5px; }
+#pane-claude .an-footer { margin: 8px 12px 0; font-size: 12px; color: var(--text2); overflow-wrap: anywhere; }
+#pane-claude .an-note { overflow-wrap: anywhere; }
+#pane-claude .item.cap.an-tone-critical { color: var(--an-critical); }
+
+/* One line, cut with an ellipsis; .an-head keeps a path's end (its folder or hash) instead of
+   its start: the box runs right to left, the .an-bidi inside keeps the text itself in order. */
+#pane-claude [data-an-clip] { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#pane-claude .an-head { direction: rtl; text-align: left; }
+#pane-claude .an-head > .an-bidi { direction: ltr; unicode-bidi: isolate; }
+
+/* ---- rows, columns and buttons ---- */
+#pane-claude .an-col { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
+#pane-claude .an-row { display: flex; align-items: center; gap: 6px; }
+#pane-claude .an-grow { flex: 1 1 auto; min-width: 0; }
+#pane-claude .an-btns { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+#pane-claude .an-btns.an-right { justify-content: flex-end; }
+#pane-claude .an-stack { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
+#pane-claude .item.an-wrap { flex-wrap: wrap; row-gap: 8px; }
+#pane-claude .item > .an-value { min-width: 0; flex: 0 1 auto; text-align: right; color: var(--text2); }
+#pane-claude .btn:disabled { opacity: .45; }
+#pane-claude .btn:disabled:hover { background: var(--btn); }
+/* "Turn on": emphasised, never the default button (it carries data-an-noenter). */
+#pane-claude .btn.an-primary { background: var(--accent); color: var(--on-accent); }
+#pane-claude .btn.an-primary:hover:not(:disabled) { filter: brightness(1.08); }
+#pane-claude .btn.an-danger { background: var(--danger-bg); color: var(--danger); }
+#pane-claude .an-input {
+  font: inherit; font-size: 13px; color: var(--text); background: var(--seg-bg);
+  border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; min-width: 0; user-select: text;
+}
+#pane-claude .an-input:focus { outline: 2px solid var(--accent); outline-offset: 0; }
+#pane-claude .an-input::placeholder { color: var(--text3); }
+
+/* ---- the consent card and the scope notice ---- */
+#pane-claude .an-files {
+  margin: 0; padding: 6px 10px; list-style: none; border-radius: 6px; background: var(--seg-bg);
+  font-family: var(--an-mono); font-size: 12px; user-select: text; overflow-wrap: anywhere;
+}
+#pane-claude .an-files-small { font-size: 11.5px; }
+#pane-claude .an-file + .an-file { margin-top: 2px; }
+#pane-claude .an-file-acct { color: var(--text2); }
+#pane-claude .an-inline-card { display: block; padding: 0; }
+#pane-claude .an-inline-card > .group { border: 0; border-radius: 0; box-shadow: none; background: transparent; }
+
+/* ---- accounts (AccountsSection.swift) ---- */
+#pane-claude .an-acct { padding: 10px 12px; }
+#pane-claude .an-acct-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 24px; }
+#pane-claude .an-acct-name { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1 1 auto; }
+#pane-claude .an-acct-name .an-name { font-weight: 600; }
+#pane-claude .an-acct.off .an-name { color: var(--text2); }
+#pane-claude .an-acct-name .an-input { flex: 1 1 auto; }
+#pane-claude .an-sdot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+#pane-claude .an-sdot.an-faded { opacity: .45; }
+#pane-claude .an-ring { display: flex; align-items: center; gap: 8px; flex: none; }
+#pane-claude .an-acct-body { margin: 4px 0 0 17px; display: flex; flex-direction: column; align-items: stretch; gap: 4px; }
+#pane-claude .an-folders { display: flex; flex-direction: column; gap: 2px; margin: 2px 0; padding: 6px 8px; border-radius: 6px; background: var(--seg-bg); }
+#pane-claude .an-folder { display: flex; align-items: baseline; gap: 8px; font-size: 12px; min-width: 0; }
+#pane-claude .an-folder-title { flex: 0 1 auto; }
+#pane-claude .an-folder-role { flex: 0 1 auto; color: var(--text3); }
+#pane-claude .an-folder-state { flex: none; margin-left: auto; padding-left: 4px; color: var(--text2); }
+#pane-claude .an-folders .an-sub { margin-left: 12px; font-size: 11.5px; }
+#pane-claude .an-stale { color: var(--an-warning); }
+#pane-claude .an-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0; }
+#pane-claude .an-chip {
+  font-size: 11.5px; font-weight: 500; padding: 1px 7px; border-radius: 999px; white-space: nowrap;
+  background: color-mix(in srgb, currentColor 14%, transparent); max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+}
+#pane-claude .an-track { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; margin-top: 4px; }
+#pane-claude .an-acct-body > .an-btns { margin-top: 4px; }
+#pane-claude .an-add { padding: 9px 12px; display: flex; flex-direction: column; gap: 6px; }
+#pane-claude .an-command { padding: 6px 8px; border-radius: 6px; background: var(--seg-bg); overflow-wrap: anywhere; }
+#pane-claude .an-suggestion .an-secondary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- hooks and status line ---- */
+#pane-claude .an-hooks .an-footnote { color: var(--text3); }
+
+/* Snapshot scenes and Windows' "Animation effects" off: the switch knob does not slide. */
+html.an-static #pane-claude .switch::after { transition: none; }
+@media (prefers-reduced-motion: reduce) { #pane-claude .switch::after { transition: none; } }

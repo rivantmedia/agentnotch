@@ -774,6 +774,46 @@
           }
         }
       ]
+    },
+    {
+      "name": "settings-full",
+      "page": "settings.html",
+      "global": "agentnotchSettings",
+      "scene": "settings-full",
+      "width": 680,
+      "height": 1500
+    },
+    {
+      "name": "settings-first-run",
+      "page": "settings.html",
+      "global": "agentnotchSettings",
+      "scene": "settings-first-run",
+      "width": 680,
+      "height": 1500
+    },
+    {
+      "name": "settings-scope-notice",
+      "page": "settings.html",
+      "global": "agentnotchSettings",
+      "scene": "settings-scope-notice",
+      "width": 680,
+      "height": 1500
+    },
+    {
+      "name": "settings-parallel-profiles",
+      "page": "settings.html",
+      "global": "agentnotchSettings",
+      "scene": "settings-parallel-profiles",
+      "width": 680,
+      "height": 1900
+    },
+    {
+      "name": "settings-unnamed-accounts",
+      "page": "settings.html",
+      "global": "agentnotchSettings",
+      "scene": "settings-unnamed-accounts",
+      "width": 680,
+      "height": 1700
     }
   ]
 }
