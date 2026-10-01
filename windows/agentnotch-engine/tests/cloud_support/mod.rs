@@ -389,6 +389,7 @@ pub struct AssistantLine {
     tool_use: bool,
     sidechain: bool,
     cwd: String,
+    text: String,
 }
 
 impl AssistantLine {
@@ -424,8 +425,14 @@ impl AssistantLine {
         self
     }
 
+    /// What the reply says (default "Done.").
+    pub fn text(mut self, text: &str) -> Self {
+        self.text = text.to_owned();
+        self
+    }
+
     pub fn line(self) -> String {
-        let mut content = vec![serde_json::json!({"type": "text", "text": "Done."})];
+        let mut content = vec![serde_json::json!({"type": "text", "text": self.text})];
         if self.tool_use {
             content.push(serde_json::json!({
                 "type": "tool_use", "id": format!("toolu_{}", self.id), "name": "Bash",
@@ -477,6 +484,7 @@ impl Lines {
             tool_use: false,
             sidechain: false,
             cwd: "/Users/me/code/app".to_owned(),
+            text: "Done.".to_owned(),
         }
     }
 
