@@ -1,0 +1,14 @@
+{
+  "_about": "Fake Messages API turns for the plan-mode run of real-claude.ps1 (scenario 4): an ExitPlanMode the panel approves.",
+  "apiKey": "fake-key-not-a-secret",
+  "turns": [
+    {
+      "promptIncludes": "[plan]",
+      "content": [
+        { "type": "tool_use", "name": "ExitPlanMode", "input": { "plan": "1. Create the marker file\n2. Check that it exists" } }
+      ]
+    }
+  ],
+  "afterToolResult": [{ "type": "text", "text": "Plan approved; done." }],
+  "passiveText": "ok"
+}

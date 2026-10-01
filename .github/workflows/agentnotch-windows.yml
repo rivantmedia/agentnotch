@@ -100,6 +100,10 @@ jobs:
     # no environment).
     environment: ${{ inputs.release && 'windows-signing' || '' }}
     timeout-minutes: 90
+    # For the real-claude job: the installer it downloads from this run's artifact.
+    outputs:
+      version: ${{ steps.installer.outputs.version }}
+      name: ${{ steps.installer.outputs.name }}
     defaults:
       run:
         shell: pwsh
@@ -307,3 +311,57 @@ jobs:
         if: ${{ !inputs.release }}
         run: |
           "Unsigned, no update feed (built from source). SmartScreen: More info, then Run anyway. Never attach it to a release." >> $env:GITHUB_STEP_SUMMARY
+
+  # The installed app against the real, pinned Claude Code (Maintainer decision Q3): the ONE
+  # place real Claude Code ever runs, on a fresh runner, inside a temporary profile, with a fake
+  # key and a fake Messages API on 127.0.0.1, its executable firewalled from everything but
+  # loopback; npm's download of the pinned package is the only network use. No secret reaches
+  # this job. Never part of a release build. While the realClaude gate of smoke/gates.json is
+  # closed it prints a notice and installs nothing. scripts/smoke/real-claude.ps1 says what it
+  # proves; its job summary records exec-form evidence for the facts file.
+  real-claude:
+    if: ${{ github.repository != 'vinzdg/codenotch' && !inputs.release }}
+    needs: build
+    name: Real Claude Code (hermetic)
+    runs-on: windows-2025
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: windows
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Gate
+        id: gate
+        run: ./scripts/smoke/real-claude.ps1 -GateOnly
+
+      - uses: actions/setup-node@v6
+        if: ${{ steps.gate.outputs.open == 'true' }}
+        with:
+          node-version: 22
+
+      - uses: actions/download-artifact@v8
+        if: ${{ steps.gate.outputs.open == 'true' }}
+        with:
+          name: AgentNotch-Setup-${{ needs.build.outputs.version }}-${{ github.sha }}
+          path: windows/dl
+
+      - name: Run the pinned Claude Code against the installed app
+        if: ${{ steps.gate.outputs.open == 'true' }}
+        env:
+          INSTALLER: dl\${{ needs.build.outputs.name }}
+        run: |
+          ./scripts/smoke/real-claude.ps1 -Installer $env:INSTALLER -Artifacts out\real-claude
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Upload the fake API's logs, Claude Code's events and the app's logs
+        if: ${{ always() && steps.gate.outputs.open == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: real-claude-${{ github.sha }}
+          path: windows/out/real-claude/**
+          retention-days: 14
+          if-no-files-found: warn

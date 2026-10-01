@@ -1,0 +1,43 @@
+{
+  "_about": "Fake Messages API turns for the headless run of real-claude.ps1 (scenarios 1-3). Each prompt carries a marker; the fake answers it with the matching turn, and a tool_result with afterToolResult.",
+  "apiKey": "fake-key-not-a-secret",
+  "turns": [
+    {
+      "promptIncludes": "[allow]",
+      "content": [
+        { "type": "text", "text": "Creating the first marker file." },
+        { "type": "tool_use", "name": "Bash", "input": { "command": "touch real-claude-allowed.txt", "description": "Create the first marker file" } }
+      ]
+    },
+    {
+      "promptIncludes": "[deny]",
+      "content": [
+        { "type": "tool_use", "name": "Bash", "input": { "command": "touch real-claude-denied.txt", "description": "Create the second marker file" } }
+      ]
+    },
+    {
+      "promptIncludes": "[question]",
+      "content": [
+        {
+          "type": "tool_use",
+          "name": "AskUserQuestion",
+          "input": {
+            "questions": [
+              {
+                "question": "Which colour should the marker be?",
+                "header": "Colour",
+                "multiSelect": false,
+                "options": [
+                  { "label": "Red", "description": "Warm" },
+                  { "label": "Blue", "description": "Cool" }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "afterToolResult": [{ "type": "text", "text": "Done." }],
+  "passiveText": "ok"
+}
