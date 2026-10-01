@@ -1,6 +1,6 @@
 //! Whether a terminal is visible (DESIGN-WIN §4.9; WP6): EnumWindows front to back, skipping
 //! cloaked and minimised windows, plus full-screen detection. Plain OS reads only: the engine's
-//! `control::looking` owns the Mac's 15 % grid rule and `covers_monitor`.
+//! `control::looking` owns the Mac's 15 % grid rule and `is_full_screen_window`.
 //!
 //! Rects are `(left, top, right, bottom)` in physical pixels, right and bottom exclusive, which
 //! is what `ScreenWindow` and `covers_monitor` expect. Nothing here changes the process's DPI
@@ -13,7 +13,7 @@ use std::ffi::c_void;
 
 use agentnotch_engine::control::hosts::{is_terminal_process, TopWindow};
 use agentnotch_engine::control::looking::{
-    any_terminal_uncovered, covers_monitor, ScreenWindow, MINIMUM_VISIBLE_FRACTION,
+    any_terminal_uncovered, is_full_screen_window, ScreenWindow, MINIMUM_VISIBLE_FRACTION,
 };
 use agentnotch_engine::platform::ProcessTable;
 use windows::core::BOOL;
@@ -29,8 +29,8 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClassNameW, GetLayeredWindowAttributes, GetWindow, GetWindowLongPtrW,
-    GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible, GWL_EXSTYLE, GW_OWNER,
-    LWA_ALPHA, WS_EX_LAYERED,
+    GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible, IsZoomed, GWL_EXSTYLE,
+    GW_OWNER, LWA_ALPHA, WS_EX_LAYERED, WS_EX_TOPMOST,
 };
 
 /// The desktop and the shell's own windows: they cover a whole monitor without being a
@@ -44,6 +44,8 @@ const SEE_THROUGH_ALPHA: u8 = 13;
 struct Walked {
     hwnd: HWND,
     pid: u32,
+    /// Minimised: on the taskbar, not on screen.
+    minimised: bool,
 }
 
 fn hwnd_of(window: u64) -> HWND {
@@ -54,17 +56,24 @@ fn window_id(hwnd: HWND) -> u64 {
     hwnd.0 as usize as u64
 }
 
-/// Every top-level window, front to back, that is visible, unowned, not minimised and not
-/// cloaked (another virtual desktop). The callback collects into the Vec behind `LPARAM`.
+/// Every top-level window, front to back, that is visible, unowned and not cloaked (another
+/// virtual desktop), minimised ones marked. The callback collects into the Vec behind `LPARAM`.
 fn walk() -> Vec<Walked> {
     unsafe extern "system" fn collect(hwnd: HWND, lparam: LPARAM) -> BOOL {
         // SAFETY: `lparam` is the address of the `Vec` `walk` owns for the whole EnumWindows call.
         let found = unsafe { &mut *(lparam.0 as *mut Vec<Walked>) };
         if is_candidate(hwnd) {
             let mut pid = 0u32;
-            // SAFETY: `pid` is a valid out pointer for the call.
-            unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
-            found.push(Walked { hwnd, pid });
+            // SAFETY: `pid` is a valid out pointer for the call; IsIconic is a plain query.
+            let minimised = unsafe {
+                GetWindowThreadProcessId(hwnd, Some(&mut pid));
+                IsIconic(hwnd).as_bool()
+            };
+            found.push(Walked {
+                hwnd,
+                pid,
+                minimised,
+            });
         }
         BOOL(1)
     }
@@ -83,7 +92,7 @@ fn walk() -> Vec<Walked> {
 fn is_candidate(hwnd: HWND) -> bool {
     // SAFETY: plain queries on a window handle; a window that died meanwhile just answers no.
     unsafe {
-        if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+        if !IsWindowVisible(hwnd).as_bool() {
             return false;
         }
         // A window with an owner is a dialog or tool window of another one.
@@ -119,6 +128,14 @@ fn class_name(hwnd: HWND) -> String {
 fn is_shell_window(hwnd: HWND) -> bool {
     let class = class_name(hwnd);
     SHELL_CLASSES.iter().any(|shell| class == *shell)
+}
+
+/// An always-on-top window: the notch itself, a picture-in-picture video, an overlay. The Mac
+/// counts only windows of the normal level (`layer == 0`), as terminals and as what covers them:
+/// the notch (340 x 460, transparent, always on top) would otherwise hide the terminal under it.
+fn is_topmost(hwnd: HWND) -> bool {
+    // SAFETY: a plain query; a window that died meanwhile answers 0 (not topmost).
+    unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOPMOST.0 != 0 }
 }
 
 fn is_see_through(hwnd: HWND) -> bool {
@@ -159,11 +176,16 @@ fn frame_bounds(hwnd: HWND) -> Option<(i32, i32, i32, i32)> {
     window_rect(window_id(hwnd))
 }
 
-/// The visible top-level windows, front to back, with their process's file name. Windows of
+/// The visible top-level windows, front to back, with their process's file name, then the
+/// minimised ones (front to back too): a host whose windows are all on the taskbar is still found,
+/// and raising its window restores it, while a window on screen is always preferred. Windows of
 /// processes the table does not know are left out.
 pub fn top_windows(table: &ProcessTable) -> Vec<TopWindow> {
-    walk()
+    let (shown, minimised): (Vec<Walked>, Vec<Walked>) =
+        walk().into_iter().partition(|walked| !walked.minimised);
+    shown
         .into_iter()
+        .chain(minimised)
         .filter_map(|walked| {
             let entry = table.get(walked.pid)?;
             Some(TopWindow {
@@ -177,11 +199,17 @@ pub fn top_windows(table: &ProcessTable) -> Vec<TopWindow> {
 
 /// The same walk as screen rectangles for the engine's grid rule. Unlike `top_windows`, a window
 /// of an unknown process stays in the list as a non-terminal: it still hides what lies behind it.
-/// The desktop and shell windows and see-through overlays are left out.
+/// Minimised windows, the desktop and shell windows, always-on-top windows (the Mac's normal
+/// level only) and see-through overlays are left out.
 pub fn screen_windows(table: &ProcessTable) -> Vec<ScreenWindow> {
     walk()
         .into_iter()
-        .filter(|walked| !is_shell_window(walked.hwnd) && !is_see_through(walked.hwnd))
+        .filter(|walked| {
+            !walked.minimised
+                && !is_shell_window(walked.hwnd)
+                && !is_topmost(walked.hwnd)
+                && !is_see_through(walked.hwnd)
+        })
         .filter_map(|walked| {
             let (left, top, right, bottom) = frame_bounds(walked.hwnd)?;
             let is_terminal = table
@@ -233,7 +261,9 @@ pub fn monitor_rect(window: u64) -> Option<(i32, i32, i32, i32)> {
 
 /// Whether the user is in something full screen: Windows says a full-screen app, a game or a
 /// presentation has the screen, or the foreground window (not the desktop or the shell) covers
-/// its monitor. `foreground` is the window id, 0 for none.
+/// its monitor as a full-screen app does (`is_full_screen_window`: a maximized window's frame
+/// overhangs the monitor once the taskbar hides itself, and that is no full-screen app).
+/// `foreground` is the window id, 0 for none.
 pub fn is_full_screen(foreground: u64) -> bool {
     // SAFETY: a plain query. An error (no answer) falls through to the geometry check.
     let state = unsafe { SHQueryUserNotificationState() };
@@ -246,8 +276,10 @@ pub fn is_full_screen(foreground: u64) -> bool {
     if foreground == 0 || is_shell_window(hwnd_of(foreground)) {
         return false;
     }
+    // SAFETY: a plain query; a window gone since answers false.
+    let maximized = unsafe { IsZoomed(hwnd_of(foreground)) }.as_bool();
     match (window_rect(foreground), monitor_rect(foreground)) {
-        (Some(window), Some(monitor)) => covers_monitor(window, monitor),
+        (Some(window), Some(monitor)) => is_full_screen_window(window, monitor, maximized),
         _ => false,
     }
 }

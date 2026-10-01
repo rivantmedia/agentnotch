@@ -183,3 +183,21 @@ pub fn covers_monitor(window: (i32, i32, i32, i32), monitor: (i32, i32, i32, i32
         && right >= m_right
         && bottom >= m_bottom
 }
+
+/// Whether the foreground window is a full-screen app by its geometry
+/// (`window` is its `GetWindowRect`, `maximized` its `IsZoomed`).
+///
+/// A maximized window with a frame overhangs its work area by the invisible
+/// resize border on every side, so with the taskbar set to hide itself it
+/// covers the whole monitor while still being an ordinary window with a
+/// title bar: counting it would silence every banner while any maximized
+/// window is in front. A full-screen app (a video, a browser's F11, a game
+/// in borderless mode) has no such border: its rectangle is the monitor's
+/// exactly, maximized or not.
+pub fn is_full_screen_window(
+    window: (i32, i32, i32, i32),
+    monitor: (i32, i32, i32, i32),
+    maximized: bool,
+) -> bool {
+    covers_monitor(window, monitor) && (!maximized || window == monitor)
+}

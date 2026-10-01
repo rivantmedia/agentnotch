@@ -4,7 +4,8 @@
 //! Terminal title vectors, `otherwiseOnlyASessionAloneInItsAppIsLookedAt`
 //! the editor and other-host vectors), plus new vectors for
 //! `any_terminal_uncovered` (the Mac's `TerminalVisibilityDetector`
-//! 15 % rule on a 5 x 5 grid), `covers_monitor` and `sessions_sharing`.
+//! 15 % rule on a 5 x 5 grid), `covers_monitor`, `is_full_screen_window`
+//! and `sessions_sharing`.
 //!
 //! Rectangles: `ScreenWindow` is (left, top, right, bottom), right and
 //! bottom exclusive; `covers_monitor` takes the same order as tuples.
@@ -19,8 +20,8 @@ mod control_support;
 
 use agentnotch_engine::control::hosts::is_terminal_process;
 use agentnotch_engine::control::looking::{
-    any_terminal_uncovered, covers_monitor, looking_at, looking_at_console, sessions_sharing,
-    ScreenWindow, MINIMUM_VISIBLE_FRACTION, VIEWED_DWELL,
+    any_terminal_uncovered, covers_monitor, is_full_screen_window, looking_at, looking_at_console,
+    sessions_sharing, ScreenWindow, MINIMUM_VISIBLE_FRACTION, VIEWED_DWELL,
 };
 use agentnotch_engine::platform::{ConsoleInfo, Foreground, HostApp, HostKind};
 use agentnotch_engine::runtime_types::ReactionContext;
@@ -707,6 +708,55 @@ fn a_monitor_off_the_origin_is_compared_where_it_is() {
 fn an_empty_monitor_is_covered_by_nothing() {
     assert!(!covers_monitor((0, 0, 100, 100), (0, 0, 0, 0)));
     assert!(!covers_monitor((0, 0, 100, 100), (50, 50, 50, 80)));
+}
+
+// ---- is_full_screen_window ----
+
+/// A maximized window with a frame overhangs the monitor by its resize
+/// border once the taskbar hides itself: it is an ordinary window, and
+/// counting it as full screen would silence every banner behind it.
+#[test]
+fn a_maximized_window_with_a_frame_is_not_full_screen() {
+    let monitor = (0, 0, 1920, 1080);
+    // Taskbar set to hide itself: the work area is the whole monitor.
+    assert!(!is_full_screen_window((-8, -8, 1928, 1088), monitor, true));
+    // Taskbar shown: the window stops above it.
+    assert!(!is_full_screen_window((-8, -8, 1928, 1040), monitor, true));
+    // On a second monitor, the same.
+    let second = (1920, 0, 4480, 1440);
+    assert!(!is_full_screen_window((1912, -8, 4488, 1448), second, true));
+}
+
+#[test]
+fn a_window_that_is_exactly_the_monitor_is_full_screen() {
+    let monitor = (0, 0, 1920, 1080);
+    // A video, a browser's F11, a borderless game: no frame at all.
+    assert!(is_full_screen_window(monitor, monitor, false));
+    // A borderless window maximized to the whole monitor looks the same.
+    assert!(is_full_screen_window(monitor, monitor, true));
+    let second = (1920, 0, 4480, 1440);
+    assert!(is_full_screen_window(second, second, false));
+    assert!(!is_full_screen_window(monitor, second, false));
+}
+
+#[test]
+fn an_unmaximized_window_larger_than_its_monitor_is_full_screen() {
+    let monitor = (0, 0, 1920, 1080);
+    // A borderless game stretched across two screens.
+    assert!(is_full_screen_window(
+        (-1920, 0, 1920, 1080),
+        monitor,
+        false
+    ));
+    assert!(is_full_screen_window((-8, -8, 1928, 1088), monitor, false));
+    // Short of the monitor by a pixel: an ordinary window.
+    assert!(!is_full_screen_window((0, 0, 1920, 1079), monitor, false));
+    assert!(!is_full_screen_window((0, 0, 1919, 1080), monitor, true));
+    assert!(!is_full_screen_window(
+        (0, 0, 100, 100),
+        (0, 0, 0, 0),
+        false
+    ));
 }
 
 // ---- Dwell ----

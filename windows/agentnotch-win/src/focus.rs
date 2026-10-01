@@ -280,6 +280,19 @@ fn open_in_editor(editor_exe: &Path, folder: &Path) -> FocusOutcome {
     if !editor_exe.is_absolute() || !editor_exe.is_file() {
         return FocusOutcome::Failed(format!("The editor {} wasn't found.", editor_exe.display()));
     }
+    // Only an editor of the VS Code family is ever started, by its own exe (never `code.cmd`, a
+    // script, or whatever program a confused plan named): the click starts a process, so the
+    // name is checked here as well as in the engine's classification.
+    let is_editor = editor_exe
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| hosts::editor_product(name).is_some());
+    if !is_editor {
+        return FocusOutcome::Failed(format!(
+            "{} isn't an editor this app opens folders with.",
+            editor_exe.display()
+        ));
+    }
     // An absolute folder also never reads as one of the editor's options ("--…").
     if !folder.is_absolute() {
         return FocusOutcome::Failed(format!(

@@ -211,7 +211,9 @@ pub fn classify(table: &ProcessTable, claude_pid: u32) -> HostMatch {
     }
 }
 
-/// A visible top-level window, as the platform lists them front to back.
+/// A visible top-level window, as the platform lists them: front to back,
+/// minimised ones after every window on screen (so the first window of a
+/// process is one the user can see, when it has any).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TopWindow {
     pub window: u64,
