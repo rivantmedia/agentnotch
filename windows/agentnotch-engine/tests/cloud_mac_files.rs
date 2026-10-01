@@ -1,7 +1,7 @@
 //! Every cloud file in `<support>` round-trips in the Mac's format: a
 //! Mac-written fixture (`tests/fixtures/mac-files/cloud-*.json`) is read
-//! through its Rust type and written back JSON-equivalent (CL§4.2). Later
-//! steps add the scan state, outbox, summaries and sync state.
+//! through its Rust type and written back JSON-equivalent (CL§4.2). The
+//! sync state is added with the sync service.
 
 use agentnotch_engine::cloud::auth::AuthSession;
 use agentnotch_engine::cloud::contract::{date, to_json, SessionSource};
@@ -201,4 +201,116 @@ fn cloud_scan_state_json() {
     let again: State =
         serde_json::from_slice(&serde_json::to_vec(&windows).expect("encodes")).expect("parses");
     assert_eq!(again, windows);
+}
+
+#[test]
+fn cloud_summaries_json() {
+    use agentnotch_engine::cloud::summary::store::{
+        self, Contents as Summaries, SessionSummaryStore,
+    };
+    use agentnotch_engine::testkit::StdSecureFiles;
+    use std::sync::Arc;
+    let bytes = fixture("cloud-summaries.json");
+    let contents: Summaries = serde_json::from_slice(&bytes).expect("parses");
+    assert_eq!(contents.version, Summaries::CURRENT_VERSION);
+    let personal = "8ca65b0df91fc776aded7f419f011fc1e99e2fd120e893692cfaf83f0fa994c0";
+    let work = "d8485d82cdbceb2582311953e97b1666022b76dcbb98ef283fece56b1b5b8874";
+    let first = &contents.summaries[&format!("a1b2c3d4-e5f6-4789-8abc-def012345678|{personal}")];
+    assert_eq!(first.model, "claude-haiku-4-5-20251001");
+    assert_eq!(first.message_count, 14);
+    assert_eq!(first.cost_usd, Some(0.0021));
+    assert_eq!(
+        date::to_string(first.generated_at),
+        "2026-09-25T09:12:40.125Z"
+    );
+    // No cost known: the key is absent, and stays absent.
+    let second = &contents.summaries[&format!("0f9e8d7c-6b5a-4493-8271-605f4e3d2c1b|{work}")];
+    assert_eq!(second.cost_usd, None);
+    let attempt = &contents.attempts[&format!("11111111-2222-4333-8444-555555555555|{personal}")];
+    assert_eq!(attempt.failures, 2);
+    assert_eq!(
+        date::to_string(attempt.next_attempt_at),
+        "2026-09-25T10:30:00.500Z"
+    );
+    assert_eq!(contents.runs.len(), 2);
+    assert_eq!(
+        contents.enabled_at.map(date::to_string).as_deref(),
+        Some("2026-09-25T08:00:00.000Z")
+    );
+    let written = to_json(&contents);
+    assert_equivalent(&bytes, &written, "cloud-summaries.json");
+    // The Mac's encoder writes exactly this: compact, keys sorted, absent
+    // optionals left out.
+    assert_eq!(written, bytes);
+
+    // Through the store: read from <support>, written back the same.
+    let support = tempfile::tempdir().unwrap();
+    std::fs::write(support.path().join(store::FILE_NAME), &bytes).unwrap();
+    let files = Arc::new(StdSecureFiles);
+    let kept = SessionSummaryStore::in_support(support.path(), files.clone(), true);
+    assert_eq!(kept.contents(), contents);
+    kept.save_now();
+    assert_eq!(
+        std::fs::read(support.path().join(store::FILE_NAME)).unwrap(),
+        bytes
+    );
+    // Never turned on: `enabledAt` absent.
+    let mut never: Value = serde_json::from_slice(&bytes).unwrap();
+    never.as_object_mut().unwrap().remove("enabledAt");
+    let never: Summaries = serde_json::from_value(never).expect("parses");
+    assert_eq!(never.enabled_at, None);
+    assert!(!String::from_utf8(to_json(&never))
+        .unwrap()
+        .contains("enabledAt"));
+}
+
+#[test]
+fn cloud_usage_outbox_json() {
+    use agentnotch_engine::cloud::contract::UsageSourceName;
+    use agentnotch_engine::cloud::recorder::{self, Contents as Outbox, UsageHistoryRecorder};
+    use agentnotch_engine::testkit::StdSecureFiles;
+    use std::sync::Arc;
+    let bytes = fixture("cloud-usage-outbox.json");
+    let outbox: Outbox = serde_json::from_slice(&bytes).expect("parses");
+    assert_eq!(outbox.version, Outbox::CURRENT_VERSION);
+    assert_eq!(outbox.pending.len(), 3);
+    assert_eq!(outbox.last.len(), 4);
+    let personal = "8ca65b0df91fc776aded7f419f011fc1e99e2fd120e893692cfaf83f0fa994c0";
+    let first = &outbox.pending[0];
+    assert_eq!(first.account_key, personal);
+    assert_eq!(first.source, UsageSourceName::Probe);
+    assert_eq!(
+        date::to_string(first.observed_at),
+        "2026-09-25T08:05:00.250Z"
+    );
+    let ids: Vec<&str> = first.windows.iter().map(|w| w.id.as_str()).collect();
+    assert_eq!(ids, ["session", "weekly_all", "weekly_opus", "extra_usage"]);
+    assert_eq!(first.windows[1].utilization, 61.5);
+    // A window with no reset time: an explicit null, kept.
+    assert_eq!(first.windows[2].resets_at, None);
+    assert_eq!(
+        first.dedupe_key(),
+        format!("{personal}|probe|1790323500250")
+    );
+    assert_eq!(outbox.pending[2].source, UsageSourceName::Desktop);
+    assert_eq!(outbox.last[&format!("{personal}|probe")], *first);
+    let written = to_json(&outbox);
+    assert_equivalent(&bytes, &written, "cloud-usage-outbox.json");
+    assert!(String::from_utf8(written)
+        .unwrap()
+        .contains(r#""resetsAt":null"#));
+
+    // Through the recorder: read from <support>, written back equivalent.
+    let support = tempfile::tempdir().unwrap();
+    let file = support.path().join(recorder::FILE_NAME);
+    std::fs::write(&file, &bytes).unwrap();
+    let kept = UsageHistoryRecorder::in_support(support.path(), Arc::new(StdSecureFiles), true);
+    assert_eq!(kept.contents(), outbox);
+    assert_eq!(kept.pending_count(), 3);
+    kept.save_now();
+    assert_equivalent(
+        &bytes,
+        &std::fs::read(&file).unwrap(),
+        "cloud-usage-outbox.json",
+    );
 }

@@ -15,4 +15,9 @@ website sign-in (`cloud::auth::AuthSession`; made-up tokens).
 `cloud-ledger.json` (`cloud::ledger::SessionLedger`, v2: sessions by
 `<sessionId>|<accountKey>`, accounts, owners with a nobody stretch, and the
 unattributed sightings) and `cloud-folder-logins.json`
-(`cloud::folder_logins::CloudFolderLogins`, v1) follow it; both are made up.
+(`cloud::folder_logins::CloudFolderLogins`, v1) follow it; both are made up. `cloud-summaries.json`
+(`cloud::summary::store::SessionSummaryStore`, v2: summaries and failed
+attempts by ledger entry key, run times, `enabledAt`) and
+`cloud-usage-outbox.json` (`cloud::recorder::UsageHistoryRecorder`, v1:
+pending readings and the last per `accountKey|source`, explicit null
+`resetsAt`) are made up in the same encoding.
