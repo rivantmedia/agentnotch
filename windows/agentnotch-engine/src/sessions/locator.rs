@@ -192,6 +192,19 @@ fn find_file(dir: &Path, name: &str, depth: usize) -> Option<String> {
     None
 }
 
+/// An agent id that may name a transcript, `agent-<id>.jsonl`: letters,
+/// digits, `-` and `_` (as Claude Code writes them), at most 128. The id
+/// comes from a transcript and becomes part of a path, where on Windows a
+/// `..` collapses before any folder is looked at and a `:` names a stream
+/// of another file.
+pub fn is_agent_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
 /// Session and agent ids come from other processes; never let one escape a
 /// folder.
 fn is_safe_file_name(name: &str) -> bool {

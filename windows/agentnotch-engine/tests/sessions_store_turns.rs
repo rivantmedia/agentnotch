@@ -1152,6 +1152,47 @@ fn a_miss_is_asked_again_after_a_while_and_a_bad_id_never() {
     ));
 }
 
+/// A hosted session that went away is forgotten by the Desktop lookups (the
+/// Mac hub's `retain`): the memory holds only running sessions, and one that
+/// comes back later is looked up afresh.
+#[test]
+fn the_lookups_of_a_session_that_went_away_are_forgotten() {
+    let mut h = Harness::new();
+    h.store
+        .set_desktop_roots(vec![PathBuf::from("/home/me/desktop/Claude")]);
+    h.store.set_desktop_candidates(vec![candidate("acct-1")]);
+    let at = h.now;
+    h.registry_entries(
+        FOLDER,
+        false,
+        vec![hosted_entry("claude-desktop", "idle", at, true)],
+    );
+    h.apply(SessionInput::Hosted {
+        session: s1(),
+        identity: Some(IdentityId::from("identity-acct-1")),
+    });
+    h.hook("SessionEnd", "ended");
+    assert!(h.session().is_none());
+    h.now = at + secs(4);
+    h.tick();
+
+    // Resumed after the ended-session memory: asked again, not taken from
+    // what was known of it before.
+    let back = at + Duration::from_secs(11 * 60);
+    h.now = back;
+    let effects = h.registry_entries(
+        FOLDER,
+        false,
+        vec![hosted_entry("claude-desktop", "busy", back, true)],
+    );
+    assert!(h.session().is_some());
+    assert!(effects
+        .jobs
+        .iter()
+        .any(|job| matches!(job, Job::DesktopHosted { .. })));
+    assert_eq!(h.session().unwrap().desktop_identity, None);
+}
+
 // ---- SessionCoreRegressionTests ----
 
 #[test]

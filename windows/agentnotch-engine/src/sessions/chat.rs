@@ -479,8 +479,8 @@ fn read_subagent(
     transcript_path: &str,
     agent_id: &str,
 ) -> Vec<SubagentTool> {
-    // The id comes from a transcript: never let it name another folder.
-    if agent_id.contains(['/', '\\', '\0']) || agent_id == "." || agent_id == ".." {
+    // The id comes from a transcript: never let it name another file.
+    if !crate::sessions::locator::is_agent_id(agent_id) {
         return Vec::new();
     }
     let agent_path = locator.subagent_transcript_path(transcript_path, agent_id);

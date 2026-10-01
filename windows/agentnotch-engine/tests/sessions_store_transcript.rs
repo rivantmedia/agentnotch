@@ -588,6 +588,40 @@ fn a_running_agent_found_in_a_loaded_chat_is_followed() {
     assert!(h.session().unwrap().agents.contains_key("call-bg"));
 }
 
+/// An agent id comes from a transcript and becomes part of a path: only a
+/// plain name (letters, digits, `-`, `_`, as Claude Code writes them) is
+/// followed. On Windows `agent-..\\..` collapses before the folder is looked
+/// at, and `a:b` names a stream of another file.
+#[test]
+fn an_agent_id_that_is_not_a_plain_name_is_never_followed() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut h, path) = reading(dir.path());
+    let decoy = path.parent().unwrap().join("decoy.jsonl");
+    write_lines(
+        &decoy,
+        &[tool_use("d-1", "Grep", json!({"pattern": "x"}), before(5))],
+    );
+    let mut lines = Vec::new();
+    for (index, agent) in ["../../../decoy", "..\\..\\..\\decoy", "a:b", "x/y", "."]
+        .iter()
+        .enumerate()
+    {
+        lines.extend(agent_call(&format!("done-{index}"), agent, "completed"));
+        lines.extend(agent_call(&format!("run-{index}"), agent, "async_launched"));
+    }
+    write_lines(&path, &lines);
+    prompt(&mut h);
+    // Both ways an agent is followed: a sync, and a chat page.
+    let opened = h.store.open_chat(&s1(), h.now);
+    h.run_jobs(opened.jobs);
+    h.sync();
+    resync(&mut h);
+    assert!(h.session().unwrap().agents.is_empty());
+    assert_eq!(agent_reads(&h), 0);
+    assert!(!h.ran.iter().any(|job| matches!(job,
+        Job::SyncTranscript { path, .. } if path.to_string_lossy().contains("decoy"))));
+}
+
 #[test]
 fn subagent_tool_cache_follows_file_growth() {
     // SubagentTranscript's growth, at the job level: two reads of one file.

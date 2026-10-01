@@ -397,3 +397,72 @@ fn a_session_found_by_the_watcher_is_stopped_end_to_end() {
     watcher.set_watches(&h.store.interrupt_watches(), h.now, same);
     assert!(watcher.is_empty());
 }
+
+/// A line longer than one read (8 MiB: a pasted image, a long result) never
+/// stalls the watch: it is skipped, and the interrupt after it is seen. The
+/// Mac reads to the end each time; this reads at most 8 MiB per poll.
+#[test]
+fn a_line_longer_than_one_read_does_not_hide_the_next_interrupt() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("long.jsonl");
+    write_lines(&path, &[user("go", t0(), json!({}))]);
+    let mut now = t0();
+    let mut watcher = InterruptWatcher::new();
+    watcher.set_watches(&[watch("long", &path)], now, same);
+    watcher.poll(now);
+
+    let huge = assistant_text(&"x".repeat(9 * 1024 * 1024), t0());
+    append_lines(&path, &[huge]);
+    now += POLL_INTERVAL;
+    assert!(watcher.poll(now).is_empty());
+    now += POLL_INTERVAL;
+    assert!(watcher.poll(now).is_empty());
+
+    now += POLL_INTERVAL;
+    append_lines(
+        &path,
+        &[user("[Request interrupted by user]", t0(), json!({}))],
+    );
+    // At most two more reads get past the rest of the long line.
+    let mut seen = false;
+    for _ in 0..3 {
+        now += POLL_INTERVAL;
+        seen |= interrupted("long", &watcher.poll(now));
+    }
+    assert!(seen);
+}
+
+/// The skipped part of a long line is never read as a line of its own: a
+/// tail that looks like an interrupted tool result (still being written
+/// when the watch skipped its start) is not one.
+#[test]
+fn the_tail_of_a_skipped_line_is_not_a_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tail.jsonl");
+    write_lines(&path, &[user("go", t0(), json!({}))]);
+    let mut now = t0();
+    let mut watcher = InterruptWatcher::new();
+    watcher.set_watches(&[watch("tail", &path)], now, same);
+    watcher.poll(now);
+
+    // The start of a long line, without its end yet.
+    append_bytes(&path, &vec![b'x'; 9 * 1024 * 1024]);
+    now += POLL_INTERVAL;
+    assert!(watcher.poll(now).is_empty());
+    // Its end looks like a tool result flagged interrupted.
+    append_bytes(
+        &path,
+        b"\"type\":\"user\",\"tool_result\",\"interrupted\":true,\"[Request interrupted by user\"}\n",
+    );
+    for _ in 0..3 {
+        now += POLL_INTERVAL;
+        assert!(watcher.poll(now).is_empty());
+    }
+    // A real interrupt after it still counts.
+    append_lines(
+        &path,
+        &[user("[Request interrupted by user]", t0(), json!({}))],
+    );
+    now += POLL_INTERVAL;
+    assert!(interrupted("tail", &watcher.poll(now)));
+}

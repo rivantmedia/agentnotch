@@ -25,7 +25,7 @@ use crate::persist::review::MAX_MESSAGE_LENGTH;
 use crate::runtime_types::{Job, Release, SessionEffects, TranscriptDelta, TranscriptEntry};
 use crate::sessions::chat::{self, SubagentTranscript};
 use crate::sessions::interrupt::InterruptWatch;
-use crate::sessions::locator::TranscriptLocator;
+use crate::sessions::locator::{is_agent_id, TranscriptLocator};
 use crate::sessions::session::{
     AgentTrack, Session, SessionTitleSource, SettledAgents, SubagentState, ToolTracker,
 };
@@ -655,10 +655,11 @@ fn follow_agent(session: &mut Session, output: &ToolOutput, now: SystemTime) {
     let Some(raw) = output.raw.as_ref().and_then(Value::as_object) else {
         return;
     };
+    // The id becomes part of a path: a plain name only.
     let Some(agent_id) = raw
         .get("agentId")
         .and_then(Value::as_str)
-        .filter(|id| !id.is_empty())
+        .filter(|id| is_agent_id(id))
     else {
         return;
     };
@@ -699,7 +700,7 @@ fn follow_running_agents(session: &mut Session, page: &ChatPage, now: SystemTime
             continue;
         };
         if !tool_input::is_subagent_container(name)
-            || agent_id.is_empty()
+            || !is_agent_id(agent_id)
             || status == "completed"
             || session.agents.contains_key(&item.id)
             || session.settled_agents.contains(&item.id)

@@ -31,7 +31,10 @@ pub const MAX_OPEN_ATTEMPTS: u32 = 30;
 /// Between two looks for a transcript that is not there yet.
 pub const OPEN_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 
-/// At most this much is read per poll (the rest next time).
+/// At most this much is read per poll (the rest next time). A line longer
+/// than this is skipped, not read whole (the Mac reads everything new): an
+/// interrupt line is short, and a turn the watcher misses still ends with its
+/// hooks and the registry.
 const MAX_READ: u64 = 8 * 1024 * 1024;
 
 /// A transcript to watch while its session's main turn runs.
@@ -84,8 +87,13 @@ pub fn is_interrupt_line(line: &[u8]) -> bool {
 enum Stage {
     /// The file isn't there yet: looked for again at `next_try`.
     Opening { attempts: u32, next_try: SystemTime },
-    /// Open, read up to `offset`.
-    Watching { file: File, offset: u64 },
+    /// Open, read up to `offset`; `skipping` while inside a line too long
+    /// to read whole (its rest, up to its newline, is not a line).
+    Watching {
+        file: File,
+        offset: u64,
+        skipping: bool,
+    },
     /// Never appeared (or couldn't be read): given up on.
     GaveUp,
 }
@@ -167,7 +175,11 @@ impl InterruptWatcher {
                         Ok((file, end))
                     }) {
                         Ok((file, offset)) => {
-                            watcher.stage = Stage::Watching { file, offset };
+                            watcher.stage = Stage::Watching {
+                                file,
+                                offset,
+                                skipping: false,
+                            };
                         }
                         Err(_) => {
                             *attempts += 1;
@@ -179,8 +191,12 @@ impl InterruptWatcher {
                         }
                     }
                 }
-                Stage::Watching { file, offset } => {
-                    if read_interrupt(file, offset) {
+                Stage::Watching {
+                    file,
+                    offset,
+                    skipping,
+                } => {
+                    if read_interrupt(file, offset, skipping) {
                         found.push(SessionInput::Interrupt {
                             session: session.clone(),
                             at: now,
@@ -195,14 +211,17 @@ impl InterruptWatcher {
 }
 
 /// Reads the complete lines the file gained since `offset` and says whether
-/// one is an interrupt. A half-written line is read again next time. A file
-/// that shrank was replaced: reading goes on from its new end.
-fn read_interrupt(file: &mut File, offset: &mut u64) -> bool {
+/// one is an interrupt. A half-written line is read again next time, unless
+/// it already fills a whole read: then it is skipped up to its newline
+/// (`skipping`), so it can't stall the watch. A file that shrank was
+/// replaced: reading goes on from its new end.
+fn read_interrupt(file: &mut File, offset: &mut u64, skipping: &mut bool) -> bool {
     let Ok(size) = file.metadata().map(|metadata| metadata.len()) else {
         return false;
     };
     if size < *offset {
         *offset = size;
+        *skipping = false;
         return false;
     }
     if size == *offset || file.seek(SeekFrom::Start(*offset)).is_err() {
@@ -213,10 +232,24 @@ fn read_interrupt(file: &mut File, offset: &mut u64) -> bool {
     if file.take(wanted).read_to_end(&mut buffer).is_err() {
         return false;
     }
-    let Some(last_newline) = buffer.iter().rposition(|byte| *byte == b'\n') else {
+    let mut data = buffer.as_slice();
+    if *skipping {
+        let Some(end) = data.iter().position(|byte| *byte == b'\n') else {
+            *offset += data.len() as u64;
+            return false;
+        };
+        *offset += end as u64 + 1;
+        data = &data[end + 1..];
+        *skipping = false;
+    }
+    let Some(last_newline) = data.iter().rposition(|byte| *byte == b'\n') else {
+        if data.len() as u64 >= MAX_READ {
+            *offset += data.len() as u64;
+            *skipping = true;
+        }
         return false;
     };
-    let complete = &buffer[..=last_newline];
+    let complete = &data[..=last_newline];
     *offset += complete.len() as u64;
     complete
         .split(|byte| *byte == b'\n')

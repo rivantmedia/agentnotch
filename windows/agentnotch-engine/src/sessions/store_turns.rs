@@ -505,6 +505,14 @@ impl SessionStore {
             self.recheck_all_sessions(now);
             self.last_check = Some(now);
         }
+        // The Desktop lookups of sessions that went away are forgotten (the
+        // Mac hub's `retain`): the memory holds running sessions only.
+        let hosted: Vec<String> = self
+            .sessions
+            .values()
+            .filter_map(|session| session.host_session_id.clone())
+            .collect();
+        self.desktop.retain(&hosted);
 
         let ids: Vec<SessionId> = self.sessions.keys().cloned().collect();
         for id in ids {

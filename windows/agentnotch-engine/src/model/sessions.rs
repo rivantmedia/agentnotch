@@ -812,7 +812,8 @@ impl ChatImage {
     }
 
     /// `data:<media type>;base64,…`, or `None` when it would be longer than
-    /// [`ChatImage::MAX_DATA_URL_BYTES`] or the media type isn't an image's.
+    /// [`ChatImage::MAX_DATA_URL_BYTES`], the media type isn't an image's or
+    /// the data isn't base64.
     pub fn data_url(&self) -> Option<String> {
         let media = self.media_type.trim();
         // The type goes into a URL the page hands to an <img>: only a plain
@@ -826,7 +827,17 @@ impl ChatImage {
         if !plain {
             return None;
         }
-        let url = format!("data:{media};base64,{}", self.data_base64.trim());
+        // So is the data, which a transcript gives: base64's alphabet only,
+        // never a quote or a bracket that could end the attribute or URL it
+        // is put in.
+        let data = self.data_base64.trim();
+        if !data
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'='))
+        {
+            return None;
+        }
+        let url = format!("data:{media};base64,{data}");
         (url.len() <= Self::MAX_DATA_URL_BYTES).then_some(url)
     }
 }

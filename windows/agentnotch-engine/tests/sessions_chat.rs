@@ -204,9 +204,27 @@ fn an_image_travels_by_reference_and_chat_image_returns_its_data_url() {
             data_base64: "PGI+".into(),
         },
     );
+    // The data is base64 or nothing: the URL never carries a quote, a
+    // bracket or a space a transcript put in it.
+    for (id, data) in [
+        ("quote", "iVBO\"><img src=x onerror=alert(1)>"),
+        ("space", "iVBO Rw0K"),
+        ("paren", "iVBO)Rw0K"),
+    ] {
+        big.images.insert(
+            id.into(),
+            ChatImage {
+                media_type: "image/png".into(),
+                data_base64: data.into(),
+            },
+        );
+    }
     assert_eq!(chat_image(&big, "huge"), None);
     assert_eq!(chat_image(&big, "html"), None);
     assert_eq!(chat_image(&big, "sneaky"), None);
+    assert_eq!(chat_image(&big, "quote"), None);
+    assert_eq!(chat_image(&big, "space"), None);
+    assert_eq!(chat_image(&big, "paren"), None);
 }
 
 // ---- LoadChat ----
