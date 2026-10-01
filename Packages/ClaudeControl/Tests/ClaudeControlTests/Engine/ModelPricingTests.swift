@@ -145,4 +145,28 @@ struct ModelPricingTests {
         #expect(ModelPricing.dollars(400) == 0)
         #expect(ModelPricing.dollars(-1) == 0)
     }
+
+    /// The vectors the Rust engine's `cloud_pricing` test reads too: the two
+    /// tables cannot drift apart without one of the suites failing.
+    @Test func sharedVectorsMatch() throws {
+        let file = TestPaths.packageRoot
+            .appendingPathComponent("Tests/ClaudeControlTests/Fixtures/model-pricing-vectors.json")
+        let root = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        let vectors = try #require(root["vectors"] as? [[String: Any]])
+        // One for each price in either table, and some for the rest.
+        #expect(vectors.count >= ModelPricing.rates.count + ModelPricing.fastRates.count)
+        for vector in vectors {
+            let name = vector["name"] as? String ?? "?"
+            let model = try #require(vector["model"] as? String, "\(name)")
+            let usage = try #require(vector["usage"] as? [String: Any], "\(name)")
+            let expected = (vector["expectedNanoUsd"] as? NSNumber)?.int64Value
+            #expect(ModelPricing.cost(model: model, usage: usage) == expected, "\(name)")
+        }
+        for model in ModelPricing.rates.keys {
+            #expect(vectors.contains { ($0["name"] as? String) == "standard \(model)" }, "\(model)")
+        }
+        for model in ModelPricing.fastRates.keys {
+            #expect(vectors.contains { ($0["name"] as? String) == "fast \(model)" }, "\(model)")
+        }
+    }
 }
