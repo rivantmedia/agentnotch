@@ -5,7 +5,7 @@
 use agentnotch_engine::core::time::from_ms;
 use agentnotch_engine::model::*;
 use agentnotch_engine::platform::{ConsoleInfo, HostApp, HostKind, NotifyPermission};
-use agentnotch_engine::runtime_types::ToastContext;
+use agentnotch_engine::runtime_types::{PanelState, ReactionContext, ToastContext};
 use agentnotch_engine::testkit::TEST_START_MS;
 use serde_json::Value;
 use std::path::PathBuf;
@@ -105,7 +105,7 @@ pub fn pending(
     }
 }
 
-/// `view`, waiting on a request for `tool`.
+/// `view`, waiting on a request for Bash.
 pub fn waiting_on(mut view: SessionView, tool: &str, input: Value) -> SessionView {
     view.state = SessionState::NeedsYou(NeedsInputReason::for_approval(tool));
     view.phase = Phase::WaitingForApproval(PermissionContext {
@@ -186,4 +186,54 @@ pub fn toast_ctx() -> ToastContext {
         title: "Refactor the parser".into(),
         project: "app".into(),
     }
+}
+
+/// Auto-open on for needs-you, a sound, peeks of 5 s, the panel closed, no
+/// terminal on screen, the user not at that session, the ring shown.
+pub fn reaction_ctx() -> ReactionContext {
+    ReactionContext {
+        now: t0(),
+        auto_open: "needsInput".into(),
+        sound: true,
+        peek: true,
+        peek_seconds: 5,
+        panel: PanelState::default(),
+        full_screen: false,
+        any_terminal_visible: false,
+        looking_at: Some(false),
+        ring_shown: true,
+        notch_hidden: false,
+    }
+}
+
+/// `reaction_ctx` under another auto-open setting.
+pub fn reaction_ctx_with(auto_open: &str) -> ReactionContext {
+    ReactionContext {
+        auto_open: auto_open.into(),
+        ..reaction_ctx()
+    }
+}
+
+/// A session that just began waiting on a permission for Bash.
+pub fn needs_you_now(id: &str) -> AttentionTransition {
+    transition(
+        in_state(view(id), permission("Bash")),
+        Some(SessionState::Working),
+    )
+}
+
+/// A session that just finished and awaits review.
+pub fn review_now(id: &str) -> AttentionTransition {
+    transition(
+        in_state(view(id), SessionState::ReadyForReview),
+        Some(SessionState::Working),
+    )
+}
+
+/// A session whose turn just failed.
+pub fn failed_now(id: &str) -> AttentionTransition {
+    transition(
+        in_state(view(id), failed("Rate limited", "rate_limit")),
+        Some(SessionState::Working),
+    )
 }
