@@ -1,0 +1,513 @@
+{
+  "scenario": "tasks",
+  "about": "Three TaskCreate calls, then updates; a subagent's TaskUpdate does not count.",
+  "python": "scenario_tasks",
+  "sessions": [
+    {
+      "name": "tasks",
+      "account": "work",
+      "cwd": "/Users/dev/work/web-app",
+      "title": "Add user settings page",
+      "prefix": "c333"
+    }
+  ],
+  "steps": [
+    {
+      "op": "hook",
+      "event": "UserPromptSubmit",
+      "session": "tasks",
+      "fields": {
+        "prompt": "build the settings page",
+        "source": "user"
+      }
+    },
+    {
+      "op": "transcript",
+      "session": "tasks",
+      "lines": [
+        {
+          "assistant_turn": {
+            "text": "Planning step 1.",
+            "context_tokens": 53000,
+            "tool_uses": [
+              {
+                "id": "toolu_tasks_01",
+                "name": "TaskCreate",
+                "input": {
+                  "subject": "Design the settings schema",
+                  "description": "Design the settings schema for the app",
+                  "activeForm": "Designing the settings schema"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "op": "hook",
+      "event": "PreToolUse",
+      "session": "tasks",
+      "fields": {
+        "tool_name": "TaskCreate",
+        "tool_input": {
+          "subject": "Design the settings schema",
+          "description": "Design the settings schema for the app",
+          "activeForm": "Designing the settings schema"
+        },
+        "tool_use_id": "toolu_tasks_01"
+      }
+    },
+    {
+      "op": "hook",
+      "event": "TaskCreated",
+      "session": "tasks",
+      "fields": {
+        "task_id": "1",
+        "task_subject": "Design the settings schema",
+        "task_description": "Design the settings schema for the app"
+      }
+    },
+    {
+      "op": "transcript",
+      "session": "tasks",
+      "lines": [
+        {
+          "tool_result": {
+            "id": "toolu_tasks_01",
+            "text": "Task #1 created successfully: Design the settings schema",
+            "structured": {
+              "task": {
+                "id": "1",
+                "subject": "Design the settings schema"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "op": "hook",
+      "event": "PostToolUse",
+      "session": "tasks",
+      "fields": {
+        "tool_name": "TaskCreate",
+        "tool_input": {
+          "subject": "Design the settings schema",
+          "description": "Design the settings schema for the app",
+          "activeForm": "Designing the settings schema"
+        },
+        "tool_use_id": "toolu_tasks_01",
+        "tool_response": {
+          "task": {
+            "id": "1",
+            "subject": "Design the settings schema"
+          }
+        }
+      }
+    },
+    {
+      "op": "transcript",
+      "session": "tasks",
+      "lines": [
+        {
+          "assistant_turn": {
+            "text": "Planning step 2.",
+            "context_tokens": 54000,
+            "tool_uses": [
+              {
+                "id": "toolu_tasks_02",
+                "name": "TaskCreate",
+                "input": {
+                  "subject": "Build the settings form",
+                  "description": "Build the settings form for the app",
+                  "activeForm": "Building the settings form"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "op": "hook",
+      "event": "PreToolUse",
+      "session": "tasks",
+      "fields": {
+        "tool_name": "TaskCreate",
+        "tool_input": {
+          "subject": "Build the settings form",
+          "description": "Build the settings form for the app",
+          "activeForm": "Building the settings form"
+        },
+        "tool_use_id": "toolu_tasks_02"
+      }
+    },
+    {
+      "op": "hook",
+      "event": "TaskCreated",
+      "session": "tasks",
+      "fields": {
+        "task_id": "2",
+        "task_subject": "Build the settings form",
+        "task_description": "Build the settings form for the app"
+      }
+    },
+    {
+      "op": "transcript",
+      "session": "tasks",
+      "lines": [
+        {
+          "tool_result": {
+            "id": "toolu_tasks_02",
+            "text": "Task #2 created successfully: Build the settings form",
+            "structured": {
+              "task": {
+                "id": "2",
+                "subject": "Build the settings form"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "op": "hook",
+      "event": "PostToolUse",
+      "session": "tasks",
+      "fields": {
+        "tool_name": "TaskCreate",
+        "tool_input": {
+          "subject": "Build the settings form",
+          "description": "Build the settings form for the app",
+          "activeForm": "Building the settings form"
+        },
+        "tool_use_id": "toolu_tasks_02",
+        "tool_response": {
+          "task": {
+            "id": "2",
+            "subject": "Build the settings form"
+          }
+        }
+      }
+    },
+    {
+      "op": "transcript",
+      "session": "tasks",
+      "lines": [
+        {
+          "assistant_turn": {
+            "text": "Planning step 3.",
+            "context_tokens": 55000,
+            "tool_uses": [
+              {
+                "id": "toolu_tasks_03",
+                "name": "TaskCreate",
+                "input": {
+                  "subject": "Write tests",
+                  "description": "Write tests for the app",
+                  "activeForm": "Writing tests"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "op": "hook",
+      "event": "PreToolUse",
+      "session": "tasks",
+      "fields": {
+        "tool_name": "TaskCreate",
+        "tool_input": {
+          "subject": "Write tests",
+          "description": "Write tests for the app",
+          "activeForm": "Writing tests"
+        },
+        "tool_use_id": "toolu_tasks_03"
+      }
+    },
+    {
+      "op": "hook",
+      "event": "TaskCreated",
+      "session": "tasks",
+      "fields": {
+        "task_id": "3",
+        "task_subject": "Write tests",
+        "task_description": "Write tests for the app"
+      }
+    },
+    {
+      "op": "transcript",
+      "session": "tasks",
+      "lines": [
+        {
+          "tool_result": {
+            "id": "toolu_tasks_03",
+            "text": "Task #3 created successfully: Write tests",
+            "structured": {
+              "task": {
+                "id": "3",
+                "subject": "Write tests"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "op": "hook",
+      "event": "PostToolUse",
+      "session": "tasks",
+      "fields": {
+        "tool_name": "TaskCreate",
+        "tool_input": {
+          "subject": "Write tests",
+          "description": "Write tests for the app",
+          "activeForm": "Writing tests"
+        },
+        "tool_use_id": "toolu_tasks_03",
+        "tool_response": {
+          "task": {
+            "id": "3",
+            "subject": "Write tests"
+          }
+        }
+      }
+    },
+    {
+      "op": "expect",
+      "session": "tasks",
+      "tasks": "0/3",
+      "state": "working",
+      "active_label": null
+    },
+    {
+      "op": "transcript",
+      "session": "tasks",
+      "lines": [
+        {
+          "assistant_turn": {
+            "text": "Updating task 1.",
+            "context_tokens": 56000,
+            "tool_uses": [
+              {
+                "id": "toolu_tasks_04",
+                "name": "TaskUpdate",
+                "input": {
+                  "taskId": "1",
+                  "status": "in_progress"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "op": "hook",
+      "event": "PreToolUse",
+      "session": "tasks",
+      "fields": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "taskId": "1",
+          "status": "in_progress"
+        },
+        "tool_use_id": "toolu_tasks_04"
+      }
+    },
+    {
+      "op": "transcript",
+      "session": "tasks",
+      "lines": [
+        {
+          "tool_result": {
+            "id": "toolu_tasks_04",
+            "text": "Updated task #1 status"
+          }
+        }
+      ]
+    },
+    {
+      "op": "hook",
+      "event": "PostToolUse",
+      "session": "tasks",
+      "fields": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "taskId": "1",
+          "status": "in_progress"
+        },
+        "tool_use_id": "toolu_tasks_04",
+        "tool_response": {
+          "success": true,
+          "taskId": "1"
+        }
+      }
+    },
+    {
+      "op": "advance",
+      "advance_ms": 500
+    },
+    {
+      "op": "transcript",
+      "session": "tasks",
+      "lines": [
+        {
+          "assistant_turn": {
+            "text": "Updating task 1.",
+            "context_tokens": 56000,
+            "tool_uses": [
+              {
+                "id": "toolu_tasks_05",
+                "name": "TaskUpdate",
+                "input": {
+                  "taskId": "1",
+                  "status": "completed"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "op": "hook",
+      "event": "PreToolUse",
+      "session": "tasks",
+      "fields": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "taskId": "1",
+          "status": "completed"
+        },
+        "tool_use_id": "toolu_tasks_05"
+      }
+    },
+    {
+      "op": "transcript",
+      "session": "tasks",
+      "lines": [
+        {
+          "tool_result": {
+            "id": "toolu_tasks_05",
+            "text": "Updated task #1 status"
+          }
+        }
+      ]
+    },
+    {
+      "op": "hook",
+      "event": "PostToolUse",
+      "session": "tasks",
+      "fields": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "taskId": "1",
+          "status": "completed"
+        },
+        "tool_use_id": "toolu_tasks_05",
+        "tool_response": {
+          "success": true,
+          "taskId": "1"
+        }
+      }
+    },
+    {
+      "op": "hook",
+      "event": "TaskCompleted",
+      "session": "tasks",
+      "fields": {
+        "task_id": "1"
+      }
+    },
+    {
+      "op": "transcript",
+      "session": "tasks",
+      "lines": [
+        {
+          "assistant_turn": {
+            "text": "Updating task 2.",
+            "context_tokens": 56000,
+            "tool_uses": [
+              {
+                "id": "toolu_tasks_06",
+                "name": "TaskUpdate",
+                "input": {
+                  "taskId": "2",
+                  "status": "in_progress"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "op": "hook",
+      "event": "PreToolUse",
+      "session": "tasks",
+      "fields": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "taskId": "2",
+          "status": "in_progress"
+        },
+        "tool_use_id": "toolu_tasks_06"
+      }
+    },
+    {
+      "op": "transcript",
+      "session": "tasks",
+      "lines": [
+        {
+          "tool_result": {
+            "id": "toolu_tasks_06",
+            "text": "Updated task #2 status"
+          }
+        }
+      ]
+    },
+    {
+      "op": "hook",
+      "event": "PostToolUse",
+      "session": "tasks",
+      "fields": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "taskId": "2",
+          "status": "in_progress"
+        },
+        "tool_use_id": "toolu_tasks_06",
+        "tool_response": {
+          "success": true,
+          "taskId": "2"
+        }
+      }
+    },
+    {
+      "op": "hook",
+      "event": "PreToolUse",
+      "session": "tasks",
+      "fields": {
+        "tool_name": "TaskUpdate",
+        "tool_input": {
+          "taskId": "3",
+          "status": "completed"
+        },
+        "tool_use_id": "toolu_tasks_sub",
+        "agent_id": "agent-sub-1",
+        "agent_type": "general-purpose"
+      }
+    },
+    {
+      "op": "expect",
+      "session": "tasks",
+      "state": "working",
+      "tasks": "1/3",
+      "active_label": "Building the settings form"
+    }
+  ]
+}

@@ -69,6 +69,10 @@ pub enum Job {
     DesktopHosted {
         roots: Vec<PathBuf>,
         host_session_id: String,
+        /// Added by WP5: the known identities whose record is looked for
+        /// (a few `lstat`s each, as on the Mac; without them the job would
+        /// have to list Desktop's whole folder).
+        candidates: Vec<DesktopCandidate>,
     },
     /// [Io] → `Desktop`.
     ReadDesktopCache { organization_uuid: String },
@@ -287,6 +291,25 @@ pub enum TranscriptEntry {
         text: String,
     },
     Clear,
+    // The variants below were added by WP5: the chat's incremental updates
+    // and the transcript summary need them, and the sync job keeps no state
+    // between reads (sessions::transcript). A subagent's own transcript
+    // (`agent-<id>.jsonl`) is read by the same job; its deltas carry only
+    // `ToolUse` and `ToolResult`, sidechain lines included.
+    /// The text of the human prompt just before (`HumanPrompt` carries only
+    /// its time): its first 200 characters, all the summary shows.
+    PromptText {
+        text: String,
+    },
+    /// A user line that isn't a person's words (a wake-up, a compact
+    /// summary, a command echo): Claude works on.
+    Injected {
+        at: Option<SystemTime>,
+    },
+    /// A user or assistant line's chat blocks.
+    Message(ChatMessage),
+    /// A tool result's text and raw `toolUseResult`, for the chat.
+    ToolOutput(ToolOutput),
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

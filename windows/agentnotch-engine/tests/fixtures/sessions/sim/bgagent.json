@@ -1,0 +1,126 @@
+{
+  "scenario": "bgagent",
+  "about": "A background agent asks for permission after the main turn stopped: its request stays answerable and the session keeps working.",
+  "python": "scenario_bgagent",
+  "sessions": [
+    {
+      "name": "bgagent",
+      "account": "work",
+      "cwd": "/Users/dev/work/web-app",
+      "title": "Audit dependencies",
+      "prefix": "5999"
+    }
+  ],
+  "steps": [
+    {
+      "op": "hook",
+      "event": "UserPromptSubmit",
+      "session": "bgagent",
+      "fields": {
+        "prompt": "audit the dependencies in the background",
+        "source": "user"
+      }
+    },
+    {
+      "op": "hook",
+      "event": "PreToolUse",
+      "session": "bgagent",
+      "fields": {
+        "tool_name": "Agent",
+        "tool_input": {
+          "description": "dependency audit",
+          "run_in_background": true
+        },
+        "tool_use_id": "toolu_bga_01"
+      }
+    },
+    {
+      "op": "hook",
+      "event": "PostToolUse",
+      "session": "bgagent",
+      "fields": {
+        "tool_name": "Agent",
+        "tool_input": {
+          "description": "dependency audit"
+        },
+        "tool_use_id": "toolu_bga_01",
+        "tool_response": {
+          "status": "async_launched"
+        }
+      }
+    },
+    {
+      "op": "hook",
+      "event": "Stop",
+      "session": "bgagent",
+      "fields": {
+        "last_assistant_message": "The audit runs in the background; I'll report when it's done.",
+        "background_tasks": [
+          {
+            "type": "subagent",
+            "id": "agent-audit"
+          }
+        ]
+      }
+    },
+    {
+      "op": "advance",
+      "advance_ms": 1500
+    },
+    {
+      "op": "expect",
+      "session": "bgagent",
+      "state": "working",
+      "background_description": "1 background agent",
+      "ready_for_review_news": 0
+    },
+    {
+      "op": "hook",
+      "event": "PreToolUse",
+      "session": "bgagent",
+      "fields": {
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "npm audit --json"
+        },
+        "tool_use_id": "toolu_bga_02",
+        "agent_id": "agent-audit",
+        "agent_type": "general-purpose"
+      }
+    },
+    {
+      "op": "hook",
+      "event": "PermissionRequest",
+      "session": "bgagent",
+      "fields": {
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "npm audit --json"
+        },
+        "agent_id": "agent-audit"
+      }
+    },
+    {
+      "op": "expect",
+      "session": "bgagent",
+      "state": "needs_you",
+      "reason": "permission:Bash",
+      "held": 1,
+      "pending": [
+        "permission:Bash"
+      ],
+      "ready_for_review_news": 0
+    },
+    {
+      "op": "advance",
+      "advance_ms": 5000
+    },
+    {
+      "op": "expect",
+      "session": "bgagent",
+      "state": "needs_you",
+      "reason": "permission:Bash",
+      "held": 1
+    }
+  ]
+}

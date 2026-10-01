@@ -1,0 +1,193 @@
+{
+  "scenario": "permission",
+  "about": "A Bash permission request is held, answered with an allow, and the turn ends ready for review.",
+  "python": "scenario_permission",
+  "sessions": [
+    {
+      "name": "perm",
+      "account": "personal",
+      "cwd": "/Users/dev/@org/api-server",
+      "title": "Clean build artifacts",
+      "prefix": "a111"
+    }
+  ],
+  "steps": [
+    {
+      "op": "hook",
+      "event": "SessionStart",
+      "session": "perm",
+      "fields": {
+        "source": "startup",
+        "model": "claude-opus-4-5"
+      }
+    },
+    {
+      "op": "hook",
+      "event": "UserPromptSubmit",
+      "session": "perm",
+      "fields": {
+        "prompt": "clean the build folder",
+        "source": "user"
+      }
+    },
+    {
+      "op": "transcript",
+      "session": "perm",
+      "lines": [
+        {
+          "assistant_turn": {
+            "text": "I'll remove the build folder.",
+            "context_tokens": 42000,
+            "tool_uses": [
+              {
+                "id": "toolu_perm_01",
+                "name": "Bash",
+                "input": {
+                  "command": "rm -rf build",
+                  "description": "Remove build output"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "op": "hook",
+      "event": "PreToolUse",
+      "session": "perm",
+      "fields": {
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "rm -rf build",
+          "description": "Remove build output"
+        },
+        "tool_use_id": "toolu_perm_01"
+      }
+    },
+    {
+      "op": "hook",
+      "event": "PermissionRequest",
+      "session": "perm",
+      "fields": {
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "rm -rf build",
+          "description": "Remove build output"
+        },
+        "permission_suggestions": [
+          {
+            "type": "addRules",
+            "rules": [
+              {
+                "toolName": "Bash",
+                "ruleContent": "rm -rf build"
+              }
+            ],
+            "behavior": "allow",
+            "destination": "session"
+          }
+        ]
+      }
+    },
+    {
+      "op": "expect",
+      "session": "perm",
+      "state": "needs_you",
+      "bucket": "needs_you",
+      "reason": "permission:Bash",
+      "phase": "waiting_for_approval:Bash",
+      "pending": [
+        "permission:Bash"
+      ],
+      "always_allow": true,
+      "held": 1,
+      "account": "personal",
+      "needs_you_news": 1
+    },
+    {
+      "op": "advance",
+      "advance_ms": 3500
+    },
+    {
+      "op": "expect",
+      "session": "perm",
+      "registry_status": "waiting",
+      "state": "needs_you",
+      "reason": "permission:Bash",
+      "held": 1
+    },
+    {
+      "op": "answer",
+      "session": "perm",
+      "tool": "Bash",
+      "answer": {
+        "allow": {
+          "always": false
+        }
+      },
+      "hook_output_contains": [
+        "\"allow\""
+      ]
+    },
+    {
+      "op": "expect",
+      "session": "perm",
+      "state": "working",
+      "pending": [],
+      "held": 0
+    },
+    {
+      "op": "hook",
+      "event": "PostToolUse",
+      "session": "perm",
+      "fields": {
+        "tool_name": "Bash",
+        "tool_input": {
+          "command": "rm -rf build",
+          "description": "Remove build output"
+        },
+        "tool_use_id": "toolu_perm_01",
+        "tool_response": {
+          "stdout": "",
+          "stderr": ""
+        }
+      }
+    },
+    {
+      "op": "transcript",
+      "session": "perm",
+      "lines": [
+        {
+          "assistant_turn": {
+            "text": "Build folder removed.",
+            "context_tokens": 43000
+          }
+        }
+      ]
+    },
+    {
+      "op": "hook",
+      "event": "Stop",
+      "session": "perm",
+      "fields": {
+        "last_assistant_message": "Removed ./build. The next build will start clean.",
+        "background_tasks": []
+      }
+    },
+    {
+      "op": "advance",
+      "advance_ms": 1500
+    },
+    {
+      "op": "expect",
+      "session": "perm",
+      "state": "ready_for_review",
+      "bucket": "ready_for_review",
+      "phase": "waiting_for_input",
+      "last_assistant_message": "Removed ./build. The next build will start clean.",
+      "ready_for_review_news": 1,
+      "held": 0
+    }
+  ]
+}

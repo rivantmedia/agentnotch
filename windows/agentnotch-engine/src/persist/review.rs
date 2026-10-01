@@ -99,20 +99,27 @@ impl ReviewStateFile {
     }
 }
 
+/// A date the file names, when it is one ([`crate::sessions::file_time`]).
+pub fn file_date(date: Option<EpochSeconds>) -> Option<std::time::SystemTime> {
+    date.and_then(EpochSeconds::to_time)
+        .and_then(crate::sessions::file_time)
+}
+
 impl PersistedReviewRecord {
-    /// `None` when `updatedAt` isn't a usable date.
+    /// `None` when `updatedAt` isn't a usable date. A date past the year
+    /// 9999 is none (`sessions::file_time`: the store adds its delays to
+    /// these, and Windows' clock ends in the year 30828).
     pub fn to_model(&self) -> Option<ReviewItem> {
-        let time = |d: Option<EpochSeconds>| d.and_then(EpochSeconds::to_time);
         Some(ReviewItem {
-            completed_at: time(self.completed_at),
-            reviewed_at: time(self.reviewed_at),
+            completed_at: file_date(self.completed_at),
+            reviewed_at: file_date(self.reviewed_at),
             last_assistant_message: self.last_assistant_message.clone(),
             stop_error: self.stop_error.clone(),
             stop_error_code: self.stop_error_code.clone(),
-            failed_at: time(self.failed_at),
-            background_wait_since: time(self.background_wait_since),
+            failed_at: file_date(self.failed_at),
+            background_wait_since: file_date(self.background_wait_since),
             background_agent_types: self.background_agent_types.clone().unwrap_or_default(),
-            updated_at: self.updated_at.to_time()?,
+            updated_at: file_date(Some(self.updated_at))?,
         })
     }
 

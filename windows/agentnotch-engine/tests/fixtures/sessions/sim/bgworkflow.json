@@ -1,0 +1,129 @@
+{
+  "scenario": "bgworkflow",
+  "about": "A workflow keeps running after the turn that launched it stopped: the session keeps working until the workflow's result wakes Claude.",
+  "python": "scenario_bgworkflow",
+  "sessions": [
+    {
+      "name": "bgwf",
+      "account": "work",
+      "cwd": "/Users/dev/work/web-app",
+      "title": "Sweep the repo",
+      "prefix": "3bbb"
+    }
+  ],
+  "steps": [
+    {
+      "op": "hook",
+      "event": "UserPromptSubmit",
+      "session": "bgwf",
+      "fields": {
+        "prompt": "sweep the repo for the old name",
+        "source": "user"
+      }
+    },
+    {
+      "op": "hook",
+      "event": "PreToolUse",
+      "session": "bgwf",
+      "fields": {
+        "tool_name": "Workflow",
+        "tool_input": {
+          "script": "…"
+        },
+        "tool_use_id": "toolu_bgw_01"
+      }
+    },
+    {
+      "op": "hook",
+      "event": "PostToolUse",
+      "session": "bgwf",
+      "fields": {
+        "tool_name": "Workflow",
+        "tool_input": {
+          "script": "…"
+        },
+        "tool_use_id": "toolu_bgw_01",
+        "tool_response": {
+          "status": "async_launched",
+          "taskId": "w1",
+          "taskType": "local_workflow"
+        }
+      }
+    },
+    {
+      "op": "hook",
+      "event": "Stop",
+      "session": "bgwf",
+      "fields": {
+        "last_assistant_message": "The sweep is running; I'll report when it's back.",
+        "background_tasks": [
+          {
+            "type": "workflow",
+            "id": "w1",
+            "name": "sweep"
+          }
+        ]
+      }
+    },
+    {
+      "op": "advance",
+      "advance_ms": 1500
+    },
+    {
+      "op": "expect",
+      "session": "bgwf",
+      "state": "working",
+      "background_description": "1 workflow",
+      "ready_for_review_news": 0
+    },
+    {
+      "op": "hook",
+      "event": "Notification",
+      "session": "bgwf",
+      "fields": {
+        "notification_type": "idle_prompt",
+        "message": "Claude is waiting for your input"
+      }
+    },
+    {
+      "op": "advance",
+      "advance_ms": 1500
+    },
+    {
+      "op": "expect",
+      "session": "bgwf",
+      "state": "working",
+      "background_description": "1 workflow",
+      "ready_for_review_news": 0
+    },
+    {
+      "op": "hook",
+      "event": "UserPromptSubmit",
+      "session": "bgwf",
+      "fields": {
+        "prompt": "<task-notification>\n<task-id>w1</task-id>\n<status>completed</status>\n<summary>Dynamic workflow \"sweep\" completed</summary>\n</task-notification>"
+      }
+    },
+    {
+      "op": "hook",
+      "event": "Stop",
+      "session": "bgwf",
+      "fields": {
+        "last_assistant_message": "The sweep found 12 places; all fixed.",
+        "background_tasks": []
+      }
+    },
+    {
+      "op": "advance",
+      "advance_ms": 1500
+    },
+    {
+      "op": "expect",
+      "session": "bgwf",
+      "state": "ready_for_review",
+      "last_assistant_message": "The sweep found 12 places; all fixed.",
+      "background_description": null,
+      "ready_for_review_news": 1
+    }
+  ]
+}

@@ -1,0 +1,62 @@
+{
+  "scenario": "ratelimit",
+  "about": "A StopFailure with a rate limit error is a failed turn, not a question (usage readings are WP4's).",
+  "python": "scenario_ratelimit",
+  "sessions": [
+    {
+      "name": "rate",
+      "account": "work",
+      "cwd": "/Users/dev/work/data-pipeline",
+      "title": "Backfill events table",
+      "prefix": "e555"
+    }
+  ],
+  "steps": [
+    {
+      "op": "hook",
+      "event": "UserPromptSubmit",
+      "session": "rate",
+      "fields": {
+        "prompt": "run the backfill",
+        "source": "user"
+      }
+    },
+    {
+      "op": "transcript",
+      "session": "rate",
+      "lines": [
+        {
+          "assistant_turn": {
+            "text": "Starting the backfill.",
+            "context_tokens": 88000
+          }
+        }
+      ]
+    },
+    {
+      "op": "hook",
+      "event": "StopFailure",
+      "session": "rate",
+      "fields": {
+        "error": "rate_limit",
+        "error_details": "429 Too Many Requests",
+        "last_assistant_message": "API Error: rate limit reached"
+      }
+    },
+    {
+      "op": "advance",
+      "advance_ms": 1500
+    },
+    {
+      "op": "expect",
+      "session": "rate",
+      "state": "failed",
+      "bucket": "needs_you",
+      "reason": "error:Rate limited",
+      "phase": "waiting_for_input",
+      "last_message": "Starting the backfill.",
+      "last_assistant_message": null,
+      "needs_you_news": 1
+    }
+  ]
+}
