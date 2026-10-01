@@ -209,7 +209,7 @@ impl SessionStore {
 
     /// Reviewed as of `at` (the click), however much later this runs; an
     /// older mark never takes a review back.
-    fn mark_reviewed(&mut self, id: &SessionId, at: SystemTime) {
+    pub(super) fn mark_reviewed(&mut self, id: &SessionId, at: SystemTime) {
         if let Some(session) = self.sessions.get_mut(id) {
             session.reviewed_at = Some(session.reviewed_at.map_or(at, |known| known.max(at)));
         }

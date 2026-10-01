@@ -517,6 +517,7 @@ impl SessionStore {
             self.look_up_host(&id, now);
         }
 
+        self.start_due_syncs(now);
         self.ask_for_quick_rescans(now);
     }
 
@@ -611,8 +612,8 @@ impl SessionStore {
     }
 
     /// When the clock alone next changes an answer: a pending completion's
-    /// fallback or timeout, the end of a background wait, a quick registry
-    /// read after a Stop, the 3 s check, the review file's write and heartbeat
+    /// fallback or timeout, the end of a background wait, a debounced
+    /// transcript read, a quick registry read after a Stop, the 3 s check, the review file's write and heartbeat
     /// and the end of the attention baseline. The runtime sends `Tick` then; a
     /// time in the past means now. `None` when nothing waits.
     pub fn next_deadline(&self) -> Option<SystemTime> {
@@ -639,6 +640,7 @@ impl SessionStore {
             }
         }
         deadlines.extend(self.rescan_after_stop.values().filter_map(QuickRescan::due));
+        deadlines.extend(self.sync_due.values().copied());
         if let (Some(last), false) = (self.last_check, self.sessions.is_empty()) {
             deadlines.push(last + SCAN_INTERVAL);
         }

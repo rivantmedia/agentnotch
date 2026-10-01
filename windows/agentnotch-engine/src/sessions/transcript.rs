@@ -41,6 +41,15 @@ pub const CHUNK_SIZE: usize = 8 * 1024 * 1024;
 /// How many characters of a human prompt the summary needs.
 pub const PROMPT_TEXT_LENGTH: usize = 200;
 
+/// Whether `path` is a subagent's own transcript (`agent-<id>.jsonl`): the
+/// runtime reads those with `agent` set (`Job::SyncTranscript` carries no
+/// flag; a session's own transcript is named by its id).
+pub fn is_agent_transcript(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("agent-") && name.ends_with(".jsonl"))
+}
+
 /// Reads what `path` gained since `cursor` (see the module doc). A missing or
 /// unreadable file gives an empty delta with the cursor unchanged. With
 /// `agent` (a subagent's own transcript, `agent-<id>.jsonl`) only `ToolUse`

@@ -651,6 +651,11 @@ impl ChatState {
         self.index.get(id).map(|&i| &self.entries[i].item)
     }
 
+    /// One image as a data URL (at most 2 MiB), without copying the history.
+    pub fn image_data_url(&self, image_id: &str) -> Option<String> {
+        self.images.get(image_id)?.data_url()
+    }
+
     /// A tool item's status.
     pub fn tool_status(&self, id: &str) -> Option<&str> {
         match &self.item(id)?.body {

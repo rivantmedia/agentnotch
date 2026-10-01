@@ -8,14 +8,16 @@
 //! The store (`store` and its `store_*` siblings, impl blocks of one
 //! struct): hook and status line inputs are real (wp5-7), and so are the
 //! registry, Desktop-hosted and periodic-check arms (wp5-8), and the review
-//! queue with the attention transitions (wp5-9); the transcript arms follow
-//! in wp5-10.
+//! queue with the attention transitions (wp5-9), and the transcript syncs,
+//! the chat calls and the interrupt watcher (wp5-10: `store_transcript`,
+//! `interrupt`).
 
 pub mod attention;
 pub mod background;
 pub mod chat;
 pub mod completion;
 pub mod desktop;
+pub mod interrupt;
 pub mod locator;
 pub mod phase;
 pub mod registry;

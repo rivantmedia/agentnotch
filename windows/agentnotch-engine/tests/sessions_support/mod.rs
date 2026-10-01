@@ -263,10 +263,12 @@ use agentnotch_engine::model::{
     AccountSighting, Answer, Attribution, HookEvent, RegistryEntry, RegistrySnapshot, SessionId,
     SessionState, SessionView, StatusLineMessage,
 };
-use agentnotch_engine::runtime_types::{IngestContext, Release, SessionEffects, SessionInput};
+use agentnotch_engine::runtime_types::{IngestContext, Job, Release, SessionEffects, SessionInput};
 use agentnotch_engine::sessions::background::WaitTiming;
+use agentnotch_engine::sessions::chat::{load_chat, PAGE_SIZE};
 use agentnotch_engine::sessions::completion::CompletionTiming;
 use agentnotch_engine::sessions::session::Session;
+use agentnotch_engine::sessions::transcript::{is_agent_transcript, sync_transcript};
 use agentnotch_engine::sessions::SessionStore;
 
 /// The transcript path every harness event carries (POSIX rules, so the
@@ -424,6 +426,10 @@ pub struct Harness {
     /// Stop that follows it never share an instant, as on the Mac); tests
     /// that read exact times set it to zero.
     pub step: Duration,
+    /// The transcript path `hook` and `hook_with` events carry.
+    pub transcript: String,
+    /// Every transcript read and chat load the job runner did, in order.
+    pub ran: Vec<Job>,
 }
 
 pub fn paths() -> Paths {
@@ -439,9 +445,12 @@ impl Harness {
 
     pub fn with_timing(completion: CompletionTiming, wait: WaitTiming) -> Self {
         Harness {
+            // No transcripts: the pipeline's tests have no files, and the
+            // debounced reads would be the earliest deadline of every one.
             store: SessionStore::new()
                 .with_paths(paths())
-                .with_timing(completion, wait),
+                .with_timing(completion, wait)
+                .without_transcripts(),
             now: t0(),
             ctx: IngestContext {
                 attribution: Attribution::Known(None),
@@ -453,7 +462,95 @@ impl Harness {
             sightings: Vec::new(),
             last: SessionEffects::default(),
             step: Duration::from_millis(1),
+            transcript: TRANSCRIPT.into(),
+            ran: Vec::new(),
         }
+    }
+
+    /// A harness whose store reads real transcripts under `home` (native
+    /// path rules, so it means the same on Windows): hook events carry
+    /// `<home>/.claude/projects/-tmp-proj/s1.jsonl` and `sync` runs the jobs.
+    pub fn reading(home: &Path, completion: CompletionTiming, wait: WaitTiming) -> Self {
+        let mut h = Harness::with_timing(completion, wait);
+        h.store = SessionStore::new()
+            .with_paths(Paths::native(home))
+            .with_timing(completion, wait);
+        h.transcript = home
+            .join(".claude")
+            .join("projects")
+            .join("-tmp-proj")
+            .join("s1.jsonl")
+            .to_string_lossy()
+            .into_owned();
+        h
+    }
+
+    /// The config folder of a [`Harness::reading`] harness.
+    pub fn folder_of(home: &Path) -> String {
+        home.join(".claude").to_string_lossy().into_owned()
+    }
+
+    /// Runs the read and chat jobs the way the runtime does (a transcript
+    /// read, its delta back as an input; a chat page, handed to
+    /// `chat_loaded`) until none is left. Returns the jobs of other kinds.
+    pub fn run_jobs(&mut self, jobs: Vec<Job>) -> Vec<Job> {
+        let mut queue: std::collections::VecDeque<Job> = jobs.into();
+        let mut others = Vec::new();
+        for _ in 0..10_000 {
+            let Some(job) = queue.pop_front() else {
+                return others;
+            };
+            match &job {
+                Job::SyncTranscript {
+                    session,
+                    path,
+                    cursor,
+                } => {
+                    self.ran.push(job.clone());
+                    let delta = sync_transcript(
+                        session,
+                        path,
+                        *cursor,
+                        is_agent_transcript(path),
+                        &StdSecureFiles,
+                    );
+                    let effects = self.apply(SessionInput::TranscriptSynced(delta));
+                    queue.extend(effects.jobs);
+                }
+                Job::LoadChat {
+                    session,
+                    path,
+                    before,
+                } => {
+                    self.ran.push(job.clone());
+                    let page = load_chat(session, path, before.as_deref(), PAGE_SIZE);
+                    let effects = self.store.chat_loaded(page, self.now);
+                    self.releases.extend(effects.release.iter().cloned());
+                    self.now += self.step;
+                    queue.extend(effects.jobs);
+                }
+                _ => others.push(job),
+            }
+        }
+        panic!("the job runner did not settle");
+    }
+
+    /// Lets the debounce pass, ticks, and runs what the store asked for.
+    pub fn sync(&mut self) -> Vec<Job> {
+        self.now += Duration::from_millis(150);
+        let jobs = self.tick().jobs;
+        self.run_jobs(jobs)
+    }
+
+    /// The reads of transcripts whose path ends with `suffix` so far.
+    pub fn reads_of(&self, suffix: &str) -> usize {
+        self.ran
+            .iter()
+            .filter(|job| {
+                matches!(job, Job::SyncTranscript { path, .. }
+                    if path.to_string_lossy().ends_with(suffix))
+            })
+            .count()
     }
 
     /// Moves the clock to `secs` after [`t0`].
@@ -494,6 +591,7 @@ impl Harness {
         configure: impl FnOnce(&mut HookEventBuilder),
     ) -> SessionEffects {
         let mut builder = HookEventBuilder::new(name, status);
+        builder.transcript_path = Some(self.transcript.clone());
         configure(&mut builder);
         self.send(&builder)
     }
@@ -568,7 +666,7 @@ impl Harness {
 
     /// Ticks at every deadline up to `until`, as the runtime does, and moves
     /// the clock there. Returns the jobs the ticks asked for.
-    pub fn run_until(&mut self, until: SystemTime) -> Vec<agentnotch_engine::runtime_types::Job> {
+    pub fn run_until(&mut self, until: SystemTime) -> Vec<Job> {
         let mut jobs = Vec::new();
         for _ in 0..1000 {
             match self.store.next_deadline() {

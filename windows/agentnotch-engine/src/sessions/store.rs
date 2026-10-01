@@ -16,22 +16,26 @@
 //! - `store_transcript`: transcript syncs, chat, interrupts.
 
 use crate::attention::tracker::AttentionTracker;
+use crate::core::atomic::StdSecureFiles;
 use crate::core::paths::{PathStyle, Paths};
 use crate::model::{
     AccountId, AccountSighting, ChatHistory, DesktopCandidate, HookEvent, NeedsInputReason,
     PermissionContext, Phase, SessionId, SessionView, StatusLineMessage,
 };
-use crate::platform::Processes;
+use crate::platform::{Processes, SecureFiles};
 use crate::review::ReviewStore;
 use crate::runtime_types::{IngestContext, Release, SessionEffects, SessionInput};
 use crate::sessions::attention;
 use crate::sessions::background;
+use crate::sessions::chat::OpenChats;
 use crate::sessions::completion::CompletionTiming;
 use crate::sessions::desktop::DesktopAttributor;
 use crate::sessions::phase;
 use crate::sessions::registry::SessionsFolderGroup;
 use crate::sessions::session::{Session, SessionTitleSource, SubagentState};
+use crate::sessions::store_transcript::ChatWatch;
 use crate::sessions::store_turns::QuickRescan;
+use crate::sessions::tasks::TaskList;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -64,11 +68,25 @@ pub struct SessionStore {
     /// them.
     pub(super) recently_ended: BTreeMap<SessionId, SystemTime>,
     /// Sessions first seen mid-flight whose task list is rebuilt from the
-    /// transcript (wp5-10).
+    /// transcript, and the list rebuilt so far.
     pub(super) needs_task_reconstruction: BTreeSet<SessionId>,
+    pub(super) reconstruction: BTreeMap<SessionId, TaskList>,
     /// Sessions whose transcript is read again, and when (the 100 ms
-    /// debounce; the sync jobs are wp5-10's).
+    /// debounce). One read job per session is out at a time; a request that
+    /// comes meanwhile is asked again when the job is back.
     pub(super) sync_due: BTreeMap<SessionId, SystemTime>,
+    pub(super) sync_in_flight: BTreeSet<SessionId>,
+    pub(super) sync_again: BTreeSet<SessionId>,
+    /// Existence checks and links for locating transcripts (the std
+    /// implementation unless the runtime gives its platform's).
+    pub(super) files: Arc<dyn SecureFiles>,
+    /// Whether transcripts are read at all (see `without_transcripts`).
+    pub(super) reads_transcripts: bool,
+    /// The open chats (only they keep a whole history), what the panel was
+    /// last sent of each, and the chats whose session ended since.
+    pub(super) open_chats: OpenChats,
+    pub(super) chat_watches: BTreeMap<SessionId, ChatWatch>,
+    pub(super) ended_chats: Vec<(SessionId, crate::model::ChatHistory)>,
     /// The folder each session was last sighted in, and when.
     sightings: BTreeMap<SessionId, (AccountId, SystemTime)>,
     /// Folders whose registry is read again soon after a Stop (at 0.3 s and
@@ -124,7 +142,15 @@ impl SessionStore {
             sessions: BTreeMap::new(),
             recently_ended: BTreeMap::new(),
             needs_task_reconstruction: BTreeSet::new(),
+            reconstruction: BTreeMap::new(),
             sync_due: BTreeMap::new(),
+            sync_in_flight: BTreeSet::new(),
+            sync_again: BTreeSet::new(),
+            files: Arc::new(StdSecureFiles),
+            reads_transcripts: true,
+            open_chats: OpenChats::new(),
+            chat_watches: BTreeMap::new(),
+            ended_chats: Vec::new(),
             sightings: BTreeMap::new(),
             rescan_after_stop: BTreeMap::new(),
             paths: Paths::new(PathStyle::native(), ""),
@@ -170,6 +196,21 @@ impl SessionStore {
     /// whose process is gone or whose pid another process now holds.
     pub fn with_processes(mut self, processes: Arc<dyn Processes>) -> Self {
         self.processes = Some(processes);
+        self
+    }
+
+    /// The platform's file access for locating transcripts (existence and
+    /// links).
+    pub fn with_files(mut self, files: Arc<dyn SecureFiles>) -> Self {
+        self.files = files;
+        self
+    }
+
+    /// A store that never asks for a transcript to be read (a sealed run has
+    /// none; the tests of the hook pipeline need no files and no read
+    /// deadlines).
+    pub fn without_transcripts(mut self) -> Self {
+        self.reads_transcripts = false;
         self
     }
 
@@ -233,12 +274,9 @@ impl SessionStore {
     /// applied in the order they arrived (an answer must not overtake a
     /// PostToolUse).
     pub fn apply(&mut self, input: SessionInput, now: SystemTime) -> SessionEffects {
-        let before = self.views();
-        let review_before = self.review_snapshots();
-        self.effects = SessionEffects::default();
         let is_tick = matches!(input, SessionInput::Tick);
-        match input {
-            SessionInput::Hook { event, ctx } => self.process_hook(event, Some(&ctx), now),
+        self.run(now, is_tick, |store| match input {
+            SessionInput::Hook { event, ctx } => store.process_hook(event, Some(&ctx), now),
             SessionInput::Held(held) => {
                 // The request as it arrived, with the id the hook is held
                 // under (ingress matched it to the preceding PreToolUse).
@@ -250,30 +288,45 @@ impl SessionStore {
                     event.agent_id = held.agent_id;
                 }
                 event.received_at = held.received_at;
-                self.process_hook(event, None, now);
+                store.process_hook(event, None, now);
             }
             SessionInput::PermissionFailed {
                 session,
                 tool_use_id,
-            } => self.permission_socket_failed(&session, &tool_use_id, now),
+            } => store.permission_socket_failed(&session, &tool_use_id, now),
             SessionInput::PermissionResolved {
                 session,
                 tool_use_id,
                 answer,
-            } => self.permission_resolved(&session, &tool_use_id, &answer, now),
+            } => store.permission_resolved(&session, &tool_use_id, &answer, now),
             SessionInput::StatusLine { message, ctx } => {
-                self.process_status_line(message, &ctx, now)
+                store.process_status_line(message, &ctx, now)
             }
-            SessionInput::Registry(snapshot) => self.apply_registry(snapshot, now),
-            SessionInput::TranscriptSynced(delta) => self.apply_transcript_synced(delta, now),
+            SessionInput::Registry(snapshot) => store.apply_registry(snapshot, now),
+            SessionInput::TranscriptSynced(delta) => store.apply_transcript_synced(delta, now),
             SessionInput::Hosted { session, identity } => {
-                self.apply_hosted(&session, identity, now)
+                store.apply_hosted(&session, identity, now)
             }
-            SessionInput::Interrupt { session, at } => self.apply_interrupt(&session, at, now),
-            SessionInput::Review(action) => self.apply_review(action, now),
-            SessionInput::AccountsChanged(change) => self.apply_accounts_changed(change, now),
-            SessionInput::Tick => self.tick(now),
-        }
+            SessionInput::Interrupt { session, at } => store.apply_interrupt(&session, at, now),
+            SessionInput::Review(action) => store.apply_review(action, now),
+            SessionInput::AccountsChanged(change) => store.apply_accounts_changed(change, now),
+            SessionInput::Tick => store.tick(now),
+        })
+    }
+
+    /// Runs one change to the sessions and gathers what it caused: the
+    /// review records to keep, the attention transitions and the effects
+    /// (the chat calls change sessions the same way an input does).
+    pub(super) fn run(
+        &mut self,
+        now: SystemTime,
+        is_tick: bool,
+        change: impl FnOnce(&mut Self),
+    ) -> SessionEffects {
+        let before = self.views();
+        let review_before = self.review_snapshots();
+        self.effects = SessionEffects::default();
+        change(self);
         // The periodic check counts from the first session.
         if self.sessions.is_empty() {
             self.last_check = None;
@@ -370,6 +423,20 @@ impl SessionStore {
 
         if event.event == "PermissionRequest" {
             self.mark_waiting_for_approval(&event, &mut session);
+        }
+
+        // The transcript is watched for an interrupt while the main turn
+        // runs: from its first processing event until its Stop.
+        if phase::ends_main_turn(&event) {
+            session.watching_turn = false;
+        } else if !event.is_subagent_event()
+            && phase::determine_phase(&event) == Some(Phase::Processing)
+            && event
+                .transcript_path
+                .as_deref()
+                .is_some_and(|p| !p.is_empty())
+        {
+            session.watching_turn = true;
         }
 
         session.tasks.apply(&event);
@@ -799,7 +866,16 @@ impl SessionStore {
         });
         self.recently_ended.insert(id.clone(), now);
         self.needs_task_reconstruction.remove(id);
+        self.reconstruction.remove(id);
         self.sync_due.remove(id);
+        self.sync_in_flight.remove(id);
+        self.sync_again.remove(id);
+        self.open_chats.close(id);
+        if let Some(watch) = self.chat_watches.remove(id) {
+            if let Some(last) = watch.last {
+                self.ended_chats.push((id.clone(), last));
+            }
+        }
         self.release(Release::Session(id.clone()));
     }
 

@@ -307,6 +307,29 @@ pub struct AgentTrack {
     pub last_change_at: Option<SystemTime>,
     /// Syncs that found no transcript file yet.
     pub missing_checks: u32,
+    /// The agent's transcript, once it exists (the layouts the locator knows).
+    pub path: Option<std::path::PathBuf>,
+    /// How far it was read.
+    pub cursor: TranscriptCursor,
+    /// A read job is out; one at a time.
+    pub in_flight: bool,
+}
+
+impl AgentTrack {
+    /// A call whose agent is followed from its first line.
+    pub fn new(agent_id: impl Into<String>, is_finished: bool, added_at: SystemTime) -> AgentTrack {
+        AgentTrack {
+            agent_id: agent_id.into(),
+            is_finished,
+            added_at,
+            transcript: None,
+            last_change_at: None,
+            missing_checks: 0,
+            path: None,
+            cursor: TranscriptCursor::default(),
+            in_flight: false,
+        }
+    }
 }
 
 // ---- the record ----
@@ -439,6 +462,11 @@ pub struct Session {
     /// Agent calls whose subagent transcript is followed, by tool_use_id.
     pub agents: BTreeMap<String, AgentTrack>,
     pub settled_agents: SettledAgents,
+    /// A main-session turn is running, so its transcript is watched for an
+    /// interrupt (the Mac's InterruptWatcherManager: started by a main
+    /// processing event with a transcript path, stopped by Stop, StopFailure
+    /// and the interrupt itself).
+    pub watching_turn: bool,
 
     // Timestamps.
     pub last_activity: SystemTime,
@@ -523,6 +551,7 @@ impl Session {
             fold: TranscriptSummary::new(),
             agents: BTreeMap::new(),
             settled_agents: SettledAgents::new(),
+            watching_turn: false,
             last_activity: at,
             created_at: at,
             last_event_at: at,
