@@ -4,7 +4,8 @@
 
 use agentnotch_engine::core::time::from_ms;
 use agentnotch_engine::model::*;
-use agentnotch_engine::platform::{ConsoleInfo, HostApp, HostKind};
+use agentnotch_engine::platform::{ConsoleInfo, HostApp, HostKind, NotifyPermission};
+use agentnotch_engine::runtime_types::ToastContext;
 use agentnotch_engine::testkit::TEST_START_MS;
 use serde_json::Value;
 use std::path::PathBuf;
@@ -167,5 +168,22 @@ pub fn console(pid: u32) -> ConsoleInfo {
         line_input: Some(false),
         elevated_target: false,
         error: None,
+    }
+}
+
+/// Banners allowed and wanted, a single account, `view`'s own title and
+/// project as the hub would hand them.
+pub fn toast_ctx() -> ToastContext {
+    ToastContext {
+        now: t0(),
+        notify_needs_input: true,
+        notify_ready_for_review: true,
+        permission: NotifyPermission::Allowed,
+        suppressed: false,
+        looking_at: None,
+        account_label: None,
+        multi_account: false,
+        title: "Refactor the parser".into(),
+        project: "app".into(),
     }
 }

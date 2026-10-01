@@ -139,38 +139,69 @@ pub enum DeepLinkAction {
 /// shorter, and anything can put an `agentnotch:` link on the command line.
 const MAX_LINK_LENGTH: usize = 2048;
 const MAX_LINK_ID_LENGTH: usize = 256;
+/// The year 3000: a later `completed` isn't ours, and adding it to the epoch
+/// could overflow a `SystemTime`.
+const MAX_LINK_MS: u64 = 32_503_680_000_000;
 
 /// A banner's link, or `None` for anything else (the sign-in callback, a
 /// link another program made up, a malformed one). Opening and reviewing
 /// are all a link can ask for; the hub still ignores sessions and rings it
 /// doesn't know.
+///
+/// Strict on purpose: our links carry exactly the parameters
+/// [`open_session_url`], [`open_ring_url`] and [`review_url`] write (each
+/// once, ids percent-encoded), no user info, port, path or fragment. A raw
+/// `|` never occurs in ours: the single-instance hand-over joins arguments
+/// with it, so a link holding one has been split or spliced.
 pub fn parse_deep_link(link: &str) -> Option<DeepLinkAction> {
-    if link.len() > MAX_LINK_LENGTH {
+    if link.len() > MAX_LINK_LENGTH || link.contains('|') {
         return None;
     }
     let url = url::Url::parse(link.trim()).ok()?;
-    if url.scheme() != URL_SCHEME || !matches!(url.path(), "" | "/") {
+    if url.scheme() != URL_SCHEME
+        || !matches!(url.path(), "" | "/")
+        || url.fragment().is_some()
+        || url.port().is_some()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
         return None;
     }
-    let value = |name: &str| {
-        url.query_pairs()
-            .find(|(key, _)| key == name)
-            .map(|(_, value)| value.into_owned())
-            .filter(|value| !value.is_empty() && value.chars().count() <= MAX_LINK_ID_LENGTH)
-    };
-    match url.host_str()?.to_ascii_lowercase().as_str() {
-        "open" => match value("session") {
-            Some(session) => Some(DeepLinkAction::OpenSession(SessionId(session))),
-            None => value("ring").map(|ring| DeepLinkAction::OpenRing(RingId(ring))),
-        },
-        "review" => Some(DeepLinkAction::MarkReviewed {
-            session: SessionId(value("session")?),
-            completed_at: value("completed")
-                .and_then(|ms| ms.parse::<u64>().ok())
-                .map(time::from_ms),
-        }),
-        _ => None,
+    let mut params: BTreeMap<String, String> = BTreeMap::new();
+    for (key, value) in url.query_pairs() {
+        // Only the names ours use, each at most once, never empty.
+        if !matches!(key.as_ref(), "session" | "ring" | "completed")
+            || value.is_empty()
+            || value.chars().count() > MAX_LINK_ID_LENGTH
+            || params
+                .insert(key.into_owned(), value.into_owned())
+                .is_some()
+        {
+            return None;
+        }
     }
+    let mut take = |name: &str| params.remove(name);
+    let action = match url.host_str()?.to_ascii_lowercase().as_str() {
+        "open" => match (take("session"), take("ring"), take("completed")) {
+            (Some(session), None, None) => DeepLinkAction::OpenSession(SessionId(session)),
+            (None, Some(ring), None) => DeepLinkAction::OpenRing(RingId(ring)),
+            _ => return None,
+        },
+        "review" => match (take("session"), take("ring"), take("completed")) {
+            (Some(session), None, completed) => DeepLinkAction::MarkReviewed {
+                session: SessionId(session),
+                completed_at: match completed {
+                    Some(ms) => Some(time::from_ms(
+                        ms.parse::<u64>().ok().filter(|ms| *ms <= MAX_LINK_MS)?,
+                    )),
+                    None => None,
+                },
+            },
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some(action)
 }
 
 /// At most [`DeepLinkGate::LIMIT`] banner links a minute: a link is a
