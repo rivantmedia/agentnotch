@@ -571,9 +571,16 @@ function Invoke-DoctorPhase {
     Write-PhaseLog $run.Text
     if ($run.ExitCode -ne 0) { throw "doctor exited with $($run.ExitCode)" }
     if (-not $run.Text.Trim()) {
-        foreach ($root in $script:DataRoots) {
-            Write-PhaseLog "under ${root}:"
-            Get-ChildItem -LiteralPath $root -Filter 'Agent Notch*' -Recurse -Force -ErrorAction SilentlyContinue | ForEach-Object { Write-PhaseLog "  $($_.FullName)" }
+        # Where did the report go? Ask again with less of the environment, and look for the file.
+        Write-PhaseLog "exit code $($run.ExitCode); asking again with no environment of ours, then with USERPROFILE only"
+        foreach ($variant in @{}, @{ USERPROFILE = $script:P }) {
+            $again = Invoke-Cli -Arguments @('doctor') -Environment $variant
+            Write-PhaseLog "  variant [$($variant.Keys -join ',')]: exit $($again.ExitCode), $($again.Text.Length) characters, log $($again.Log)"
+        }
+        foreach ($root in @($env:APPDATA, $env:LOCALAPPDATA, $script:P, (Get-KnownProfileRoot))) {
+            Get-ChildItem -LiteralPath $root -Filter '*.log' -Recurse -Force -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -notmatch 'EBWebView|\\Temp\\|\\Microsoft\\' } |
+                ForEach-Object { Write-PhaseLog "  found $($_.FullName)" }
         }
         throw "the doctor wrote no $($run.Log)"
     }
