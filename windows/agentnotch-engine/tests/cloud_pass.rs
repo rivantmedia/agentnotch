@@ -67,7 +67,7 @@ impl Harness {
         let root = tempfile::tempdir().expect("a temporary folder");
         // The real path: macOS's temporary folder is reached through a
         // link, which the backfill refuses to read history through.
-        let base = std::fs::canonicalize(root.path()).expect("a real path");
+        let base = cloud_support::real_path(root.path());
         let home = base.join("home");
         let support = base.join("support");
         std::fs::create_dir_all(home.join(".claude").join("projects")).unwrap();

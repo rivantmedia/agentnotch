@@ -12,7 +12,17 @@ use agentnotch_engine::platform::HttpResponse;
 use agentnotch_engine::runtime_types::{CloudAccount, CloudFolder};
 use agentnotch_engine::testkit::http::json_response;
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// The folder's real path as the engine spells it (`SecureFiles::canonical`:
+/// links resolved, no `\\?\` prefix on Windows), which is what the backfill
+/// and the ledger compare against.
+pub fn real_path(path: &Path) -> PathBuf {
+    use agentnotch_engine::platform::SecureFiles;
+    agentnotch_engine::core::atomic::StdSecureFiles
+        .canonical(path)
+        .expect("a real path")
+}
 use std::time::{Duration, SystemTime};
 
 /// `web/contract/fixtures`: the JSON both the app and the website test
@@ -719,7 +729,7 @@ impl Harness {
         let root = tempfile::tempdir().expect("a temporary folder");
         // The real path: macOS's temporary folder is reached through a link,
         // which the backfill refuses to read history through.
-        let base = std::fs::canonicalize(root.path()).expect("a real path");
+        let base = real_path(root.path());
         let (mut platform, handles) = platform(&base);
         if let Some(browser) = &options.browser {
             platform.browser = browser.clone();
@@ -778,7 +788,7 @@ impl Harness {
 
     /// The config `an-core` hands the cloud now (switches as last written).
     pub fn config(&self) -> CloudConfig {
-        let base = std::fs::canonicalize(self.root.path()).expect("a real path");
+        let base = real_path(self.root.path());
         let mut cfg = Self::config_for(&base, &self.handles, &self.options);
         if let Some(Value::Bool(on)) = self.deps.setting("cloudSyncEnabled") {
             cfg.sync_enabled = on;
@@ -798,9 +808,7 @@ impl Harness {
     }
 
     pub fn support(&self) -> PathBuf {
-        std::fs::canonicalize(self.root.path())
-            .expect("a real path")
-            .join("support")
+        real_path(self.root.path()).join("support")
     }
 
     pub fn now(&self) -> SystemTime {
