@@ -17,10 +17,10 @@
 
 mod common;
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Barrier};
 use std::time::{Duration, Instant};
 
 use agentnotch_engine::platform::{HookTransport, TransportEvent};
@@ -36,8 +36,8 @@ use agentnotch_win::pipe_server::client::{self, ClientError};
 use agentnotch_win::pipe_server::PIPE_IN_USE;
 use common::{
     assert_silent_success, begin, fixture, hook_command, hook_env, open_client, own_sid,
-    pipe_security, response_fixture, silent_server, spawn, temp_folder, trace_file, traced,
-    unique_pipe, Harness, CONFIG_DIR, WAIT,
+    pipe_security, response_fixture, silent_server, spawn, temp_folder, trace_file, trace_lines,
+    traced, unique_pipe, Harness, CONFIG_DIR, HARD_TIMEOUT, WAIT,
 };
 use serde_json::{json, Map, Value};
 
@@ -236,6 +236,91 @@ fn garbage_on_stdin_sends_nothing() {
     let done = spawn(hook_command(&app.pipe), &fixture("stdin/pre_tool_use.json")).finish();
     assert_silent_success(&done, "PreToolUse");
     app.wait_hook("PreToolUse");
+}
+
+/// Claude Code runs the PreToolUse hooks of parallel tool calls at the same moment, and every
+/// one of them must reach the app: the Mac's socket queues them in its backlog. A pipe instance
+/// takes one client at a time; the server puts a new one in its place at once, and a hook that
+/// finds every instance taken waits for the next one, within its budget.
+#[test]
+fn a_burst_of_hooks_all_arrive() {
+    let _test = begin("a_burst_of_hooks_all_arrive");
+    const HOOKS: usize = 16;
+    let mut app = Harness::start("burst");
+    let trace = trace_file();
+    let id = |n: usize| format!("toolu_burst_{n:02}");
+
+    // Every hook is started and blocked on its stdin first (starting a process is the slow
+    // part); then all their stdins end at once, and they open the pipe together.
+    let mut waiting = Vec::new();
+    for n in 0..HOOKS {
+        let mut command = hook_command(&app.pipe);
+        command
+            .env("AGENTNOTCH_HOOK_TRACE", &trace)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let mut child = command.spawn().expect("the hook exe starts");
+        let stdin = child.stdin.take().expect("a piped stdin");
+        let event = payload(
+            "PreToolUse",
+            json!({
+                "tool_name": "Read",
+                "tool_input": {"file_path": format!(r"C:\tmp\{n}.txt")},
+                "tool_use_id": id(n),
+            }),
+        );
+        waiting.push((child, stdin, event));
+    }
+    let go = Arc::new(Barrier::new(HOOKS));
+    let (tell, ended) = mpsc::channel();
+    for (child, mut stdin, event) in waiting {
+        let (go, tell) = (go.clone(), tell.clone());
+        std::thread::spawn(move || {
+            go.wait();
+            let _ = stdin.write_all(&event);
+            drop(stdin);
+            let _ = tell.send(child.wait_with_output());
+        });
+    }
+    for _ in 0..HOOKS {
+        let output = ended
+            .recv_timeout(HARD_TIMEOUT)
+            .expect("every hook of the burst ends")
+            .expect("the hook's output");
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(
+            output.stdout.is_empty() && output.stderr.is_empty(),
+            "{output:?}"
+        );
+    }
+
+    let mut arrived: Vec<String> = Vec::new();
+    let deadline = Instant::now() + WAIT;
+    while arrived.len() < HOOKS {
+        let Some(step) = app.step(deadline.saturating_duration_since(Instant::now())) else {
+            break;
+        };
+        for out in step.outs {
+            if let IngressOut::Hook(event) = out {
+                arrived.extend(event.tool_use_id);
+            }
+        }
+    }
+    arrived.sort();
+    let expected: Vec<String> = (0..HOOKS).map(id).collect();
+    // On a loss, the trace says why each lost hook gave up.
+    let gave_up: Vec<String> = trace_lines(&trace)
+        .into_iter()
+        .map(|(_, what)| what)
+        .filter(|what| {
+            !what.starts_with("invoked") && !what.starts_with("env ") && !what.starts_with("sent ")
+        })
+        .collect();
+    assert_eq!(
+        arrived, expected,
+        "the hooks that gave up said: {gave_up:?}"
+    );
 }
 
 // ---- PermissionRequest ----
