@@ -28,9 +28,9 @@ use agentnotch_proto::build_statusline_message;
 use agentnotch_proto::limits::STATUS_LINE_SEND_BUDGET_MS;
 use agentnotch_proto::statusline::{DEPTH_ENV, PREVIOUS_FILE_NAME};
 use common::{
-    assert_silent_success, begin, fixture, hook_env, short_path, silent_server, spawn, temp_folder,
-    trace_file, trace_lines, traced, unique_pipe, unquoted, with_hook_env, Finished, Harness,
-    Shell, TempFolder, CONFIG_DIR, EXE,
+    assert_silent_success, begin, fixture, hook_env, not_run_here, short_path, silent_server,
+    spawn, temp_folder, trace_file, trace_lines, traced, unique_pipe, unquoted, with_hook_env,
+    Finished, Harness, Shell, TempFolder, CONFIG_DIR, EXE,
 };
 use serde_json::{json, Value};
 use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
@@ -392,10 +392,10 @@ fn quotes_and_backslashes_reach_bash_as_written() {
     assert!(echo.is_file(), "Git's echo is not at {}", echo.display());
     let echo = forward(&echo);
     if !unquoted(&relay) {
-        eprintln!(
+        not_run_here(&format!(
             "statusline: NOTICE: the temporary folder can't be written without quotes ({relay}); \
              the drive-letter command was not run"
-        );
+        ));
         return;
     }
     assert!(relay.as_bytes()[1] == b':', "{relay}");
@@ -594,15 +594,22 @@ fn a_previous_command_naming_the_wrapper_chains_nothing() {
         format!("cd / && {} statusline", forward(&wrapper.exe)),
     ];
     // The 8.3 form, as the installer writes a path that holds a space.
+    // The file's own short name, not just a folder's: `…\AGENTN~1.EXE`.
+    let short_file = |short: &str| {
+        short
+            .rsplit(['\\', '/'])
+            .next()
+            .is_some_and(|file| file.to_lowercase().starts_with("agentn~"))
+    };
     match short_path(&wrapper.exe) {
-        Some(short) if short.to_lowercase().contains("agentn~") => {
+        Some(short) if short_file(&short) => {
             spellings.push(format!("{} statusline", short.replace('\\', "/")));
             spellings.push(format!("{short} statusline"));
         }
-        other => eprintln!(
+        other => not_run_here(&format!(
             "statusline: NOTICE: no 8.3 name for the wrapper on this volume ({other:?}); that \
              spelling was not run"
-        ),
+        )),
     }
     for spelling in spellings {
         wrapper.previous(&spelling);
@@ -640,26 +647,29 @@ fn a_wrapper_started_by_a_wrapper_chains_nothing() {
     let image = format!("an-nested-{}.exe", std::process::id());
     let copy = Wrapper::named("nested", &image);
     copy.previous(&format!("'{}' statusline", forward(&copy.exe)));
-    let trace = trace_file();
     let nobody = unique_pipe("nested");
-    let mut outer = Vec::new();
+    // One trace per render: Windows hands an ended process's pid out again at once, so across
+    // twenty renders a nested wrapper can get the pid an earlier outer one had; within one
+    // render both processes run together and their pids differ.
     for attempt in 0..20 {
+        let trace = trace_file();
         let done = spawn(copy.command(&nobody, &trace), &status()).finish();
         assert_silent_success(&done, &format!("attempt {attempt}"));
-        outer.push(done.pid);
-    }
-    let lines = trace_lines(&trace);
-    let count = |what: &str| lines.iter().filter(|(_, line)| line == what).count();
-    assert_eq!(count("invoked statusline"), 40, "{lines:?}");
-    assert_eq!(count("chain: started"), 20, "{lines:?}");
-    assert_eq!(count("chain: nested"), 20, "{lines:?}");
-    assert_eq!(count("chain: exit 0"), 20, "{lines:?}");
-    // The ones the test started chained; the ones they started did not.
-    for (pid, line) in &lines {
-        match line.as_str() {
-            "chain: started" | "chain: exit 0" => assert!(outer.contains(pid), "{lines:?}"),
-            "chain: nested" => assert!(!outer.contains(pid), "{lines:?}"),
-            _ => {}
+        let lines = trace_lines(&trace);
+        let count = |what: &str| lines.iter().filter(|(_, line)| line == what).count();
+        assert_eq!(count("invoked statusline"), 2, "{attempt}: {lines:?}");
+        assert_eq!(count("chain: started"), 1, "{attempt}: {lines:?}");
+        assert_eq!(count("chain: nested"), 1, "{attempt}: {lines:?}");
+        assert_eq!(count("chain: exit 0"), 1, "{attempt}: {lines:?}");
+        // The one the test started chained; the one it started did not.
+        for (pid, line) in &lines {
+            match line.as_str() {
+                "chain: started" | "chain: exit 0" => {
+                    assert_eq!(*pid, done.pid, "{attempt}: {lines:?}")
+                }
+                "chain: nested" => assert_ne!(*pid, done.pid, "{attempt}: {lines:?}"),
+                _ => {}
+            }
         }
     }
     // No pile-up: not one copy is still running.

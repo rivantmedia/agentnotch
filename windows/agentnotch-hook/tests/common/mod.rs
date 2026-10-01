@@ -118,6 +118,18 @@ pub fn begin(name: &'static str) -> TestGuard {
     }
 }
 
+/// A vector of the design this machine cannot run (no 8.3 names on the temporary folder's
+/// volume, a temporary folder that needs quotes). On a developer's machine it is left out with
+/// `notice` printed. On CI (`CI=true`) that is a failure: the test passes either way, and
+/// libtest shows a passing test's notice to nobody, so the vector would go unproven unseen.
+#[track_caller]
+pub fn not_run_here(notice: &str) {
+    if std::env::var("CI").is_ok_and(|ci| ci.eq_ignore_ascii_case("true")) {
+        panic!("{notice} (CI=true: this vector of DESIGN-WIN §7.3 may not go unproven on CI)");
+    }
+    eprintln!("{notice}");
+}
+
 // ---- names, fixtures, the trace ----
 
 fn unique(what: &str) -> String {

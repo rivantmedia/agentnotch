@@ -197,14 +197,16 @@ fn hook_exe() -> PathBuf {
 /// could have left that changes what the hook does, plus a Claude session of the test's own on
 /// the test's pipe.
 fn hook_environment(pipe: &str, trace: Option<&Path>) -> Vec<(String, String)> {
-    const CLEARED: [&str; 11] = [
+    const CLEARED: [&str; 13] = [
         "CLAUDE_PID",
         "CLAUDE_CONFIG_DIR",
         "CLAUDE_CODE_SESSION_ATTENDED",
         "CLAUDE_CODE_ENTRYPOINT",
+        "AGENTNOTCH_DEV",
         "AGENTNOTCH_HOOK_TRACE",
         "AGENTNOTCH_HOOK_TEST_PANIC",
         "AGENTNOTCH_HOOK_TEST_PREVIOUS_TIMEOUT_MS",
+        "AGENTNOTCH_HOOK_TEST_PROGRAM_FILES",
         "AGENTNOTCH_STATUSLINE_DEPTH",
         "AGENTNOTCH_SOCKET",
         "WT_SESSION",

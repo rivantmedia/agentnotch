@@ -23,9 +23,9 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use common::{
-    assert_silent_success, begin, fixture, short_path, spawn, string_form_path, temp_folder,
-    trace_file, trace_lines, traced, unique_pipe, unquoted, with_hook_env, Harness, Shell,
-    TempFolder, EXE,
+    assert_silent_success, begin, fixture, not_run_here, short_path, spawn, string_form_path,
+    temp_folder, trace_file, trace_lines, traced, unique_pipe, unquoted, with_hook_env, Harness,
+    Shell, TempFolder, EXE,
 };
 use serde_json::{json, Value};
 use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
@@ -79,11 +79,11 @@ impl Profile {
         if short.contains(' ') {
             // 8.3 names are off on this volume, so the short path is the long one again. The
             // design gives such a folder no string form (exec form or "can't be hooked here").
-            eprintln!(
+            assert_eq!(form, None, "{short}");
+            not_run_here(&format!(
                 "shell_forms: NOTICE: no 8.3 names on the volume of {}; the 8.3 form is not run",
                 self.exe.display()
-            );
-            assert_eq!(form, None, "{short}");
+            ));
             return None;
         }
         let form = form.expect("an 8.3 path is a string form");

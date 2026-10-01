@@ -7,8 +7,10 @@
 //!
 //! The time bounds are the design's and are measured from just before the process is created:
 //! no app, under 200 ms; a server that never reads, under 1.5 s (the 1.2 s watchdog); the server
-//! stopping under a waiting hook, under 1 s. Only the first is not taken from a single run: see
-//! `without_an_app_the_hook_is_gone_in_under_200_ms`.
+//! stopping, or the app's process being killed, under a waiting hook, under 1 s. Only the first
+//! is not taken from a single run: see `without_an_app_the_hook_is_gone_in_under_200_ms`.
+//! For the kill, this binary runs again in a process of its own as the app
+//! (`the_app_in_a_process_of_its_own`, ignored in a normal run).
 
 #![cfg(windows)]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::print_stderr)]
@@ -16,6 +18,8 @@
 mod common;
 
 use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -32,8 +36,8 @@ use agentnotch_win::pipe_server::client::{self, ClientError};
 use agentnotch_win::pipe_server::PIPE_IN_USE;
 use common::{
     assert_silent_success, begin, fixture, hook_command, hook_env, open_client, own_sid,
-    pipe_security, response_fixture, silent_server, spawn, trace_file, traced, unique_pipe,
-    Harness, CONFIG_DIR,
+    pipe_security, response_fixture, silent_server, spawn, temp_folder, trace_file, traced,
+    unique_pipe, Harness, CONFIG_DIR, WAIT,
 };
 use serde_json::{json, Map, Value};
 
@@ -577,6 +581,105 @@ fn a_stopped_server_ends_a_waiting_hook_within_a_second() {
     let done = hook.finish();
     let took = stopping.elapsed();
     assert_silent_success(&done, "the server stopped");
+    assert!(took < Duration::from_secs(1), "it took {took:?}");
+}
+
+/// Set on the copy of this test binary that plays the app for
+/// `a_killed_app_ends_a_waiting_hook_within_a_second`: the pipe it serves…
+const STAND_IN_PIPE: &str = "AGENTNOTCH_TEST_STAND_IN_PIPE";
+/// …and the folder where it leaves a file for each step it got to.
+const STAND_IN_FOLDER: &str = "AGENTNOTCH_TEST_STAND_IN_FOLDER";
+/// Its name, for libtest to run it alone.
+const STAND_IN_TEST: &str = "the_app_in_a_process_of_its_own";
+
+/// Not a test of its own: the app's side (the real server feeding the real ingress) in a
+/// process of its own, for `a_killed_app_ends_a_waiting_hook_within_a_second` to kill. Ignored
+/// in a normal run; that test runs this binary again with `--ignored --exact` and the two
+/// variables. Without them it does nothing.
+#[test]
+#[ignore = "run in a process of its own by a_killed_app_ends_a_waiting_hook_within_a_second"]
+fn the_app_in_a_process_of_its_own() {
+    let (Some(pipe), Some(folder)) = (
+        std::env::var_os(STAND_IN_PIPE),
+        std::env::var_os(STAND_IN_FOLDER),
+    ) else {
+        return;
+    };
+    let folder = PathBuf::from(folder);
+    let mut app = Harness::on(pipe.to_str().expect("a Unicode pipe name"));
+    app.wait_listening();
+    std::fs::write(folder.join("listening"), b"").expect("the stand-in's first step");
+    app.wait_held();
+    std::fs::write(folder.join("held"), b"").expect("the stand-in's second step");
+    // Held until the test kills this process; a stand-in whose test went away ends on its own.
+    std::thread::sleep(Duration::from_secs(60));
+}
+
+/// The stand-in app; killed when the test ends, however it ends.
+struct StandIn(Child);
+
+impl StandIn {
+    /// Waits until the stand-in left `step` in its folder; fails when it ended first or took
+    /// too long.
+    #[track_caller]
+    fn wait_for(&mut self, step: &Path) {
+        let until = Instant::now() + WAIT;
+        while !step.exists() {
+            if let Ok(Some(status)) = self.0.try_wait() {
+                panic!(
+                    "the stand-in app ended ({status}) before {}",
+                    step.display()
+                );
+            }
+            assert!(
+                Instant::now() < until,
+                "the stand-in app never got to {}",
+                step.display()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+impl Drop for StandIn {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// The app is ended by Windows (a crash, Task Manager, the updater's kill) while a hook waits:
+/// nothing in the app runs, and the kernel closing its handles is all the hook gets. It exits 0,
+/// silent, within a second (DESIGN-WIN §7.3 "server killed mid-wait").
+#[test]
+fn a_killed_app_ends_a_waiting_hook_within_a_second() {
+    let _test = begin("a_killed_app_ends_a_waiting_hook_within_a_second");
+    let pipe = unique_pipe("killed");
+    let folder = temp_folder("killed-app");
+    let mut app = StandIn(
+        Command::new(std::env::current_exe().expect("the test's own path"))
+            .args([STAND_IN_TEST, "--exact", "--ignored", "--test-threads", "1"])
+            .env(STAND_IN_PIPE, &pipe)
+            .env(STAND_IN_FOLDER, folder.path())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("the stand-in app starts"),
+    );
+    app.wait_for(&folder.path().join("listening"));
+    let hook = spawn(
+        hook_command(&pipe),
+        &fixture("stdin/permission_request_bash.json"),
+    );
+    app.wait_for(&folder.path().join("held"));
+    hook.assert_waiting(BLOCKED_FOR);
+
+    let killing = Instant::now();
+    app.0.kill().expect("the stand-in app is killed");
+    let done = hook.finish();
+    let took = killing.elapsed();
+    assert_silent_success(&done, "the app was killed");
     assert!(took < Duration::from_secs(1), "it took {took:?}");
 }
 

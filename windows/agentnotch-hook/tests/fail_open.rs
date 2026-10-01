@@ -33,6 +33,9 @@ enum Stdin<'a> {
     Bytes(&'a [u8]),
     /// Nothing to read at all (the null device; a closed descriptor reads the same).
     Closed,
+    /// A handle that can't be read (a file open for writing only): every role gives up on its
+    /// input before it would look for the app.
+    Unreadable,
 }
 
 struct Run {
@@ -49,8 +52,10 @@ fn unique(what: &str) -> String {
     )
 }
 
-/// The exe with none of Claude Code's or this app's variables, and a pipe name no app serves
-/// (honoured only where a test also sets `AGENTNOTCH_DEV=1`).
+/// The exe with none of Claude Code's or this app's variables, talking to a pipe name no app
+/// serves. The development switch is on so that the name is honoured: without it the exe uses
+/// this user's real pipe, and on a PC where Agent Notch runs a test event would reach the app.
+/// The one test that turns the switch off gives the exe nothing it could send.
 fn hook_command(args: &[&str]) -> Command {
     exe_command(Path::new(EXE), args)
 }
@@ -64,7 +69,6 @@ fn exe_command(exe: &Path, args: &[&str]) -> Command {
         "CLAUDE_CONFIG_DIR",
         "CLAUDE_CODE_SESSION_ATTENDED",
         "CLAUDE_CODE_ENTRYPOINT",
-        "AGENTNOTCH_DEV",
         "AGENTNOTCH_HOOK_TRACE",
         "AGENTNOTCH_HOOK_TEST_PANIC",
         "AGENTNOTCH_HOOK_TEST_PREVIOUS_TIMEOUT_MS",
@@ -73,7 +77,7 @@ fn exe_command(exe: &Path, args: &[&str]) -> Command {
     ] {
         command.env_remove(name);
     }
-    command.env(
+    command.env("AGENTNOTCH_DEV", "1").env(
         "AGENTNOTCH_SOCKET",
         format!(r"\\.\pipe\{}", unique("no-app")),
     );
@@ -85,6 +89,7 @@ fn run(mut command: Command, stdin: Stdin) -> Run {
         .stdin(match stdin {
             Stdin::Bytes(_) => Stdio::piped(),
             Stdin::Closed => Stdio::null(),
+            Stdin::Unreadable => write_only(),
         })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -117,6 +122,16 @@ fn run(mut command: Command, stdin: Stdin) -> Run {
         },
         pid,
     }
+}
+
+/// A new file of the test's own, open for writing only: as stdin, every read of it fails.
+fn write_only() -> Stdio {
+    let path = std::env::temp_dir().join(unique("write-only"));
+    let file = std::fs::File::create(&path).expect("a file to stand in for stdin");
+    // The child gets its own handle; the name is not needed any more (on Windows the file goes
+    // once both handles are closed).
+    let _ = std::fs::remove_file(&path);
+    Stdio::from(file)
 }
 
 /// Everything a stream holds, read on a thread of its own.
@@ -209,13 +224,8 @@ fn garbage_on_stdin_is_ignored() {
     for args in [&["hook"][..], &["hook", "--exec"], &["statusline"]] {
         for input in inputs {
             let shown = String::from_utf8_lossy(&input[..input.len().min(24)]).into_owned();
-            // Once as a real session runs it, once with the development switches on.
             let done = run(hook_command(args), Stdin::Bytes(input));
             assert_silent_success(&done, &format!("{args:?} < {shown:?}"));
-            let mut dev = hook_command(args);
-            dev.env("AGENTNOTCH_DEV", "1");
-            let done = run(dev, Stdin::Bytes(input));
-            assert_silent_success(&done, &format!("dev {args:?} < {shown:?}"));
         }
     }
 }
@@ -223,8 +233,10 @@ fn garbage_on_stdin_is_ignored() {
 #[test]
 fn closed_stdin_is_ignored() {
     for args in [&["hook"][..], &["hook", "--exec"], &["statusline"], &[]] {
-        let done = run(hook_command(args), Stdin::Closed);
-        assert_silent_success(&done, &format!("{args:?}"));
+        for stdin in [Stdin::Closed, Stdin::Unreadable] {
+            let done = run(hook_command(args), stdin);
+            assert_silent_success(&done, &format!("{args:?}"));
+        }
     }
 }
 
@@ -327,12 +339,14 @@ fn nothing_is_traced_without_the_dev_switch() {
             let path = trace_file();
             let mut command = hook_command(args);
             command.env("AGENTNOTCH_HOOK_TRACE", &path);
-            if let Some(dev) = dev {
-                command.env("AGENTNOTCH_DEV", dev);
-            }
-            // Not an event: a run that reached an app under this user's real pipe name (the
-            // override is off here) still sends it nothing.
-            let done = run(command, Stdin::Bytes(b"not json"));
+            match dev {
+                Some(dev) => command.env("AGENTNOTCH_DEV", dev),
+                None => command.env_remove("AGENTNOTCH_DEV"),
+            };
+            // With the switch off the pipe override is off too, and the exe would use this
+            // user's real pipe: input it can't read makes every role stop before it looks for
+            // an app. The first trace line ("invoked …") comes before that.
+            let done = run(command, Stdin::Unreadable);
             assert_silent_success(&done, &format!("{args:?} dev={dev:?}"));
             assert!(!path.exists(), "{args:?} dev={dev:?} wrote a trace");
         }
