@@ -449,6 +449,7 @@ function Initialize-Context {
     $script:RunKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
     $script:DataRoots = @(Get-DataRoots -Profile $script:P)
     $script:FixtureDir = Join-Path $PSScriptRoot 'smoke\profile'
+    $script:BaselineDir = Join-Path $PSScriptRoot '..\agentnotch-ui-tests\baselines'
     $script:FakeClaudeLog = Join-Path $temp 'fake-claude.log'
     $script:UsageFixture = Join-Path $script:FixtureDir 'usage.json'
     $script:KnownProfileBefore = $null
@@ -598,20 +599,26 @@ function Invoke-DoctorPhase {
     }
 }
 
-# A sealed launch (fixture data only: no Claude folder, no network, no child process) stays up
-# and shows its notch. Phase 4 of the design replaces it with the self-test; until then it is
-# what proves a build starts at all.
-function Invoke-SealedLaunchPhase {
-    $dataTrees = {
-        $trees = [ordered]@{}
-        foreach ($root in $script:DataRoots) {
-            foreach ($pair in (Get-TreeHash -Root (Join-Path $root 'Agent Notch') -Prefix "$root/").GetEnumerator()) { $trees[$pair.Key] = $pair.Value }
-        }
-        $trees
+# The app's own data folders, hashed (all roots). A sealed run must leave them as they were.
+function Get-AppDataTrees {
+    $trees = [ordered]@{}
+    foreach ($root in $script:DataRoots) {
+        foreach ($pair in (Get-TreeHash -Root (Join-Path $root 'Agent Notch') -Prefix "$root/").GetEnumerator()) { $trees[$pair.Key] = $pair.Value }
     }
-    $removeSealed = { foreach ($root in $script:DataRoots) { Remove-Item -LiteralPath (Join-Path $root 'Agent Notch Sealed') -Recurse -Force -ErrorAction SilentlyContinue } }
-    & $removeSealed
-    $dataBefore = & $dataTrees
+    $trees
+}
+
+# A sealed run's own data folder: deleted before and after each run (DESIGN-WIN §7.4).
+function Remove-SealedData {
+    foreach ($root in $script:DataRoots) { Remove-Item -LiteralPath (Join-Path $root 'Agent Notch Sealed') -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+# A sealed launch (fixture data only: no Claude folder, no network, no child process) stays up
+# and shows its notch. While the selftest gate is closed this is what proves a build starts at
+# all; once it is open, phase 4 (the self-test) replaces it.
+function Invoke-SealedLaunchPhase {
+    Remove-SealedData
+    $dataBefore = Get-AppDataTrees
     $sealedEnvironment = Merge-Environment @((Get-AppEnvironment), @{ AGENTNOTCH_SAFE_MODE = '1' })
     $app = Register-OwnProcess (Start-AppProcess -Exe $script:AppExe -Environment $sealedEnvironment)
     Start-Sleep -Seconds 20
@@ -625,11 +632,235 @@ function Invoke-SealedLaunchPhase {
     Copy-Item -LiteralPath $runLogPath -Destination (Join-Path $script:ArtifactsDir 'sealed-run.log')
     $runLog = Get-Content -LiteralPath $runLogPath -Raw
     if ($runLog -notmatch 'an: hub started \(sealed\)') { throw "the sealed hub did not start: $runLog" }
-    $changed = @(Compare-Hashes -Before $dataBefore -After (& $dataTrees))
+    $changed = @(Compare-Hashes -Before $dataBefore -After (Get-AppDataTrees))
     if ($changed) { throw "a sealed run wrote to the app's own data folder: $($changed -join ', ')" }
     $changedP = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P) -Exclude 'AppData/*')
     if ($changedP) { throw "a sealed run changed P: $($changedP -join ', ')" }
-    & $removeSealed
+    Remove-SealedData
+}
+
+# --- phase 4: the sealed self-test and the snapshots ---------------------------------------------------------
+
+# The edges the self-test must report, in the order WP9 runs them; "floating" has the notch hidden.
+$script:SelfTestEdges = @('right', 'left', 'top', 'bottom', 'floating')
+# The three pages whose round trip, CSP violations, errors and invariants are reported.
+$script:SelfTestPages = @('notch', 'settings', 'agentnotch-panel')
+# The three runs: the page scale the report must name, and the WebView2 argument that makes it.
+$script:SelfTestScales = @(
+    @{ Scale = 1.0;  Name = '100';  WebViewArguments = '' }
+    @{ Scale = 1.25; Name = '125';  WebViewArguments = '--force-device-scale-factor=1.25' }
+    @{ Scale = 1.5;  Name = '150';  WebViewArguments = '--force-device-scale-factor=1.5' }
+)
+# The snapshots every build must produce (WP9's fixed states); a page that exposes more states
+# adds names to the manifest, and each of those is checked the same way.
+$script:SnapshotStates = @(
+    foreach ($edge in 'right', 'left', 'top', 'bottom') { "notch-$edge" }
+    foreach ($edge in 'right', 'left', 'top', 'bottom') { "panel-list-$edge" }
+    'panel-floating', 'panel-chat', 'settings-claude'
+)
+
+# A JSON true and nothing else: a string "true" or the number 1 is not a pass.
+function Test-IsTrue { param($Value) $Value -is [bool] -and $Value }
+
+function Test-HashKey {
+    param($Table, [string]$Key)
+    $Table -is [System.Collections.IDictionary] -and $Table.Contains($Key)
+}
+
+# The self-test report (WP9's JSON, read with ConvertFrom-Json -AsHashtable) against what the
+# design asks (§7.4): one description per failed check, an empty list when it all holds. The
+# report's own failures list is echoed, so a red run says what the app saw.
+function Test-SelfTestReport {
+    param([Parameter(Mandatory)]$Report, [double]$Scale = 1.0)
+    $problems = [Collections.Generic.List[string]]::new()
+    if ($Report -isnot [System.Collections.IDictionary]) { return @('the report is not a JSON object') }
+    $own = @(if (Test-HashKey $Report 'failures') { @($Report['failures']) } else { @() })
+    if (Test-HashKey $Report 'error') { if ($Report['error']) { $problems.Add("the app says: $($Report['error'])") } }
+    foreach ($failure in $own) { $problems.Add("report failure: $failure") }
+    if (-not (Test-HashKey $Report 'ok') -or -not (Test-IsTrue $Report['ok'])) { $problems.Add('ok is not true') }
+    if (-not (Test-HashKey $Report 'failures')) { $problems.Add('the report has no failures list') }
+    if ((Test-HashKey $Report 'scale') -and $Report['scale'] -is [ValueType] -and [math]::Abs([double]$Report['scale'] - $Scale) -gt 0.01) {
+        $problems.Add("scale is $($Report['scale']), the run asked for $Scale")
+    }
+
+    $edges = @(if (Test-HashKey $Report 'edges') { @($Report['edges']) } else { @() })
+    foreach ($name in $script:SelfTestEdges) {
+        $edge = $edges | Where-Object { $_ -is [System.Collections.IDictionary] -and $_['edge'] -eq $name } | Select-Object -First 1
+        if (-not $edge) { $problems.Add("edge ${name}: missing from the report"); continue }
+        # With the notch hidden (floating) there is no tail to keep inside a card and nothing to
+        # stand above: the report may say so with null (or leave the field out). Anywhere else
+        # these must be true.
+        $floating = $name -eq 'floating'
+        foreach ($check in 'inside_work_area', 'tail_inside_corners', 'topmost', 'above_notch') {
+            $value = if (Test-HashKey $edge $check) { $edge[$check] } else { $null }
+            if (Test-IsTrue $value) { continue }
+            if ($floating -and $check -in 'tail_inside_corners', 'above_notch' -and $null -eq $value) { continue }
+            $problems.Add("edge ${name}: $check is $(if ($null -eq $value) { 'missing' } else { $value })")
+        }
+        $auto = if (Test-HashKey $edge 'auto') { $edge['auto'] } else { $null }
+        foreach ($check in 'no_activate', 'gate_shut', 'gate_opens_on_confirmation') {
+            $value = if (Test-HashKey $auto $check) { $auto[$check] } else { $null }
+            if (-not (Test-IsTrue $value)) { $problems.Add("edge ${name}: auto.$check is $(if ($null -eq $value) { 'missing' } else { $value })") }
+        }
+        if ((Test-HashKey $edge 'failures') -and @($edge['failures']).Count) {
+            $problems.Add("edge ${name}: " + (@($edge['failures']) -join '; '))
+        }
+    }
+
+    $pages = if (Test-HashKey $Report 'pages') { $Report['pages'] } else { $null }
+    foreach ($name in $script:SelfTestPages) {
+        $page = if (Test-HashKey $pages $name) { $pages[$name] } else { $null }
+        if (-not $page) { $problems.Add("page ${name}: missing from the report"); continue }
+        if (-not (Test-HashKey $page 'round_trip') -or -not (Test-IsTrue $page['round_trip'])) { $problems.Add("page ${name}: the an_call round trip did not succeed") }
+        foreach ($list in 'csp_violations', 'errors') {
+            if (-not (Test-HashKey $page $list)) { $problems.Add("page ${name}: $list is missing"); continue }
+            $items = @($page[$list])
+            if ($items.Count) { $problems.Add("page ${name}: $($items.Count) in ${list}: " + (($items | ForEach-Object { [string]$_ }) -join ' | ')) }
+        }
+        $invariants = if (Test-HashKey $page 'invariants') { $page['invariants'] } else { $null }
+        if ($invariants -isnot [System.Collections.IDictionary] -or $invariants.Count -eq 0) { $problems.Add("page ${name}: no invariants reported"); continue }
+        foreach ($invariant in $invariants.Keys) {
+            if (-not (Test-IsTrue $invariants[$invariant])) { $problems.Add("page ${name}: invariant '$invariant' is $($invariants[$invariant])") }
+        }
+    }
+    [string[]]$problems.ToArray()
+}
+
+# The snapshot manifest (a JSON array of {name, file, width, height, bytes}) against the files
+# beside it: every required state present, every listed file a non-empty PNG.
+function Test-SnapshotManifest {
+    param([Parameter(Mandatory)][string]$Directory, [string[]]$Required = $script:SnapshotStates)
+    $problems = [Collections.Generic.List[string]]::new()
+    $manifestPath = Join-Path $Directory 'manifest.json'
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { return @("no manifest.json in $Directory") }
+    try { $entries = @(Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json -AsHashtable -NoEnumerate) }
+    catch { return @("manifest.json is not JSON: $($_.Exception.Message)") }
+    if ($entries.Count -eq 1 -and $entries[0] -is [System.Collections.IList]) { $entries = @($entries[0]) }
+    $names = [Collections.Generic.List[string]]::new()
+    foreach ($entry in $entries) {
+        if ($entry -isnot [System.Collections.IDictionary] -or -not (Test-HashKey $entry 'name') -or -not (Test-HashKey $entry 'file')) {
+            $problems.Add('a manifest entry has no name or file'); continue
+        }
+        $names.Add([string]$entry['name'])
+        $file = Join-Path $Directory ([string]$entry['file'])
+        if ([IO.Path]::GetFileName([string]$entry['file']) -ne [string]$entry['file']) { $problems.Add("$($entry['name']): the file name $($entry['file']) is not a plain name"); continue }
+        if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { $problems.Add("$($entry['name']): $($entry['file']) is missing"); continue }
+        $bytes = [IO.File]::ReadAllBytes($file)
+        if ($bytes.Length -eq 0) { $problems.Add("$($entry['name']): $($entry['file']) is empty"); continue }
+        if ($bytes.Length -lt 8 -or $bytes[0] -ne 0x89 -or $bytes[1] -ne 0x50 -or $bytes[2] -ne 0x4E -or $bytes[3] -ne 0x47) { $problems.Add("$($entry['name']): $($entry['file']) is not a PNG") }
+    }
+    foreach ($state in $Required) {
+        if ($state -notin $names) { $problems.Add("the manifest has no '$state' snapshot") }
+    }
+    [string[]]$problems.ToArray()
+}
+
+# The comparison with the baselines, through png-diff.mjs's folder form. Returns the parsed
+# results ({name, status, ...}); a node that fails to run is an error, not an empty result.
+function Invoke-SnapshotComparison {
+    param([Parameter(Mandatory)][string]$Actual, [Parameter(Mandatory)][string]$Baselines, [Parameter(Mandatory)][string]$Diffs)
+    $node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $node) { throw 'node is not on the PATH: the snapshot comparison needs it' }
+    $tool = Join-Path $PSScriptRoot 'smoke\png-diff.mjs'
+    $json = & $node.Source $tool --actual-dir $Actual --baseline-dir $Baselines --diff-dir $Diffs
+    if ($LASTEXITCODE -gt 1) { throw "png-diff.mjs failed with exit code $LASTEXITCODE" }
+    @((($json -join "`n") | ConvertFrom-Json -AsHashtable)['results'])
+}
+
+# One description per result that fails the comparison; a missing baseline is not one.
+function Get-SnapshotProblems {
+    param([Parameter(Mandatory)]$Results)
+    foreach ($r in $Results) {
+        switch ($r['status']) {
+            'same' { }
+            'no-baseline' { }
+            'different' { "$($r['name']): $($r['changed']) of $($r['total']) pixels differ beyond the tolerance (largest channel change $($r['maxDelta']))$(if ($r.Contains('diffFile')) { "; diff image: $($r['diffFile'])" })" }
+            'size-mismatch' { "$($r['name']): the capture is $($r['width'])x$($r['height']), the baseline $($r['baselineWidth'])x$($r['baselineHeight'])" }
+            default { "$($r['name']): $($r['status'])$(if ($r.Contains('error')) { ": $($r['error'])" })" }
+        }
+    }
+}
+
+# One sealed run of the app to its own exit, under a hard timeout (longer than the app's own
+# deadline of 120 s, so a hang shows as the app's report, not as ours).
+function Invoke-SealedRun {
+    param([hashtable]$Environment, [int]$TimeoutSeconds = 150)
+    $sealed = Merge-Environment @((Get-AppEnvironment), @{ AGENTNOTCH_SAFE_MODE = '1' }, $Environment)
+    $app = Register-OwnProcess (Start-AppProcess -Exe $script:AppExe -Environment $sealed)
+    $exited = $app.WaitForExit($TimeoutSeconds * 1000)
+    if (-not $exited) { Stop-OwnProcess -Process $app }
+    [pscustomobject]@{ TimedOut = -not $exited; ExitCode = if ($exited) { $app.ExitCode } else { $null } }
+}
+
+function Invoke-SelfTestPhase {
+    $reports = Join-Path $script:ArtifactsDir 'selftest'
+    New-Item -ItemType Directory -Force -Path $reports | Out-Null
+    Remove-SealedData
+    $dataBefore = Get-AppDataTrees
+    $problems = [Collections.Generic.List[string]]::new()
+
+    foreach ($run in $script:SelfTestScales) {
+        Write-PhaseLog "self-test at $($run.Name) %"
+        $out = Join-Path $reports "selftest-$($run.Name).json"
+        Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue
+        Remove-SealedData
+        $environment = @{ AGENTNOTCH_PANEL_SELF_TEST = '1'; AGENTNOTCH_SELF_TEST_OUT = $out }
+        if ($run.WebViewArguments) { $environment['WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS'] = $run.WebViewArguments }
+        $result = Invoke-SealedRun -Environment $environment
+        $log = Find-DataFile -Roots $script:DataRoots -Folder 'Agent Notch Sealed' -File 'run.log'
+        if ($log) { Copy-Item -LiteralPath $log -Destination (Join-Path $reports "selftest-$($run.Name)-run.log") -Force }
+        Remove-SealedData
+
+        $mine = [Collections.Generic.List[string]]::new()
+        if ($result.TimedOut) { $mine.Add('the app did not exit within 150 s') }
+        elseif ($result.ExitCode -ne 0) { $mine.Add("the app exited with $($result.ExitCode)") }
+        if (-not (Test-Path -LiteralPath $out -PathType Leaf)) {
+            $mine.Add('the app wrote no report')
+        } else {
+            try {
+                $report = Get-Content -LiteralPath $out -Raw | ConvertFrom-Json -AsHashtable
+                foreach ($line in (Test-SelfTestReport -Report $report -Scale $run.Scale)) { $mine.Add($line) }
+            } catch { $mine.Add("the report is not JSON: $($_.Exception.Message)") }
+        }
+        foreach ($line in $mine) {
+            Write-PhaseLog "  FAIL ($($run.Name) %): $line"
+            $problems.Add("at $($run.Name) %: $line")
+        }
+        if (-not $mine.Count) { Write-PhaseLog '  passed' }
+    }
+
+    # The snapshots (100 %): to a folder, then the baselines.
+    Write-PhaseLog 'snapshots'
+    $shots = Join-Path $script:ArtifactsDir 'snapshots'
+    Remove-Item -LiteralPath $shots -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path $shots | Out-Null
+    $result = Invoke-SealedRun -Environment @{ AGENTNOTCH_SNAPSHOT_CLAUDE = $shots }
+    $log = Find-DataFile -Roots $script:DataRoots -Folder 'Agent Notch Sealed' -File 'run.log'
+    if ($log) { Copy-Item -LiteralPath $log -Destination (Join-Path $reports 'snapshots-run.log') -Force }
+    Remove-SealedData
+    if ($result.TimedOut) { $problems.Add('snapshots: the app did not exit within 150 s') }
+    elseif ($result.ExitCode -ne 0) { $problems.Add("snapshots: the app exited with $($result.ExitCode)") }
+    foreach ($line in (Test-SnapshotManifest -Directory $shots)) { $problems.Add("snapshots: $line") }
+    if (-not $problems.Count) {
+        $diffs = Join-Path $script:ArtifactsDir 'snapshot-diffs'
+        $results = @(Invoke-SnapshotComparison -Actual $shots -Baselines $script:BaselineDir -Diffs $diffs)
+        foreach ($r in $results) { Write-PhaseLog "  $($r['name']): $($r['status'])" }
+        $noBaseline = @($results | Where-Object { $_['status'] -eq 'no-baseline' } | ForEach-Object { $_['name'] })
+        if ($noBaseline) {
+            Write-Host "::warning::no baseline yet for $($noBaseline.Count) snapshot(s) in windows/agentnotch-ui-tests/baselines: $($noBaseline -join ', ')"
+            Write-PhaseLog "no baseline for: $($noBaseline -join ', ')"
+        }
+        foreach ($line in (Get-SnapshotProblems -Results $results)) { $problems.Add("snapshots: $line") }
+    }
+
+    $changed = @(Compare-Hashes -Before $dataBefore -After (Get-AppDataTrees))
+    if ($changed) { $problems.Add("a sealed run wrote to the app's own data folder: $($changed -join ', ')") }
+    $changedP = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P) -Exclude 'AppData/*')
+    if ($changedP) { $problems.Add("a sealed run changed P: $($changedP -join ', ')") }
+    foreach ($root in $script:DataRoots) {
+        if (Test-Path -LiteralPath (Join-Path $root 'Agent Notch Sealed')) { $problems.Add("Agent Notch Sealed is still there under $root") }
+    }
+    if ($problems.Count) { throw ("the sealed self-test failed:`n  " + ($problems -join "`n  ")) }
 }
 
 # --- phase 13: a hook with no app --------------------------------------------------------------------------
@@ -742,18 +973,24 @@ function Invoke-UninstallPhase {
 # --- the table of phases ------------------------------------------------------------------------------------
 
 # Rows run in order. Gate names a flag of gates.json: while it is closed the phase is reported
-# and not run. Phases 4-12 of the design are added here, between 3b and 13.
+# and not run. Phases 5-12 of the design are added here, between 4 and 13.
 function Get-PhaseTable {
-    @(
+    param($Gates = $null)
+    $rows = @(
         @{ Number = '0';  Name = 'preflight';                           Body = { Invoke-PreflightPhase } }
         @{ Number = '1';  Name = 'install';                             Body = { Invoke-InstallPhase } }
         @{ Number = '2';  Name = 'build the temporary Claude setup';    Body = { Invoke-BuildProfilePhase } }
         @{ Number = '3';  Name = 'doctor';                              Body = { Invoke-DoctorPhase } }
         @{ Number = '3b'; Name = 'sealed launch';                       Body = { Invoke-SealedLaunchPhase } }
+        @{ Number = '4';  Name = 'sealed self-test and snapshots';      Gate = 'selftest'; Body = { Invoke-SelfTestPhase } }
         @{ Number = '13'; Name = 'the hook fails open';                 Body = { Invoke-FailOpenPhase } }
         @{ Number = '14'; Name = 'autostart on and off';                Gate = 'glue'; Body = { Invoke-AutostartPhase } }
         @{ Number = '15'; Name = 'uninstall with /REMOVEHOOKS';         Body = { Invoke-UninstallPhase } }
     )
+    # The plain sealed launch is what the self-test replaces: with the gate open it would only
+    # run the same app a fourth time.
+    if ($Gates -and (Test-GateOpen -Gates $Gates -Name 'selftest')) { $rows = @($rows | Where-Object { $_.Number -ne '3b' }) }
+    $rows
 }
 
 function Write-Results {
@@ -783,7 +1020,7 @@ try {
 
 $ok = $true
 try {
-    foreach ($phase in Get-PhaseTable) {
+    foreach ($phase in Get-PhaseTable -Gates $script:GateSet) {
         if (-not $ok) {
             $script:Results.Add([pscustomobject]@{ Number = $phase.Number; Name = $phase.Name; Status = 'not run (an earlier phase failed)'; Seconds = 0.0; Error = '' })
             continue

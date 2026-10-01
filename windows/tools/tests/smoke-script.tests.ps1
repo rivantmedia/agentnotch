@@ -408,6 +408,207 @@ Test-Case 'a hook run reports its exit code, its output and its time (a stand-in
     Assert-Equal $b.Stdout "printed`n" 'loud stdout'
 }
 
+# --- phase 4: the self-test report and the snapshots ---------------------------------------------------
+
+# A passing report in WP9's shape (DESIGN-WIN §7.4, the self-test contract), as JSON text: each
+# case reads it, breaks one thing and expects exactly that to be named.
+function New-GoodReport([double]$Scale = 1.0) {
+    $edge = {
+        param($name)
+        $tail = if ($name -eq 'floating') { 'null' } else { 'true' }
+        @"
+{ "edge": "$name", "floating": $(if ($name -eq 'floating') { 'true' } else { 'false' }),
+  "panel": [10, 10, 400, 600], "work_area": [0, 0, 1024, 728], "inside_work_area": true,
+  "tail_offset": 0.0, "tail_limit": 10.0, "tail_inside_corners": $tail,
+  "topmost": true, "above_notch": $tail,
+  "auto": { "no_activate": true, "gate_shut": true, "gate_opens_on_confirmation": true },
+  "failures": [] }
+"@
+    }
+    $page = '{ "round_trip": true, "csp_violations": [], "errors": [], "invariants": { "no_text_overflow": true, "badges_inside_pill": true }, "page_hook": false }'
+    $json = @"
+{ "ok": true, "version": "1.1.0", "scale": $Scale, "error": null,
+  "edges": [ $(($script:SelfTestEdges | ForEach-Object { & $edge $_ }) -join ', ') ],
+  "pages": { "notch": $page, "settings": $page, "agentnotch-panel": $page },
+  "failures": [] }
+"@
+    $json | ConvertFrom-Json -AsHashtable
+}
+
+Test-Case 'a passing self-test report has no problems, at each scale' {
+    foreach ($scale in 1.0, 1.25, 1.5) {
+        Assert-Equal (@(Test-SelfTestReport -Report (New-GoodReport $scale) -Scale $scale).Count) 0 "problems at $scale"
+    }
+}
+
+Test-Case 'the report must name the scale the run asked for' {
+    $problems = @(Test-SelfTestReport -Report (New-GoodReport 1.0) -Scale 1.25)
+    Assert-Equal $problems.Count 1 'one problem'
+    Assert-True ($problems[0] -match 'scale is 1') 'the scale is named'
+}
+
+Test-Case 'a failing self-test report names every failed check and echoes the report failures' {
+    $r = New-GoodReport
+    $r['ok'] = $false
+    $r['failures'] = @('right: the panel left the work area')
+    $r['edges'][0]['inside_work_area'] = $false
+    $r['edges'][1]['tail_inside_corners'] = $false
+    $r['edges'][2]['topmost'] = $false
+    $r['edges'][3]['above_notch'] = $false
+    $r['edges'][3]['auto']['no_activate'] = $false
+    $r['edges'][3]['auto']['gate_shut'] = $false
+    $r['edges'][3]['auto']['gate_opens_on_confirmation'] = $false
+    $r['edges'][3]['failures'] = @('z-order lost')
+    $r['pages']['notch']['round_trip'] = $false
+    $r['pages']['settings']['csp_violations'] = @('script-src blocked inline')
+    $r['pages']['agentnotch-panel']['errors'] = @('TypeError: x is undefined')
+    $r['pages']['agentnotch-panel']['invariants']['no_text_overflow'] = $false
+    $text = (Test-SelfTestReport -Report $r) -join "`n"
+    foreach ($needle in 'ok is not true', 'report failure: right: the panel left the work area',
+        'edge right: inside_work_area is False', 'edge left: tail_inside_corners is False', 'edge top: topmost is False',
+        'edge bottom: above_notch is False', 'auto.no_activate is False', 'auto.gate_shut is False',
+        'auto.gate_opens_on_confirmation is False', 'edge bottom: z-order lost',
+        'page notch: the an_call round trip did not succeed', 'script-src blocked inline',
+        'TypeError: x is undefined', "invariant 'no_text_overflow' is False") {
+        Assert-True ($text.Contains($needle)) "<$needle> is named in:`n$text"
+    }
+}
+
+Test-Case 'a missing edge, page, field or invariant is a failure, never a pass' {
+    $r = New-GoodReport
+    $r['edges'] = @($r['edges'] | Where-Object { $_['edge'] -ne 'top' })
+    $r['pages'].Remove('settings')
+    $r['pages']['notch'].Remove('csp_violations')
+    $r['pages']['agentnotch-panel']['invariants'] = @{}
+    $r['edges'][0].Remove('topmost')
+    $text = (Test-SelfTestReport -Report $r) -join "`n"
+    foreach ($needle in 'edge top: missing from the report', 'page settings: missing from the report', 'page notch: csp_violations is missing',
+        'page agentnotch-panel: no invariants reported', 'edge right: topmost is missing') {
+        Assert-True ($text.Contains($needle)) "<$needle> is named in:`n$text"
+    }
+}
+
+Test-Case 'only a JSON true passes: the string "true" and the number 1 do not' {
+    $r = New-GoodReport
+    $r['edges'][0]['topmost'] = 'true'
+    $r['pages']['notch']['invariants']['no_text_overflow'] = 1
+    $text = (Test-SelfTestReport -Report $r) -join "`n"
+    Assert-True ($text.Contains('edge right: topmost is true')) 'a string is not true'
+    Assert-True ($text.Contains("invariant 'no_text_overflow' is 1")) 'a number is not true'
+}
+
+Test-Case 'a floating edge may leave the tail and the notch order out; no other edge may' {
+    $r = New-GoodReport
+    $r['edges'][4].Remove('tail_inside_corners'); $r['edges'][4].Remove('above_notch')
+    Assert-Equal (@(Test-SelfTestReport -Report $r).Count) 0 'floating without them'
+    $r['edges'][4]['topmost'] = $null
+    Assert-True ((Test-SelfTestReport -Report $r) -join ' ' -match 'edge floating: topmost is missing') 'but not topmost'
+    $r = New-GoodReport
+    $r['edges'][0]['above_notch'] = $null
+    Assert-True ((Test-SelfTestReport -Report $r) -join ' ' -match 'edge right: above_notch is missing') 'a flat edge needs above_notch'
+}
+
+Test-Case 'the report a stub build writes ({ok:false, error}) fails with the reason the app gave' {
+    $stub = '{"ok":false,"error":"the sealed self-test and snapshots aren''t available in this build"}' | ConvertFrom-Json -AsHashtable
+    $text = (Test-SelfTestReport -Report $stub) -join "`n"
+    Assert-True ($text.Contains("the app says: the sealed self-test")) 'the error is shown'
+    Assert-True ($text.Contains('ok is not true')) 'ok is not true'
+    Assert-True ($text.Contains('edge right: missing from the report')) 'edges are missing'
+    Assert-Equal (@(Test-SelfTestReport -Report 'text').Count) 1 'a non-object report'
+}
+
+function New-SnapshotFolder([string]$Name, [string[]]$States, [hashtable]$Extra = @{}) {
+    $dir = New-Scratch $Name
+    $png = [byte[]](0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3)
+    $entries = foreach ($state in $States) {
+        [IO.File]::WriteAllBytes((Join-Path $dir "$state.png"), $png)
+        [ordered]@{ name = $state; file = "$state.png"; width = 400; height = 300; bytes = $png.Length }
+    }
+    foreach ($key in $Extra.Keys) { $entries += $Extra[$key] }
+    ConvertTo-Json -InputObject @($entries) | Set-Content -LiteralPath (Join-Path $dir 'manifest.json')
+    $dir
+}
+
+Test-Case 'a complete snapshot folder passes; the fixed states are the ones WP9 names' {
+    Assert-Equal $script:SnapshotStates.Count 11 'state count'
+    $dir = New-SnapshotFolder 'shots-ok' $script:SnapshotStates
+    Assert-Equal (@(Test-SnapshotManifest -Directory $dir).Count) 0 'problems'
+}
+
+Test-Case 'a missing manifest, state, file, empty file or non-PNG is named' {
+    Assert-True ((Test-SnapshotManifest -Directory (New-Scratch 'shots-none')) -join ' ' -match 'no manifest.json') 'no manifest'
+    $dir = New-SnapshotFolder 'shots-bad' ($script:SnapshotStates | Where-Object { $_ -ne 'panel-chat' })
+    Assert-True ((Test-SnapshotManifest -Directory $dir) -join ' ' -match "no 'panel-chat' snapshot") 'a state missing'
+    Remove-Item -LiteralPath (Join-Path $dir 'notch-top.png')
+    [IO.File]::WriteAllBytes((Join-Path $dir 'notch-left.png'), [byte[]]@())
+    [IO.File]::WriteAllBytes((Join-Path $dir 'notch-right.png'), [byte[]](1, 2, 3, 4, 5, 6, 7, 8, 9))
+    $text = (Test-SnapshotManifest -Directory $dir) -join "`n"
+    Assert-True ($text.Contains('notch-top: notch-top.png is missing')) 'a file missing'
+    Assert-True ($text.Contains('notch-left: notch-left.png is empty')) 'an empty file'
+    Assert-True ($text.Contains('notch-right: notch-right.png is not a PNG')) 'not a PNG'
+}
+
+Test-Case 'a state the manifest lists beyond the fixed ones is checked like the others' {
+    $extra = @{ a = [ordered]@{ name = 'panel-undo'; file = 'panel-undo.png'; width = 1; height = 1; bytes = 1 } }
+    $dir = New-SnapshotFolder 'shots-extra' $script:SnapshotStates $extra
+    Assert-True ((Test-SnapshotManifest -Directory $dir) -join ' ' -match 'panel-undo: panel-undo.png is missing') 'the listed file is required'
+    $escape = @{ a = [ordered]@{ name = 'esc'; file = '../outside.png'; width = 1; height = 1; bytes = 1 } }
+    $dir2 = New-SnapshotFolder 'shots-escape' $script:SnapshotStates $escape
+    Assert-True ((Test-SnapshotManifest -Directory $dir2) -join ' ' -match 'not a plain name') 'a path in a file name is refused'
+}
+
+Test-Case 'comparison results: same and a missing baseline pass; a difference or a size change fails with the numbers' {
+    $results = @(
+        @{ name = 'a.png'; status = 'same'; ok = $true }
+        @{ name = 'b.png'; status = 'no-baseline'; ok = $true }
+        @{ name = 'c.png'; status = 'different'; ok = $false; changed = 120; total = 1000; maxDelta = 200; diffFile = 'out\c.diff.png' }
+        @{ name = 'd.png'; status = 'size-mismatch'; ok = $false; width = 400; height = 300; baselineWidth = 400; baselineHeight = 320 }
+        @{ name = 'e.png'; status = 'error'; ok = $false; error = 'not a PNG (bad signature)' }
+    )
+    $problems = @(Get-SnapshotProblems -Results $results)
+    Assert-Equal $problems.Count 3 'three problems'
+    Assert-True ($problems[0] -match '^c.png: 120 of 1000 pixels differ.*largest channel change 200.*diff image: out.c.diff.png') 'the difference'
+    Assert-True ($problems[1] -match '^d.png: the capture is 400x300, the baseline 400x320') 'the sizes'
+    Assert-True ($problems[2] -match '^e.png: error: not a PNG') 'the error'
+}
+
+Test-Case 'the comparison runs through node on generated PNGs when node is here' {
+    if (-not (Get-Command node -CommandType Application -ErrorAction SilentlyContinue)) { return }
+    $dir = New-Scratch 'cmp'
+    $make = {
+        param($path, [byte]$grey)
+        $code = "import('$((Join-Path $windowsDir 'scripts/smoke/png-diff.mjs') -replace '\\','/')').then(m => require('fs').writeFileSync(process.argv[1], m.encodePng(4, 4, new Uint8Array(64).fill($grey))))"
+        & node -e $code $path
+    }
+    $actual = New-Item -ItemType Directory -Force -Path (Join-Path $dir 'actual')
+    $base = New-Item -ItemType Directory -Force -Path (Join-Path $dir 'base')
+    & $make (Join-Path $actual 'a.png') 10
+    & $make (Join-Path $actual 'b.png') 10
+    & $make (Join-Path $actual 'c.png') 10
+    & $make (Join-Path $base 'a.png') 10
+    & $make (Join-Path $base 'b.png') 250
+    $results = @(Invoke-SnapshotComparison -Actual $actual -Baselines $base -Diffs (Join-Path $dir 'diffs'))
+    $by = @{}; foreach ($r in $results) { $by[$r['name']] = $r['status'] }
+    Assert-Equal $by['a.png'] 'same' 'a'
+    Assert-Equal $by['b.png'] 'different' 'b'
+    Assert-Equal $by['c.png'] 'no-baseline' 'c'
+    Assert-True (Test-Path (Join-Path $dir 'diffs/b.diff.png')) 'a diff image was written'
+}
+
+Test-Case 'the sealed launch is replaced by the self-test exactly when the selftest gate is open' {
+    $closed = Read-Gates -Path $committedGates
+    $numbers = @(Get-PhaseTable -Gates $closed | ForEach-Object { $_.Number })
+    Assert-True ('3b' -in $numbers) 'the plain sealed launch stays while the gate is closed'
+    Assert-True ('4' -in $numbers) 'phase 4 is in the table (gated)'
+    Assert-Equal ((Get-PhaseTable | Where-Object { $_.Number -eq '4' }).Gate) 'selftest' 'phase 4 is gated on selftest'
+    $gatesPath = Join-Path (New-Scratch 'gates-open') 'g.json'
+    Write-GatesFile $gatesPath @{ selftest = $true }
+    $open = Read-Gates -Path $gatesPath
+    $numbers = @(Get-PhaseTable -Gates $open | ForEach-Object { $_.Number })
+    Assert-True ('3b' -notin $numbers) 'the plain sealed launch is gone with the gate open'
+    Assert-True ('4' -in $numbers) 'phase 4 stays'
+}
+
 # --- the table of phases -----------------------------------------------------------------------------
 
 Test-Case 'the phase table runs in the design order, with gates that exist and a body each' {
