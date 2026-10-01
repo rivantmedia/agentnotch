@@ -654,11 +654,14 @@ function Invoke-SealedLaunchPhase {
 $script:SelfTestEdges = @('right', 'left', 'top', 'bottom', 'floating')
 # The three pages whose round trip, CSP violations, errors and invariants are reported.
 $script:SelfTestPages = @('notch', 'settings', 'agentnotch-panel')
-# The three runs: the page scale the report must name, and the WebView2 argument that makes it.
+# The three runs: the page scale the report must name, and the value of the app's sealed-only
+# AGENTNOTCH_SELF_TEST_SCALE that makes it (none at 100 %). WebView2 takes a page's scale from its
+# window and ignores --force-device-scale-factor, so the app sets each page's scale itself, as
+# scripts\agentnotch-selftest.ps1 (WP9) asks it to.
 $script:SelfTestScales = @(
-    @{ Scale = 1.0;  Name = '100';  WebViewArguments = '' }
-    @{ Scale = 1.25; Name = '125';  WebViewArguments = '--force-device-scale-factor=1.25' }
-    @{ Scale = 1.5;  Name = '150';  WebViewArguments = '--force-device-scale-factor=1.5' }
+    @{ Scale = 1.0;  Name = '100';  ScaleSwitch = '' }
+    @{ Scale = 1.25; Name = '125';  ScaleSwitch = '1.25' }
+    @{ Scale = 1.5;  Name = '150';  ScaleSwitch = '1.5' }
 )
 # The snapshots every build must produce (WP9's fixed states); a page that exposes more states
 # adds names to the manifest, and each of those is checked the same way.
@@ -814,7 +817,7 @@ function Invoke-SelfTestPhase {
         Remove-Item -LiteralPath $out -Force -ErrorAction SilentlyContinue
         Remove-SealedData
         $environment = @{ AGENTNOTCH_PANEL_SELF_TEST = '1'; AGENTNOTCH_SELF_TEST_OUT = $out }
-        if ($run.WebViewArguments) { $environment['WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS'] = $run.WebViewArguments }
+        if ($run.ScaleSwitch) { $environment['AGENTNOTCH_SELF_TEST_SCALE'] = $run.ScaleSwitch }
         $result = Invoke-SealedRun -Environment $environment
         $log = Find-DataFile -Roots $script:DataRoots -Folder 'Agent Notch Sealed' -File 'run.log'
         if ($log) { Copy-Item -LiteralPath $log -Destination (Join-Path $reports "selftest-$($run.Name)-run.log") -Force }

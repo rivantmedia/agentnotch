@@ -447,6 +447,16 @@ Test-Case 'the report must name the scale the run asked for' {
     Assert-True ($problems[0] -match 'scale is 1') 'the scale is named'
 }
 
+Test-Case 'the scaled runs ask the app for their scale (AGENTNOTCH_SELF_TEST_SCALE), as WP9''s script does' {
+    Assert-Equal (($script:SelfTestScales | ForEach-Object { $_.Scale }) -join ',') '1,1.25,1.5' 'the scales'
+    foreach ($run in $script:SelfTestScales) {
+        # WebView2 ignores --force-device-scale-factor: the app's own switch sets the page scale.
+        Assert-True (-not $run.ContainsKey('WebViewArguments')) "no WebView2 argument at $($run.Name) %"
+        $expected = if ($run.Scale -eq 1.0) { '' } else { [string]$run.Scale }
+        Assert-Equal $run.ScaleSwitch $expected "the scale switch at $($run.Name) %"
+    }
+}
+
 Test-Case 'a failing self-test report names every failed check and echoes the report failures' {
     $r = New-GoodReport
     $r['ok'] = $false
