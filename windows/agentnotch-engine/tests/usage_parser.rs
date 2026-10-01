@@ -8,8 +8,8 @@ use agentnotch_engine::core::claude_json::{identity_from_oauth_account, ClaudeGl
 use agentnotch_engine::core::time;
 use agentnotch_engine::model::{ExtraUsage, UsageWindow};
 use agentnotch_engine::usage::parser::{
-    cached_usage_from_raw, number, parse_cached_usage, parse_date, parse_get_usage_response,
-    parse_status_line_rate_limits, parse_usage_body, GetUsageResult,
+    cached_usage_from_raw, number, offset, parse_cached_usage, parse_date,
+    parse_get_usage_response, parse_status_line_rate_limits, parse_usage_body, GetUsageResult,
 };
 use serde_json::{json, Map, Value};
 use std::time::SystemTime;
@@ -133,6 +133,37 @@ fn rejects_bad_dates() {
     for text in ["", "soon", "2026-13-45T99:00:00Z"] {
         assert_eq!(parse_date(Some(&json!(text))), None, "{text:?}");
     }
+}
+
+/// Dates outside what Windows' `SystemTime` holds (1601 to 30828) are no
+/// date there, never a panic (chrono's own conversion panics); elsewhere
+/// they read as written. In a body such a window is left out or read, the
+/// rest of the body stays.
+#[test]
+fn dates_beyond_the_platforms_clock_never_panic() {
+    for (text, seconds) in [
+        ("0001-01-01T00:00:00Z", -62_135_596_800.0),
+        ("1600-12-31T23:59:59Z", -11_644_473_601.0),
+        ("1600-12-31T23:59:59", -11_644_473_601.0),
+    ] {
+        if let Some(at) = parse_date(Some(&json!(text))) {
+            assert_eq!(secs(Some(at)), Some(seconds), "{text}");
+        }
+        if let Some(at) = time::parse_iso8601(text) {
+            assert_eq!(secs(Some(at)), Some(seconds), "{text}");
+        }
+    }
+    let usage = parse_usage_body(&object(
+        r#"{"five_hour":{"utilization":9,"resets_at":"0001-01-01T00:00:00Z"},
+            "seven_day":{"utilization":3,"resets_at":"2026-09-29T06:00:00Z"}}"#,
+    ));
+    assert_eq!(usage.seven_day.as_ref().map(|w| w.utilization), Some(3.0));
+    // Shifting by a span no `Duration` holds leaves the time as it was.
+    let at = epoch(1_790_254_200.0);
+    for seconds in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1e300, -1e300] {
+        assert_eq!(offset(at, seconds), at, "{seconds}");
+    }
+    assert_eq!(offset(at, 1.5), epoch(1_790_254_201.5));
 }
 
 #[test]

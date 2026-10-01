@@ -134,15 +134,14 @@ impl UsageStore {
 
     // ---- requests ----
 
-    /// Fresh usage for every identity whose ring is on, on request (the
-    /// Settings "Check now"): each is probed (queued behind the running
+    /// Fresh usage for every tracked identity whose ring is on, on request
+    /// (the Settings "Check now"): each is probed (queued behind the running
     /// one), clearing its backoff, unless probed less than a minute ago.
     /// Claude Desktop's cache is to be re-read at once for all of them.
     pub fn refresh_all(&mut self, now: SystemTime) -> RefreshRequest {
         let targets: BTreeSet<IdentityId> = self
-            .accounts
-            .iter()
-            .map(|account| account.identity_id.clone())
+            .tracked_ids()
+            .into_iter()
             .filter(|id| !self.paused.contains(id))
             .collect();
         for id in &targets {
@@ -330,8 +329,9 @@ impl UsageStore {
     }
 
     /// The most out-of-date identity that is due on the schedule
-    /// (`schedule::next_scheduled_probe`), among those a run folder holds:
-    /// a store is never probed.
+    /// (`schedule::next_scheduled_probe`), among the tracked ones a run
+    /// folder holds: a store is never probed, nor an account the user
+    /// stopped tracking.
     fn scheduled_probe(&mut self, now: SystemTime) -> Option<ProbePlan> {
         if !self.config.probes_allowed || self.config.probes_disabled {
             return None;
@@ -340,7 +340,7 @@ impl UsageStore {
         let candidates: Vec<IdentityId> = self
             .accounts
             .iter()
-            .filter(|account| !self.run_folders_of(account).is_empty())
+            .filter(|account| account.is_tracked && !self.run_folders_of(account).is_empty())
             .map(|account| account.identity_id.clone())
             .collect();
         let mut newest: BTreeMap<IdentityId, SystemTime> = BTreeMap::new();
@@ -451,7 +451,19 @@ impl UsageStore {
         };
         let binary = locator::binary_for(&found, &environment.env_path, &|path| path.exists());
 
-        let config_dir_env = folder.config_dir_env.clone().filter(|raw| !raw.is_empty());
+        // Unset only for `~\.claude`. Any other folder runs with the variable
+        // naming it (the registry records it so, as the Mac's does); were it
+        // missing, Claude Code would run as `~\.claude`'s login while the
+        // checks before and after read this folder's: another account's
+        // answer on this ring.
+        let config_dir_env = folder
+            .config_dir_env
+            .clone()
+            .filter(|raw| !raw.is_empty())
+            .or_else(|| {
+                let dir = folder.config_dir.to_string_lossy();
+                (!self.paths.is_default_config_dir(&dir)).then(|| dir.into_owned())
+            });
         let binary_dir = binary.program.parent().unwrap_or(Path::new(""));
         let spec = CommandSpec {
             program: binary.program.clone(),

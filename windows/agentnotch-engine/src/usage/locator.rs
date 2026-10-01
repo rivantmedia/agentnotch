@@ -97,10 +97,13 @@ pub fn fixed_candidates(roots: &Roots) -> Vec<PathBuf> {
     candidates
 }
 
-/// `claude.exe`, then `claude.cmd`, in each folder of `PATH`.
+/// `claude.exe`, then `claude.cmd`, in each folder of `PATH`. Only absolute
+/// folders: an empty entry, `.`, `bin` or `C:tools` names a place relative
+/// to the app's working folder, and a usage check must never run whatever
+/// `claude` happens to sit there.
 pub fn path_candidates(env_path: &OsStr) -> Vec<PathBuf> {
     std::env::split_paths(env_path)
-        .filter(|folder| !folder.as_os_str().is_empty())
+        .filter(|folder| folder.is_absolute())
         .flat_map(|folder| [folder.join("claude.exe"), folder.join("claude.cmd")])
         .collect()
 }
@@ -209,7 +212,7 @@ pub fn binary_for(path: &Path, env_path: &OsStr, exists: &dyn Fn(&Path) -> bool)
 fn node_for(folder: &Path, env_path: &OsStr, exists: &dyn Fn(&Path) -> bool) -> Option<PathBuf> {
     std::iter::once(folder.to_path_buf())
         .chain(std::env::split_paths(env_path))
-        .filter(|folder| !folder.as_os_str().is_empty())
+        .filter(|folder| folder.is_absolute())
         .map(|folder| folder.join("node.exe"))
         .find(|node| !is_desktop_owned(node) && exists(node))
 }

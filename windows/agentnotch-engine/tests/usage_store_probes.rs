@@ -694,6 +694,62 @@ fn a_refresh_waits_at_most_the_limit() {
     assert_eq!(five_of(&store, &fx.id), Some(5.0));
 }
 
+/// An account the user stopped tracking (the Mac's hidden identity, outside
+/// `visibleIdentities`) keeps its state and its cached usage, but Claude
+/// Code is never run for it on the schedule or by "Check now", and Claude
+/// Desktop's cache isn't read for it. Asked for by name it is checked, as
+/// the Mac's `refresh(accountId:reason:)` does for any identity.
+#[test]
+fn untracked_accounts_are_neither_scheduled_nor_read_from_desktop() {
+    let fx = Fx::new();
+    let mut untracked = fx.account.clone();
+    untracked.is_tracked = false;
+    let mut store = fx.store_of(
+        fx.config(true),
+        &[untracked],
+        std::slice::from_ref(&fx.folder),
+    );
+    // Old enough that a tracked account would be probed now
+    // (`with_nothing_fresh_the_probe_runs`).
+    let reads = [fx.read(Some(20.0), ago(20 * 60))];
+    let mut desktop = Desktop::with(desktop_reading(50.0, now()));
+
+    assert!(cycle(&mut store, &reads, &mut desktop, now()).is_none());
+    assert!(
+        desktop.asked.is_empty(),
+        "Desktop read for an untracked account"
+    );
+    assert_eq!(
+        five_of(&store, &fx.id),
+        Some(20.0),
+        "its cached usage stays"
+    );
+    assert!(!store.is_probing());
+
+    let all = store.refresh_all(plus(now(), 1.0));
+    assert!(all.desktop_reads.is_empty());
+    assert_eq!(all.wait_until, None);
+    assert!(store.due_probe(plus(now(), 1.0)).is_none());
+    assert_eq!(store.fetch_state_of(&fx.id), UsageFetchState::Idle);
+
+    let asked = ask(
+        &mut store,
+        &reads,
+        &fx.id,
+        RefreshReason::Manual,
+        plus(now(), 2.0),
+    );
+    assert!(asked.desktop_reads.is_empty());
+    let plan = store
+        .due_probe(plus(now(), 2.0))
+        .expect("asked for by name, it is checked");
+    assert_eq!(plan.identity, fx.id);
+
+    // Tracked again, the schedule takes it.
+    let mut store = fx.store(true);
+    assert!(cycle(&mut store, &reads, &mut Desktop::nothing(), now()).is_some());
+}
+
 #[test]
 fn paused_accounts_are_not_probed_until_shown_again() {
     let fx = Fx::new();
@@ -1240,6 +1296,33 @@ fn the_default_folder_runs_with_the_variable_unset() {
         .eq_ignore_ascii_case("CLAUDE_CONFIG_DIR")));
     // `~\.claude.json`, beside the folder rather than in it.
     assert_eq!(plan.identity_file, fx.roots.home.join(".claude.json"));
+}
+
+/// Any other folder runs with `CLAUDE_CONFIG_DIR` naming it, even when the
+/// registry recorded no raw value for it: unset, Claude Code would run as
+/// `~\.claude`'s login while the checks read this folder's file.
+#[test]
+fn another_folder_always_names_itself() {
+    let fx = Fx::new();
+    let bare = run_folder(&fx.dir, None);
+    let account = account("uuid:acc-1", Some("me@x.dev"), &[&bare], &[]);
+    let mut store = fx.store_of(fx.config(false), &[account], std::slice::from_ref(&bare));
+    store.refresh(&fx.id, RefreshReason::Manual, now());
+    let plan = store.due_probe(now()).expect("a probe");
+    let dir = fx.dir.to_string_lossy().into_owned();
+    assert_eq!(plan.config_dir_env.as_deref(), Some(dir.as_str()));
+    let named: Vec<OsString> = plan
+        .spec
+        .env
+        .iter()
+        .filter(|(name, _)| {
+            name.to_string_lossy()
+                .eq_ignore_ascii_case("CLAUDE_CONFIG_DIR")
+        })
+        .map(|(_, value)| value.clone())
+        .collect();
+    assert_eq!(named, [OsString::from(&dir)]);
+    assert_eq!(plan.identity_file, fx.dir.join(".claude.json"));
 }
 
 #[test]

@@ -108,6 +108,30 @@ fn empty_path_entries_are_skipped() {
 }
 
 #[test]
+fn relative_path_entries_are_skipped() {
+    // `.`, `bin` (and on Windows `C:tools` or `\tools`) are relative to the
+    // app's working folder: as unsafe as an empty entry.
+    let folder = join(&fake_drive(), &["a"]);
+    let relative = [PathBuf::from("."), PathBuf::from("bin"), folder.clone()];
+    assert_eq!(
+        path_candidates(&path_list(&relative)),
+        vec![folder.join("claude.exe"), folder.join("claude.cmd")]
+    );
+    // Nor is Node taken from one for an npm shim.
+    let shim_dir = join(&fake_drive(), &["npm"]);
+    let shim = shim_dir.join("claude.cmd");
+    let cli = join(
+        &shim_dir,
+        &["node_modules", "@anthropic-ai", "claude-code", "cli.js"],
+    );
+    let relative_node = PathBuf::from("bin").join("node.exe");
+    let exists = |path: &Path| path == cli || path == relative_node;
+    let binary = binary_for(&shim, &path_list(&[PathBuf::from("bin")]), &exists);
+    assert_eq!(binary.program, shim);
+    assert!(binary.shim);
+}
+
+#[test]
 fn a_moved_appdata_is_searched_before_the_default_place() {
     // Roaming and local app data come from the roots: the parent of upstream's
     // config folder, and the folder that holds the app's own support folder.

@@ -80,6 +80,11 @@ const ENTRY_MAGIC: u64 = 0xfcfb_6d1b_a772_5c30;
 /// What every zstd frame starts with, checked before the decoder sees bytes.
 const ZSTD_MAGIC: [u8; 4] = [0x28, 0xb5, 0x2f, 0xfd];
 
+/// The Settings caption for [`DesktopReading::UnsupportedFormat`] (DESIGN-WIN
+/// §4.6): Chromium's blockfile cache, which this reader doesn't guess at.
+pub const UNSUPPORTED_FORMAT_TEXT: &str =
+    "Claude Desktop's cache on this PC uses a format this version can't read.";
+
 // MARK: - Reading a cache folder
 
 /// One reading of one cache folder, and where it came from.
@@ -559,7 +564,9 @@ pub fn parse_imf_fixdate(text: &str) -> Option<SystemTime> {
         .and_hms_opt(hour, minute, second)?
         .and_utc()
         .timestamp();
-    Some(UNIX_EPOCH + Duration::from_secs(u64::try_from(seconds).ok()?))
+    // Checked: chrono reads years Windows' `SystemTime` can't hold (it ends
+    // in 30828), and a corrupt header must be a miss, not a panic.
+    UNIX_EPOCH.checked_add(Duration::from_secs(u64::try_from(seconds).ok()?))
 }
 
 // MARK: - zstd

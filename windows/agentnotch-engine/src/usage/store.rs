@@ -340,7 +340,13 @@ impl UsageStore {
                 return RingReading::Reading {
                     usage: usage.clone(),
                     status,
-                    stale_after: usage.updated_at + threshold,
+                    // Checked: a reading dated at the very end of what
+                    // Windows' `SystemTime` holds (a corrupt `fetchedAtMs`)
+                    // must not panic the hub.
+                    stale_after: usage
+                        .updated_at
+                        .checked_add(threshold)
+                        .unwrap_or(usage.updated_at),
                 };
             }
         }
@@ -367,7 +373,10 @@ impl UsageStore {
     /// are no identity any more are pruned, and a folder that changed hands
     /// takes the status lines it gave its old account with it. A first call
     /// with the launch's registry prunes what was fed before it, so call it
-    /// before feeding anything.
+    /// before feeding anything. `accounts` is every identity of the
+    /// registry, tracked or not (as the Mac's `identities`): an untracked one
+    /// keeps its state but is never probed unasked nor read from Claude
+    /// Desktop (`Account::is_tracked`).
     pub fn set_accounts(&mut self, accounts: &[Account], folders: &[RunFolder], now: SystemTime) {
         self.accounts = accounts.to_vec();
         self.folders = folders.to_vec();
@@ -407,6 +416,19 @@ impl UsageStore {
 
     pub(super) fn is_identity(&self, id: &IdentityId) -> bool {
         self.account(id).is_some()
+    }
+
+    /// The identities the user tracks ("Track sessions and hooks" on; the
+    /// Mac's `visibleIdentities`), in the registry's order. Only these are
+    /// probed on the schedule, by "Check now" or read from Claude Desktop:
+    /// an account the user stopped tracking keeps its state (it may come
+    /// back) but Claude Code is never run for it unasked.
+    pub(super) fn tracked_ids(&self) -> Vec<IdentityId> {
+        self.accounts
+            .iter()
+            .filter(|account| account.is_tracked)
+            .map(|account| account.identity_id.clone())
+            .collect()
     }
 
     /// The identity whose folders (run or store) include `folder`.
@@ -876,11 +898,11 @@ impl UsageStore {
     // ---- Claude Desktop ----
 
     /// The identities whose Claude Desktop cache is due a read, with the
-    /// organization to read it for, and marks them polled at `now`: visible,
-    /// not paused, signed in, organization known, and (unless `force`, which
-    /// still leaves Desktop alone for 5 s) not read within the cadence (a
-    /// minute; 5 minutes after a miss). Empty while the setting is off.
-    /// `only` limits it to those identities.
+    /// organization to read it for, and marks them polled at `now`: tracked
+    /// (the Mac's visible identities), not paused, signed in, organization
+    /// known, and (unless `force`, which still leaves Desktop alone for 5 s)
+    /// not read within the cadence (a minute; 5 minutes after a miss). Empty
+    /// while the setting is off. `only` limits it to those identities.
     pub fn desktop_due(
         &mut self,
         now: SystemTime,
@@ -891,11 +913,7 @@ impl UsageStore {
             return Vec::new();
         }
         let mut due = Vec::new();
-        let ids: Vec<IdentityId> = self
-            .accounts
-            .iter()
-            .map(|account| account.identity_id.clone())
-            .collect();
+        let ids = self.tracked_ids();
         for id in ids {
             if only.is_some_and(|only| !only.contains(&id))
                 || self.paused.contains(&id)
@@ -1159,13 +1177,17 @@ impl UsageStore {
     }
 }
 
-/// A file's modification stamp (nanoseconds since the epoch) as a time.
+/// A file's modification stamp (nanoseconds since the epoch) as a time,
+/// clamped to what `SystemTime` holds (Windows' starts in 1601: plain `-`
+/// would panic on a stamp before that).
 fn time_of_ns(ns: i128) -> SystemTime {
     let magnitude = Duration::from_nanos(ns.unsigned_abs().min(u128::from(u64::MAX)) as u64);
     if ns >= 0 {
-        UNIX_EPOCH + magnitude
+        UNIX_EPOCH.checked_add(magnitude).unwrap_or(UNIX_EPOCH)
     } else {
-        UNIX_EPOCH - magnitude
+        UNIX_EPOCH
+            .checked_sub(magnitude)
+            .unwrap_or_else(distant_past)
     }
 }
 

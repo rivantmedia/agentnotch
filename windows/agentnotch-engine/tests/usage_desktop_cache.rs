@@ -26,7 +26,7 @@ use agentnotch_engine::platform::Roots;
 use agentnotch_engine::usage::desktop::{
     cache_folder, desktop_cache_format, entry_key, folder_format, frame_layout, http_date,
     parse_entry, parse_imf_fixdate, read_desktop_cache, read_folder, usage_organization,
-    FolderReading, HEADER_BYTES, MAX_ENTRY_BYTES, MAX_KEY_BYTES,
+    FolderReading, HEADER_BYTES, MAX_ENTRY_BYTES, MAX_KEY_BYTES, UNSUPPORTED_FORMAT_TEXT,
 };
 use base64::Engine as _;
 use ruzstd::encoding::{compress_to_vec, CompressionLevel};
@@ -372,6 +372,26 @@ fn a_date_is_read_only_in_its_one_form() {
     ] {
         assert_eq!(parse_imf_fixdate(text), None, "accepted {text:?}");
     }
+}
+
+/// A year chrono reads but Windows' `SystemTime` can't hold (it ends in
+/// 30828) is no date there, never a panic; elsewhere it reads as written.
+#[test]
+fn a_date_beyond_the_platforms_clock_is_no_date_rather_than_a_crash() {
+    let far = parse_imf_fixdate("Fri, 01 Jan 99999 00:00:00 GMT");
+    if let Some(far) = far {
+        assert_eq!(
+            far.duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            3_093_496_444_800
+        );
+    }
+    let parsed = parse_entry(
+        &Entry::new()
+            .date(Some("Fri, 01 Jan 99999 00:00:00 GMT"))
+            .data(),
+    )
+    .unwrap();
+    assert_eq!(parsed.date, far);
 }
 
 #[test]
@@ -1295,6 +1315,11 @@ fn a_blockfile_cache_is_reported_as_an_unsupported_format() {
     assert_eq!(
         desktop_cache_format(&desktop.roots),
         DesktopCacheFormat::Blockfile
+    );
+    // What Settings says about it (DESIGN-WIN §4.6).
+    assert_eq!(
+        UNSUPPORTED_FORMAT_TEXT,
+        "Claude Desktop's cache on this PC uses a format this version can't read."
     );
 }
 

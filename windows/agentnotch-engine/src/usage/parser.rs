@@ -461,9 +461,12 @@ pub fn seconds_between(a: SystemTime, b: SystemTime) -> f64 {
     }
 }
 
-/// `t` plus a signed number of seconds.
+/// `t` plus a signed number of seconds (`t` itself for NaN, an infinity or
+/// a span no `Duration` holds: `Duration::from_secs_f64` would panic).
 pub fn offset(t: SystemTime, seconds: f64) -> SystemTime {
-    let magnitude = Duration::from_secs_f64(seconds.abs());
+    let Ok(magnitude) = Duration::try_from_secs_f64(seconds.abs()) else {
+        return t;
+    };
     if seconds >= 0.0 {
         t.checked_add(magnitude).unwrap_or(t)
     } else {
