@@ -333,3 +333,239 @@ impl SettingsWorld {
         })
     }
 }
+
+/// A live hub on the test platform (`testkit::platform`): its files under a
+/// temporary root, its events recorded, its settings writes counted.
+pub mod live {
+    use agentnotch_engine::core::atomic::StdSecureFiles;
+    use agentnotch_engine::core::flags::DevFlags;
+    use agentnotch_engine::hub::runtime::{live_hub, HubInputs, RuntimeOptions};
+    use agentnotch_engine::hub::{Call, Hub, HubConfig, HubEvent};
+    use agentnotch_engine::platform::{
+        Expect, FileIdentity, Platform, Roots, SecureFiles, WriteMode, WriteResult,
+    };
+    use agentnotch_engine::testkit::{self, TestHandles};
+    use std::io;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    /// One `write_atomic`: the file and the thread that wrote it.
+    #[derive(Debug, Clone)]
+    pub struct Write {
+        pub path: PathBuf,
+        pub thread: String,
+    }
+
+    /// The real file service, recording every write; the first
+    /// `panics` writes panic instead (a job body that panics).
+    #[derive(Default)]
+    pub struct RecordingFiles {
+        pub writes: Mutex<Vec<Write>>,
+        pub panics: AtomicUsize,
+    }
+
+    impl RecordingFiles {
+        pub fn writes_of(&self, name: &str) -> Vec<Write> {
+            lock(&self.writes)
+                .iter()
+                .filter(|w| w.path.file_name().is_some_and(|n| n == name))
+                .cloned()
+                .collect()
+        }
+    }
+
+    impl SecureFiles for RecordingFiles {
+        fn ensure_private_dir(&self, dir: &Path) -> io::Result<()> {
+            StdSecureFiles.ensure_private_dir(dir)
+        }
+
+        fn write_atomic(
+            &self,
+            path: &Path,
+            bytes: &[u8],
+            mode: WriteMode,
+            expect: Expect,
+        ) -> io::Result<WriteResult> {
+            let panics = self.panics.load(Ordering::SeqCst);
+            if panics > 0 {
+                self.panics.store(panics - 1, Ordering::SeqCst);
+                panic!("a disk that panics");
+            }
+            lock(&self.writes).push(Write {
+                path: path.to_path_buf(),
+                thread: std::thread::current().name().unwrap_or("").to_owned(),
+            });
+            StdSecureFiles.write_atomic(path, bytes, mode, expect)
+        }
+
+        fn create_exclusive(&self, path: &Path, bytes: &[u8]) -> io::Result<bool> {
+            StdSecureFiles.create_exclusive(path, bytes)
+        }
+
+        fn identity(&self, path: &Path) -> io::Result<FileIdentity> {
+            StdSecureFiles.identity(path)
+        }
+
+        fn is_reparse(&self, path: &Path) -> io::Result<bool> {
+            StdSecureFiles.is_reparse(path)
+        }
+
+        fn canonical(&self, path: &Path) -> io::Result<PathBuf> {
+            StdSecureFiles.canonical(path)
+        }
+
+        fn is_private(&self, path: &Path) -> io::Result<bool> {
+            StdSecureFiles.is_private(path)
+        }
+    }
+
+    pub struct TestHub {
+        pub hub: Hub,
+        pub inputs: HubInputs,
+        pub handles: TestHandles,
+        pub files: Arc<RecordingFiles>,
+        pub events: Arc<Mutex<Vec<(Instant, HubEvent)>>>,
+        pub roots: Roots,
+        _dir: tempfile::TempDir,
+    }
+
+    pub fn config(roots: &Roots) -> HubConfig {
+        HubConfig {
+            roots: roots.clone(),
+            app_version: "1.1.0".into(),
+            website: None,
+            flags: DevFlags::default(),
+            hook_exe: roots
+                .install_dir
+                .clone()
+                .unwrap_or_default()
+                .join("agentnotch-hook.exe"),
+            pipe_name: r"\\.\pipe\agentnotch-hook-test".into(),
+        }
+    }
+
+    impl TestHub {
+        /// Not started; the runtime's own timings.
+        pub fn new() -> TestHub {
+            TestHub::with(RuntimeOptions::default(), |_| {})
+        }
+
+        /// Not started; `customise` may replace platform services.
+        pub fn with(options: RuntimeOptions, customise: impl FnOnce(&mut Platform)) -> TestHub {
+            TestHub::with_config(options, |_| {}, customise)
+        }
+
+        pub fn with_config(
+            options: RuntimeOptions,
+            configure: impl FnOnce(&mut HubConfig),
+            customise: impl FnOnce(&mut Platform),
+        ) -> TestHub {
+            let dir = tempfile::tempdir().expect("a temporary root");
+            let (mut platform, handles) = testkit::platform(dir.path());
+            let files = Arc::new(RecordingFiles::default());
+            platform.files = files.clone();
+            customise(&mut platform);
+            let roots = handles.roots.clone();
+            let mut cfg = config(&roots);
+            configure(&mut cfg);
+            let (hub, inputs) = live_hub(cfg, platform, options);
+            let events: Arc<Mutex<Vec<(Instant, HubEvent)>>> = Arc::default();
+            let (sink, clock) = (events.clone(), handles.clock.clone());
+            hub.on_event(Box::new(move |event| {
+                use agentnotch_engine::platform::Clock;
+                lock(&sink).push((clock.monotonic(), event.clone()));
+            }));
+            TestHub {
+                hub,
+                inputs,
+                handles,
+                files,
+                events,
+                roots,
+                _dir: dir,
+            }
+        }
+
+        pub fn started() -> TestHub {
+            let hub = TestHub::new();
+            hub.hub.start().expect("the hub starts");
+            hub
+        }
+
+        pub fn settings_path(&self) -> PathBuf {
+            self.roots.support.join("control-settings.json")
+        }
+
+        /// The settings file as JSON (`Null` while it doesn't exist).
+        pub fn settings_file(&self) -> serde_json::Value {
+            std::fs::read(self.settings_path())
+                .ok()
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                .unwrap_or(serde_json::Value::Null)
+        }
+
+        /// Returns once `an-core` has applied everything sent before (a
+        /// call is answered in order).
+        pub fn sync(&self) {
+            self.hub.call(Call::Settings).expect("the hub answers");
+        }
+
+        pub fn events(&self) -> Vec<(Instant, HubEvent)> {
+            lock(&self.events).clone()
+        }
+
+        pub fn snapshots(&self) -> Vec<(Instant, agentnotch_engine::model::HubSnapshot)> {
+            self.events()
+                .into_iter()
+                .filter_map(|(at, e)| match e {
+                    HubEvent::Snapshot(s) => Some((at, s)),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        pub fn settings_events(&self) -> usize {
+            self.events()
+                .iter()
+                .filter(|(_, e)| matches!(e, HubEvent::Settings(_)))
+                .count()
+        }
+
+        pub fn logs(&self) -> Vec<String> {
+            self.events()
+                .into_iter()
+                .filter_map(|(_, e)| match e {
+                    HubEvent::Log(line) => Some(line),
+                    _ => None,
+                })
+                .collect()
+        }
+    }
+
+    impl Drop for TestHub {
+        fn drop(&mut self) {
+            self.hub.stop();
+        }
+    }
+
+    /// Polls `condition` every 5 ms for at most 5 s (threads at work; no
+    /// test waits on wall time otherwise).
+    pub fn eventually(mut condition: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if condition() {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+        mutex.lock().unwrap_or_else(|p| p.into_inner())
+    }
+}
