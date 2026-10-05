@@ -331,13 +331,14 @@ fn a_hub_never_started_answers_calls() {
 #[test]
 fn calls_not_wired_yet_fail_honestly() {
     let hub = TestHub::started();
-    let error = hub.hub.call(Call::ResetReviewQueue).unwrap_err();
+    let error = hub
+        .hub
+        .call(Call::Focus {
+            session_id: "s".into(),
+        })
+        .unwrap_err();
     assert_eq!(error.code, "failed");
-    assert!(
-        error.message.contains("reset_review_queue"),
-        "{}",
-        error.message
-    );
+    assert!(error.message.contains("focus"), "{}", error.message);
 }
 
 /// The glue's own calls are taken (the hot key's report shows in Settings).
@@ -397,6 +398,12 @@ fn dump_state_logs_the_state() {
 #[test]
 fn a_panicking_job_body_still_yields_its_result() {
     let hub = TestHub::started();
+    // The launch's own write (the review file's first heartbeat) first, so
+    // the panicking write is the settings'.
+    assert!(eventually(|| !hub
+        .files
+        .writes_of("review-state.json")
+        .is_empty()));
     hub.files.panics.store(1, Ordering::SeqCst);
     hub.inputs.send(set("sound", json!(false)));
     hub.sync();

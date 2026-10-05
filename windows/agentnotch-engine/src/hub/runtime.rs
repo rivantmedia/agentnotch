@@ -247,6 +247,8 @@ impl HubBackend for Runtime {
         }
         let mut idle = lock(&inner.idle);
         let mut core = idle.take().unwrap_or_else(|| inner.load_core());
+        // The hook pipe's events come back through the queue.
+        core.ingress_w.inputs = Some(inner.tx.clone());
         inner.runner.resume();
         // The launch discovery and each store's schedule, before the first
         // projection.

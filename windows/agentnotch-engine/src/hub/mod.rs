@@ -15,6 +15,8 @@ pub mod sealed_demo;
 pub mod sealed_fixture;
 mod wire_accounts;
 mod wire_hooks;
+mod wire_ingress;
+mod wire_sessions;
 mod wire_usage;
 
 pub use api::*;

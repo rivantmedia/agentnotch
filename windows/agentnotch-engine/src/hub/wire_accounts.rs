@@ -118,6 +118,7 @@ impl Core {
         self.hooks.accounts_changed(now);
         self.hooks.retain_folders(&self.registry.folders());
         self.hooks_w.status_due = true;
+        self.sessions_accounts_changed(Some(changed), now);
     }
 
     // ---- calls ----

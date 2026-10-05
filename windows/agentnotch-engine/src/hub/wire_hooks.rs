@@ -398,7 +398,6 @@ impl Core {
 
     /// A Claude Code version a session reported (its registry entry or
     /// status line). A lower one rewrites the hooks.
-    #[allow(dead_code)] // The ingress's sightings come in with wp7-8.
     pub(crate) fn note_version_sighting(&mut self, sighting: VersionSighting, now: SystemTime) {
         if sighting.version.is_none() || self.versions.contains(&sighting) {
             return;
@@ -455,6 +454,10 @@ impl Core {
         let mut next = self.settings.clone();
         next.hooks_enabled = false;
         self.replace_settings(next);
+        // No request can be answered from here on: the hooks waiting are
+        // let go, and no session is hook-backed any more.
+        let now = self.platform.clock.now();
+        self.sessions_hooks_turned_off(now);
         // Before the yes nothing of ours was written, unless a record says so.
         let wrote =
             self.settings.hook_consent == Some(true) || !self.hooks.record().files.is_empty();

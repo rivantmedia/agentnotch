@@ -6,9 +6,10 @@
 //! comes back through [`Core::job_done`].
 //!
 //! The packages are wired in their own files: accounts, usage and hooks
-//! (`wire_accounts`, `wire_usage`, `wire_hooks`); the next sub-tasks wire
-//! ingress, sessions, review and chat (wp7-8), control (wp7-9) and cloud
-//! (wp7-10) at the seams named for them below.
+//! (`wire_accounts`, `wire_usage`, `wire_hooks`), the hook pipe and held
+//! requests (`wire_ingress`), sessions, review and chat (`wire_sessions`);
+//! the next sub-tasks wire control (wp7-9) and cloud (wp7-10) at the seams
+//! named for them below.
 //!
 //! Owner: WP7.
 
@@ -17,6 +18,8 @@ use super::project::{self, Directory, ProjectionInput, RowExtras};
 use super::project_settings::{settings_snapshot, setup_state, SettingsInput, SetupInput};
 use super::wire_accounts::AccountsWiring;
 use super::wire_hooks::HooksWiring;
+use super::wire_ingress::IngressWiring;
+use super::wire_sessions::{session_store, SessionsWiring};
 use super::wire_usage::UsageWiring;
 use crate::accounts::{AccountRegistry, DiskProbe};
 use crate::attention::rows::ResetClock;
@@ -28,7 +31,6 @@ use crate::persist::settings::SettingsFile;
 use crate::persist::usage::UsageStateFile;
 use crate::platform::{Expect, NotifyPermission, Platform, WriteMode};
 use crate::runtime_types::*;
-use crate::sessions::SessionStore;
 use crate::usage::store::{UsageStore, UsageStoreConfig};
 use crate::usage::ProbeEnvironment;
 use agentnotch_proto::ControlStatus;
@@ -74,7 +76,7 @@ pub(crate) struct Core {
     pub(crate) registry: AccountRegistry,
     pub(crate) hooks: HookManager,
     pub(crate) usage: UsageStore,
-    pub(crate) sessions: SessionStore,
+    pub(crate) sessions: crate::sessions::SessionStore,
     pub(crate) cloud: CloudState,
     pub(crate) panel: PanelState,
     pub(crate) hotkey_ok: bool,
@@ -103,6 +105,8 @@ pub(crate) struct Core {
     pub(crate) accounts_w: AccountsWiring,
     pub(crate) usage_w: UsageWiring,
     pub(crate) hooks_w: HooksWiring,
+    pub(crate) ingress_w: IngressWiring,
+    pub(crate) sessions_w: SessionsWiring,
 }
 
 /// The writes of `accounts.json`, `usage-state.json` and
@@ -191,6 +195,14 @@ impl Core {
         });
         let saved_usage = read_support(&cfg.roots.support, PersistFile::Usage, &mut events)
             .and_then(|bytes| UsageStateFile::parse(&bytes));
+        let saved_review = read_support(&cfg.roots.support, PersistFile::Review, &mut events);
+        let sessions = session_store(
+            cfg.roots.paths(),
+            &platform,
+            &cfg.roots.claude_desktop,
+            cfg.flags.sealed,
+        );
+        let ingress_w = IngressWiring::new(&cfg.pipe_name);
         let cloud = CloudState {
             website_url: cfg.website.clone(),
             ..CloudState::default()
@@ -210,7 +222,7 @@ impl Core {
             registry,
             hooks,
             usage,
-            sessions: SessionStore::new(),
+            sessions,
             cloud,
             panel: PanelState::default(),
             hotkey_ok: true,
@@ -231,6 +243,8 @@ impl Core {
             accounts_w: AccountsWiring::default(),
             usage_w: UsageWiring::new(saved_usage),
             hooks_w: HooksWiring::default(),
+            ingress_w,
+            sessions_w: SessionsWiring::new(saved_review),
         }
     }
 
@@ -242,6 +256,8 @@ impl Core {
         self.accounts_on_start(now);
         self.usage_on_start(now);
         self.hooks_on_start(now);
+        self.sessions_on_start(now);
+        self.ingress_on_start();
         self.after_input();
     }
 
@@ -260,8 +276,7 @@ impl Core {
                     self.log(format!("setting not changed: {}", e.message));
                 }
             }
-            // wp7-8: ingress → sessions; held requests.
-            Input::Transport(_) => {}
+            Input::Transport(event) => self.transport_event(event),
             // wp7-9: "is the user looking at it" (mark viewed after 1.5 s).
             Input::Foreground(_) => {}
             // wp7-10: the cloud's published state.
@@ -323,6 +338,30 @@ impl Core {
             Call::RevealTarget { kind, id } if kind != super::api::RevealKind::SessionCwd => {
                 self.reveal_target_call(kind, &id)
             }
+            Call::Answer {
+                session_id,
+                tool_use_id,
+                answer,
+            } => self.answer_call(&session_id, &tool_use_id, answer),
+            Call::MarkReviewed { session_id, at_ms } => self.mark_reviewed_call(session_id, at_ms),
+            Call::MarkViewed {
+                session_id,
+                completed_at_ms,
+            } => self.mark_viewed_call(session_id, completed_at_ms),
+            Call::MarkAllReviewed { session_ids, at_ms } => self.mark_all_call(session_ids, at_ms),
+            Call::DismissFailure { session_id } => self.dismiss_failure_call(session_id),
+            Call::ResetReviewQueue => self.reset_review_call(),
+            Call::SessionStateText => self.session_state_text_call(),
+            Call::ChatOpen { session_id } => self.chat_open_call(&session_id),
+            Call::ChatClose { session_id } => self.chat_close_call(&session_id),
+            Call::ChatMore {
+                session_id,
+                before_id,
+            } => self.chat_more_call(&session_id, &before_id),
+            Call::ChatImage {
+                session_id,
+                image_id,
+            } => self.chat_image_call(&session_id, &image_id),
             // Wired by the next sub-tasks (see the module doc).
             other => Err(CallError::failed(format!(
                 "{} isn't available in this build yet.",
@@ -437,7 +476,11 @@ impl Core {
             JobResult::CodenotchRemoved { folder, result } => {
                 self.codenotch_removed(id, &folder, result, &mut reply)
             }
-            // wp7-8..10 take their results here.
+            JobResult::Registry(snapshot) => self.registry_read(id, snapshot, now),
+            JobResult::Transcript(delta) => self.transcript_synced(delta, now),
+            JobResult::Chat(page) => self.chat_page_read(page, now),
+            JobResult::Hosted(identity) => self.hosted_read(id, identity, now),
+            // wp7-9 and wp7-10 take their results here.
             _ => {}
         }
         if let Some(reply) = reply {
@@ -519,7 +562,9 @@ impl Core {
             let now = self.platform.clock.now();
             self.drive_accounts(now);
             self.drive_usage(now);
+            self.drive_sessions(now);
         }
+        self.publish_chats();
         // Hook writes asked for by a call run on a stopped hub too.
         let now = self.platform.clock.now();
         self.drive_hooks(now);
@@ -537,18 +582,22 @@ impl Core {
         self.events.push(HubEvent::Log(line));
     }
 
+    pub(crate) fn push_event(&mut self, event: HubEvent) {
+        self.events.push(event);
+    }
+
     /// When the stores next need `an-core` without an input (their own
     /// deadlines; the projection's label boundaries are the runtime's).
     pub(crate) fn next_deadline(&self) -> Option<SystemTime> {
         if !self.live {
             return None;
         }
-        // wp7-8 (`SessionStore::next_deadline`, the interrupt watcher),
-        // wp7-9 (auto-close, typing checks) add theirs.
+        // wp7-9 (auto-close, typing checks) adds its own.
         [
             self.accounts_deadline(),
             self.usage_deadline(),
             self.hooks_deadline(),
+            self.sessions_deadline(),
         ]
         .into_iter()
         .flatten()
@@ -557,9 +606,11 @@ impl Core {
 
     // ---- stop ----
 
-    /// The hub stops: calls still waiting are answered, held requests
-    /// released (wp7-8), and every store saved now, on this thread.
+    /// The hub stops: held requests are released first (each waiting hook
+    /// exits with no output), calls still waiting are answered, and every
+    /// store saved now, on this thread.
     pub(crate) fn stop(&mut self) {
+        self.ingress_on_stop();
         for pending in self.jobs.values_mut() {
             if let Some(reply) = pending.reply.take() {
                 let _ = reply.send(Err(CallError::failed(STOPPING)));
@@ -595,7 +646,10 @@ impl Core {
         }
         let record = HookInstallFile::from_model(self.hooks.record()).encode();
         self.save_if_newer(PersistFile::HookInstall, record);
-        // wp7-8 (review).
+        let now = self.platform.clock.now();
+        if let Some(bytes) = self.review_bytes_now(now) {
+            self.save_if_newer(PersistFile::Review, bytes);
+        }
     }
 
     /// Writes `bytes` now unless they are what the file was last written
@@ -681,7 +735,7 @@ impl Core {
     fn project_snapshot(&mut self, now: SystemTime) -> HubSnapshot {
         let accounts = self.registry.accounts();
         let readings = self.readings(now);
-        let views = self.sessions.views();
+        let views = self.session_views();
         let ui = self.ui();
         let setup = setup_state(&self.setup_input());
         let directory: &dyn Directory = &self.registry;
@@ -746,11 +800,9 @@ impl Core {
             rings: shown.len() as u32,
             readings: shown.iter().filter(|r| !r.usage.windows.is_empty()).count() as u32,
             sessions: snapshot.sessions.len() as u32,
-            // wp7-8: the ingress's held requests.
-            held: 0,
+            held: self.held_count(),
             hook_consent: consent_word(self.settings.hook_consent).into(),
-            // wp7-8: the pipe's state.
-            transport: "off".into(),
+            transport: self.ingress_w.status_word().into(),
             cloud: match self.cloud.auth {
                 CloudAuthState::SignedIn { .. } => "signed_in",
                 CloudAuthState::SigningIn => "signing_in",
@@ -764,7 +816,7 @@ impl Core {
     /// `--dump-state`: one line per session, never a prompt, reply, input
     /// or title (SessionDebugTools.swift's summary, minus the title).
     pub(crate) fn dump_lines(&self) -> Vec<String> {
-        let mut views = self.sessions.views();
+        let mut views = self.session_views();
         views.sort_by(|a, b| {
             (a.state.bucket(), a.id.as_str()).cmp(&(b.state.bucket(), b.id.as_str()))
         });
@@ -786,7 +838,7 @@ fn reset_clock(now: SystemTime) -> ResetClock {
     }
 }
 
-fn dump_line(view: &SessionView) -> String {
+pub(crate) fn dump_line(view: &SessionView) -> String {
     let id: String = view.id.as_str().chars().take(8).collect();
     let account = view
         .account
