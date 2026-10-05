@@ -100,6 +100,13 @@ test('settings: all entries of an event, or one by index', async () => {
   await assert.rejects(runFromSettings(settingsFile, { event: 'Stop' }), /no Stop hook entries/);
 });
 
+test('settings: a file with a BOM and CRLF (how Windows editors write it) is read', async () => {
+  const bomFile = join(dir, 'settings-bom.json');
+  writeFileSync(bomFile, '\uFEFF' + JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: exe, args: [echo, 'bom'] }] }] } }, null, 2).replace(/\n/g, '\r\n'));
+  const runs = await runFromSettings(bomFile, { event: 'Stop' });
+  assert.deepEqual(runs.map((r) => [r.source, r.exit]), [['Stop[0]', 0]]);
+});
+
 test('settings: the status line runs with the status JSON on stdin', async (t) => {
   if (!hasBash) t.diagnostic('NOTICE: bash is not installed here; checking the skip');
   const [r] = await runFromSettings(settingsFile, { statusLine: true, shell: 'bash', stdin: '{"model":"x"}' });

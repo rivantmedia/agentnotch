@@ -90,7 +90,8 @@ export async function runEntry(entry, options = {}, source = 'literal') {
 }
 
 export async function runFromSettings(settingsFile, { event, index, statusLine = false, ...options }) {
-  const settings = JSON.parse(readFileSync(settingsFile, 'utf8'));
+  // A Windows editor's settings.json starts with a BOM, which Claude Code reads past and JSON.parse does not.
+  const settings = JSON.parse(readFileSync(settingsFile, 'utf8').replace(/^\uFEFF/, ''));
   let picked;
   if (statusLine) {
     if (!settings.statusLine?.command) throw new Error(`${settingsFile} has no statusLine command`);
