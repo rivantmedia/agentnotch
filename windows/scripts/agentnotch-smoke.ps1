@@ -958,7 +958,30 @@ function Invoke-Cdp {
     param([Parameter(Mandatory)][string[]]$Arguments, [int]$TimeoutSeconds = 60)
     $tool = Join-Path $PSScriptRoot 'smoke\cdp.mjs'
     $run = Wait-NodeScript -Run (Start-NodeScript -Script $tool -Arguments (@('--port', [string]$script:CdpPort) + $Arguments)) -TimeoutSeconds $TimeoutSeconds
-    try { ConvertFrom-CdpOutput -Text $run.Stdout } catch { throw "$($_.Exception.Message) (cdp $($Arguments -join ' '); stderr: $($run.Stderr.Trim()))" }
+    try { ConvertFrom-CdpOutput -Text $run.Stdout } catch {
+        if ($_.Exception.Message -match 'fetch failed') { Write-CdpDiagnostics }
+        throw "$($_.Exception.Message) (cdp $($Arguments -join ' '); stderr: $($run.Stderr.Trim()))"
+    }
+}
+
+# When the DevTools port does not answer: what the WebView2 browser processes were started with,
+# the ports they listen on, and the port file WebView2 writes into its user data folder. Once.
+$script:CdpDiagnosed = $false
+function Write-CdpDiagnostics {
+    if ($script:CdpDiagnosed) { return }
+    $script:CdpDiagnosed = $true
+    try {
+        Write-PhaseLog "DevTools port $($script:CdpPort) does not answer; the WebView2 processes:"
+        $browsers = @(Get-CimInstance Win32_Process -Filter "Name = 'msedgewebview2.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -notmatch '--type=' })
+        foreach ($b in $browsers) {
+            Write-PhaseLog "  pid $($b.ProcessId) (parent $($b.ParentProcessId)): $($b.CommandLine)"
+            foreach ($c in @(Get-NetTCPConnection -OwningProcess $b.ProcessId -State Listen -ErrorAction SilentlyContinue)) { Write-PhaseLog "    listens on $($c.LocalAddress):$($c.LocalPort)" }
+        }
+        if (-not $browsers) { Write-PhaseLog '  none' }
+        foreach ($file in @(Get-ChildItem -LiteralPath (Join-Path $script:P 'AppData\Local') -Recurse -Force -Filter 'DevToolsActivePort' -ErrorAction SilentlyContinue)) {
+            Write-PhaseLog "  $($file.FullName): $((Get-Content -LiteralPath $file.FullName -Raw -ErrorAction SilentlyContinue) -replace '\s+', ' ')"
+        }
+    } catch { Write-PhaseLog "  (diagnostics failed: $($_.Exception.Message))" }
 }
 
 # window.__TAURI__.core.invoke(command, args) in the named page, as the page itself calls it.
