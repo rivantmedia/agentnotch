@@ -660,6 +660,11 @@ pub enum InstallChange {
 pub struct FolderHookStatus {
     pub config_dir_exists: bool,
     pub settings_readable: bool,
+    /// settings.json couldn't be read because another program holds it
+    /// right now: it isn't broken, only busy. `settings_readable` is false
+    /// as well (nothing is known of what it holds); say this one first.
+    #[serde(default)]
+    pub settings_in_use: bool,
     /// Our entries are registered.
     pub hooks_registered: bool,
     /// …and the hook copy is in place.

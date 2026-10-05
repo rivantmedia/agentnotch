@@ -29,9 +29,9 @@ use super::commands::{
 };
 use super::copy::{install_hook_copy, remove_hook_copy};
 use super::plan::{
-    first_hook_entry, is_a_wrapper, plan_install, plan_uninstall, plan_upstream_removal,
-    PreviousStatusLineChange, Refusal, Saved, SettingsPlan, SettingsWrite, StatusLineWish,
-    CHAINS_NOTHING,
+    first_hook_entry, is_a_wrapper, plan_hook_removal, plan_install, plan_uninstall,
+    plan_upstream_removal, PreviousStatusLineChange, Refusal, Saved, SettingsPlan, SettingsWrite,
+    StatusLineWish, CHAINS_NOTHING,
 };
 use crate::core::paths::PathStyle;
 use crate::core::settings_doc::{is_blank, Json, SettingsDocument};
@@ -58,6 +58,8 @@ pub const VANISHED: &str =
     "settings.json disappeared while Agent Notch was writing it; nothing was changed";
 pub const KEPT_CHANGING: &str = "settings.json kept changing while we tried to update it";
 pub const READ_ONLY: &str = "settings.json is read-only";
+pub const IN_USE: &str =
+    "settings.json is in use by another program, so it was left alone. Try again in a moment.";
 pub const CONFIG_DIR_MISSING: &str = "The config folder doesn't exist.";
 pub const NOT_AN_INSTALL_TARGET: &str = "This folder is an account store of Claude Parallel Profiles (or the shared history); nothing is installed there.";
 
@@ -99,6 +101,10 @@ enum Unusable {
     LinkBroken(String),
     /// There, but it can't be read: we have no idea what we would replace.
     Unreadable,
+    /// Another program holds it open without read sharing, still after the
+    /// retries: nothing wrong with the file, so the user isn't told to fix
+    /// it.
+    InUse,
     FolderMissing,
 }
 
@@ -109,6 +115,7 @@ impl Unusable {
                 "settings.json links to {target}, which doesn't exist, so it was left alone."
             ),
             Unusable::Unreadable => Refusal::Unreadable.message().to_owned(),
+            Unusable::InUse => IN_USE.to_owned(),
             Unusable::FolderMissing => CONFIG_DIR_MISSING.to_owned(),
         }
     }
@@ -153,9 +160,10 @@ fn read_state(path: &Path, files: &dyn SecureFiles) -> Result<FileState, Unusabl
         Err(error) if missing(&error) => return Ok(None),
         Err(_) => return Err(Unusable::Unreadable),
     };
-    match fs::read(path) {
+    match files.read_file(path) {
         Ok(bytes) => Ok(Some((bytes, identity))),
         Err(error) if missing(&error) => Ok(None),
+        Err(error) if error.kind() == io::ErrorKind::ResourceBusy => Err(Unusable::InUse),
         Err(_) => Err(Unusable::Unreadable),
     }
 }
@@ -511,7 +519,7 @@ pub fn apply_install_with(
         CommandForm::NotPossible(reason) => {
             match string_command_for(&exe, Subcommand::Hook, &short_path) {
                 Some(command) => CommandForm::Text(command),
-                None => return refused(&plan.settings_path, reason.clone()),
+                None => return withdraw_hooks(plan, &config_dir, reason, files, clock),
             }
         }
         form => form.clone(),
@@ -630,6 +638,59 @@ pub fn apply_install_with(
     }
 }
 
+/// A folder no hook command can name: ours come out of its settings.json and
+/// nothing goes in. The exec form an earlier pass wrote is the case that
+/// matters: once a Claude Code too old for it shows up, that copy ignores
+/// `args` and hands `command` to Git Bash, where a path with `(` or `'` is a
+/// syntax error, exit 2, which blocks every tool call, prompt and Stop. The
+/// status line and the hook copy stay (the status line is a string command,
+/// so it was never ours here unless an 8.3 spelling went away; the copy is
+/// the record's to clean up on a removal).
+///
+/// The result is still `Err(reason)`, the folder's state rather than a
+/// failure of the pass; a backup in it says settings.json was written.
+fn withdraw_hooks(
+    plan: &InstallPlan,
+    config_dir: &Path,
+    reason: &str,
+    files: &dyn SecureFiles,
+    clock: &dyn Clock,
+) -> InstallOutcome {
+    let resolved = match resolve(&plan.settings_path, files) {
+        Ok(resolved) => resolved,
+        Err(unusable) => {
+            return outcome(&plan.folder, &plan.settings_path, Err(unusable.message()))
+        }
+    };
+    let first = match read_state(&resolved, files) {
+        Ok(state) => state,
+        Err(unusable) => return outcome(&plan.folder, &resolved, Err(unusable.message())),
+    };
+    let seen = plan.existed || matches!(plan.expected, Expect::Same(_));
+    if first.is_none() && seen {
+        return outcome(&plan.folder, &resolved, Failure::Vanished.result());
+    }
+
+    let long_path = |path: &Path| files.long_path(path);
+    let recogniser = Recogniser::with_long_paths(PathStyle::native(), &long_path);
+    let target = Target {
+        config_dir,
+        settings: &resolved,
+        files,
+        clock,
+        recogniser: &recogniser,
+    };
+    match target.apply(first, seen, &mut |existing, _| {
+        plan_hook_removal(existing, &recogniser)
+    }) {
+        Ok(applied) => InstallOutcome {
+            backup: applied.backup,
+            ..outcome(&plan.folder, &resolved, Err(reason.to_owned()))
+        },
+        Err(failure) => outcome(&plan.folder, &resolved, failure.result()),
+    }
+}
+
 /// Carries a whole pass out, writing each physical settings.json once: two
 /// folders whose settings.json is one file (a link) would otherwise replace
 /// each other's entries on every pass. Installs come first, so a folder that
@@ -656,9 +717,15 @@ pub fn apply_installs_with(
         .collect();
     let mut outcomes: Vec<Option<InstallOutcome>> = plans.iter().map(|_| None).collect();
     let mut done: Vec<usize> = Vec::new();
+    // A plan no command may name takes ours out of its file, so it goes
+    // after the installs that can write, like a removal: a file it shares
+    // with a folder that can be hooked keeps that folder's entries.
+    let nameless = |index: &usize| matches!(plans[*index].form, CommandForm::NotPossible(_));
     let installs = (0..plans.len()).filter(|&index| !plans[index].remove_only);
+    let named = installs.clone().filter(|index| !nameless(index));
+    let unnamed = installs.filter(nameless);
     let removals = (0..plans.len()).filter(|&index| plans[index].remove_only);
-    for index in installs.chain(removals) {
+    for index in named.chain(unnamed).chain(removals) {
         let plan = &plans[index];
         outcomes[index] = Some(if done.iter().any(|&other| keys[other] == keys[index]) {
             outcome(
@@ -872,8 +939,9 @@ pub fn read_status(config_dir: &Path, files: &dyn SecureFiles, setup: &Setup) ->
     let bytes = match read_state(&resolved, files) {
         Ok(Some((bytes, _))) => bytes,
         Ok(None) => return status,
-        Err(_) => {
+        Err(unusable) => {
             status.settings_readable = false;
+            status.settings_in_use = matches!(unusable, Unusable::InUse);
             return status;
         }
     };

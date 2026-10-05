@@ -577,6 +577,15 @@ fn note_outcome(known: &mut Known, plan: &InstallPlan, outcome: &InstallOutcome)
             if not_hookable {
                 status.not_hookable = Some(error.clone());
                 status.last_error = None;
+                // The pass took ours out of settings.json (`withdraw_hooks`);
+                // a backup says it had to write to do so.
+                if outcome.backup.is_some() {
+                    status.newest_backup = outcome.backup.clone();
+                }
+                status.hooks_registered = false;
+                status.hooks_installed = false;
+                status.form = None;
+                status.hook_command = None;
             } else {
                 status.not_hookable = None;
                 status.last_error = Some(error.clone());
@@ -627,15 +636,15 @@ fn updated_record(
 }
 
 /// The folders whose settings.json a pass changed, for the notice saying
-/// what was changed and where the backups are.
+/// what was changed and where the backups are. A folder no command can name
+/// reports its reason, not a change, even when ours had to come out of its
+/// file; its backup says that happened.
 pub fn changed_folders(outcomes: &[InstallOutcome]) -> Vec<AccountId> {
     outcomes
         .iter()
-        .filter(|outcome| {
-            matches!(
-                outcome.result,
-                Ok(InstallChange::Written | InstallChange::Removed)
-            )
+        .filter(|outcome| match &outcome.result {
+            Ok(change) => matches!(change, InstallChange::Written | InstallChange::Removed),
+            Err(_) => outcome.backup.is_some(),
         })
         .map(|outcome| outcome.folder.clone())
         .collect()

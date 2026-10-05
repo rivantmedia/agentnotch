@@ -471,6 +471,14 @@ pub trait SecureFiles: Send + Sync {
         let _ = path;
         None
     }
+    /// A file's bytes, as `std::fs::read`. Where another program can hold a
+    /// file open without read sharing (Windows: a backup or sync tool), a
+    /// read refused for that is tried again briefly, as `write_atomic`'s
+    /// rename is, and one still refused fails with
+    /// `io::ErrorKind::ResourceBusy`, so it isn't taken for a broken file.
+    fn read_file(&self, path: &Path) -> io::Result<Vec<u8>> {
+        std::fs::read(path)
+    }
     /// The long spelling of a path that may hold 8.3 names
     /// (`GetLongPathNameW`), so a hook command written with one is still
     /// recognised as ours. `None` when there is nothing to look up.
