@@ -33,19 +33,44 @@ use std::time::Duration;
 const OFFICIAL_HOOK: &str = "C:/Users/me/AppData/Local/codenotch/codenotch-hook.exe";
 
 /// A settings.json as users have them: another tool's hook, the official
-/// app's, and a status line.
+/// app's, and a status line. `hooks` and `statusLine`, the two values the
+/// installer rewrites, are laid out the way Claude Code writes them
+/// (`JSON.stringify` with two spaces), which is the layout the splice
+/// writes back (core::settings_doc); the other keys are laid out by hand,
+/// which only a splice that never touches them keeps.
 fn realistic() -> String {
     format!(
         r#"{{
-  "model": "opus",
+  "model":   "opus",
   "permissions": {{"allow": ["Bash(npm test:*)"], "deny": []}},
   "hooks": {{
     "PreToolUse": [
-      {{"matcher": "Bash", "hooks": [{{"type": "command", "command": "~/bin/guard-bash.sh", "timeout": 30}}]}},
-      {{"matcher": "*", "hooks": [{{"type": "command", "command": "{OFFICIAL_HOOK} PreToolUse"}}]}}
+      {{
+        "matcher": "Bash",
+        "hooks": [
+          {{
+            "type": "command",
+            "command": "~/bin/guard-bash.sh",
+            "timeout": 30
+          }}
+        ]
+      }},
+      {{
+        "matcher": "*",
+        "hooks": [
+          {{
+            "type": "command",
+            "command": "{OFFICIAL_HOOK} PreToolUse"
+          }}
+        ]
+      }}
     ]
   }},
-  "statusLine": {{"type": "command", "command": "~/.claude/statusline.sh", "padding": 2}}
+  "statusLine": {{
+    "type": "command",
+    "command": "~/.claude/statusline.sh",
+    "padding": 2
+  }}
 }}
 "#
     )
@@ -132,26 +157,21 @@ impl World {
             .to_path_buf()
     }
 
-    /// Both settings.json files are back: `~\.claude-work`'s (where we
-    /// only wrapped the status line) byte for byte; `~\.claude`'s, whose
-    /// `PreToolUse` list we spliced into, as the same JSON with the other
-    /// keys' bytes kept (the list itself is written out again).
+    /// Both settings.json files are back byte for byte: `~\.claude-work`'s,
+    /// where we only wrapped the status line, and `~\.claude`'s, whose
+    /// `PreToolUse` list we spliced into and whose status line we wrapped
+    /// where Git Bash is installed (on the Windows runner, not on the Mac).
     fn assert_restored(&self, before: &BTreeMap<PathBuf, Vec<u8>>) {
-        assert_eq!(
-            self.settings_bytes(".claude-work").as_ref(),
-            before.get(&self.key(".claude-work"))
-        );
-        let now = self
-            .settings_bytes(".claude")
-            .expect("~\\.claude\\settings.json");
-        let was = before.get(&self.key(".claude")).expect("it was there");
-        let parse = |bytes: &[u8]| serde_json::from_slice::<Value>(bytes).expect("JSON");
-        assert_eq!(parse(&now), parse(was));
-        let text = String::from_utf8_lossy(&now);
-        assert!(
-            text.contains(r#""statusLine": {"type": "command", "command": "~/.claude/statusline.sh", "padding": 2}"#),
-            "{text}"
-        );
+        for folder in [".claude-work", ".claude"] {
+            let now = self.settings_bytes(folder);
+            assert_eq!(
+                now.as_deref().map(String::from_utf8_lossy),
+                before
+                    .get(&self.key(folder))
+                    .map(|was| String::from_utf8_lossy(was)),
+                "{folder}"
+            );
+        }
     }
 
     fn call(&self, call: Call) -> Result<Value, CallError> {
@@ -870,5 +890,58 @@ fn hooks_off_and_uninstall_restore_every_settings_file() {
     world.assert_restored(&before);
     for folder in [".claude", ".claude-work"] {
         assert!(!world.status(folder).hooks_registered, "{folder}");
+    }
+}
+
+/// Smoke phases 7 and 9 on the smoke test's own profile: `~\.claude`'s
+/// settings.json with CRLF and a byte order mark (as the smoke script makes
+/// it), a foreign hook and an `echo` status line (wrapped where Git Bash is
+/// installed), and `~\.claude-work`'s `node C:\tools\sl.js` (left alone).
+/// Turning the hooks off gives both files back byte for byte.
+#[test]
+fn the_smoke_profile_comes_back_byte_for_byte() {
+    let fixture = |name: &str| {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../scripts/smoke/profile/");
+        std::fs::read_to_string(format!("{path}{name}"))
+            .expect("the smoke fixture")
+            .replace("\r\n", "\n")
+    };
+    let main = format!(
+        "\u{feff}{}",
+        fixture("claude/settings.json").replace('\n', "\r\n")
+    );
+    let work = fixture("claude-work/settings.json");
+    let world = World::started(two_accounts(Some(&main), Some(&work)), no_probes());
+    let before = world.files();
+    world
+        .call(Call::HookConsent { grant: true })
+        .expect("turn on");
+    world.idle();
+    assert!(world.status(".claude").hooks_installed);
+    assert!(world.status(".claude-work").hooks_installed);
+    let wrapped = world.settings_bytes(".claude").expect("settings.json");
+    assert!(
+        wrapped.starts_with(b"\xEF\xBB\xBF{\r\n"),
+        "the BOM and CRLF are kept"
+    );
+    assert_eq!(
+        world.settings_json(".claude-work")["statusLine"]["command"],
+        json!(r"node C:\tools\sl.js")
+    );
+
+    world
+        .call(Call::HooksEnabled { on: false })
+        .expect("hooks off");
+    world.idle();
+    for folder in [".claude", ".claude-work"] {
+        assert_eq!(
+            world
+                .settings_bytes(folder)
+                .map(|now| String::from_utf8_lossy(&now).into_owned()),
+            before
+                .get(&world.key(folder))
+                .map(|was| String::from_utf8_lossy(was).into_owned()),
+            "{folder}"
+        );
     }
 }

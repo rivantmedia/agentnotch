@@ -227,17 +227,21 @@ fn nothing_is_uploaded_before_a_sign_in_and_sync_on() {
     let home = Home::new();
     let hub = hub_with_accounts(&home);
     assert_eq!(settings(&hub).accounts.len(), 2);
-    // Smoke phase 5: a started cloud leaves no file behind before a sign-in.
+    // Smoke phase 5: a started cloud leaves no file behind before a sign-in
+    // but the record of since when each folder has been signed in as its
+    // account, which is local only and kept whether or not sync is on (the
+    // Mac's CloudSync.tick: a later backfill needs it).
     let cloud_files = || {
         std::fs::read_dir(&hub.roots.support)
             .map(|dir| {
                 dir.filter_map(Result::ok)
-                    .filter(|e| e.file_name().to_string_lossy().starts_with("cloud-"))
-                    .count()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .filter(|name| name.starts_with("cloud-") && name != "cloud-folder-logins.json")
+                    .collect::<Vec<_>>()
             })
-            .unwrap_or(0)
+            .unwrap_or_default()
     };
-    assert_eq!(cloud_files(), 0);
+    assert_eq!(cloud_files(), Vec::<String>::new());
 
     cloud(&hub, CloudAction::SetSync, Some(true)).expect("queued");
     cloud(&hub, CloudAction::SetSummaries, Some(true)).expect("queued");

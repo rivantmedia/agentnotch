@@ -1414,7 +1414,11 @@ function Invoke-BeforeConsentPhase {
 
     $aclProblems = @(Get-AclProblems -Path $support)
     if ($aclProblems) { throw "the support folder: $($aclProblems -join '; ')" }
-    $cloud = @(Get-ChildItem -LiteralPath $support -Force -Filter 'cloud-*' -ErrorAction SilentlyContinue)
+    # cloud-folder-logins.json is the one exception: since when each folder has been signed in as
+    # its account, local only and kept whether or not sync is on (the Mac's CloudSync.tick), so a
+    # later backfill knows it. Nothing in it is ever sent.
+    $cloud = @(Get-ChildItem -LiteralPath $support -Force -Filter 'cloud-*' -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -ne 'cloud-folder-logins.json' })
     if ($cloud) { throw "the support folder holds $($cloud.Name -join ', ') before sign-in" }
     if ($null -ne (Get-RunValue)) { throw 'a Run value exists although autostart was never turned on' }
 

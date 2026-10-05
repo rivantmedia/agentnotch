@@ -606,7 +606,9 @@ Test-Case 'the comparison runs through node on generated PNGs when node is here'
 }
 
 Test-Case 'the sealed launch is replaced by the self-test exactly when the selftest gate is open' {
-    $closed = Read-Gates -Path $committedGates
+    $closedPath = Join-Path (New-Scratch 'gates-closed') 'g.json'
+    Write-GatesFile $closedPath @{}
+    $closed = Read-Gates -Path $closedPath
     $numbers = @(Get-PhaseTable -Gates $closed | ForEach-Object { $_.Number })
     Assert-True ('3b' -in $numbers) 'the plain sealed launch stays while the gate is closed'
     Assert-True ('4' -in $numbers) 'phase 4 is in the table (gated)'
