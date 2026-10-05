@@ -439,7 +439,26 @@ fn a_reply_sent_while_claude_works_is_held_then_refused() {
     });
     w.advance(Duration::from_secs(9));
     assert!(!sending.is_finished(), "held while Claude works");
-    w.advance(Duration::from_millis(1500));
+    // The 10 s count from when an-core took the call, which a busy runner
+    // may reach only after the clock began to move (Windows CI 37310257609):
+    // go on in steps until it answers, never more than 10 s past the first 9.
+    let mut more = Duration::ZERO;
+    loop {
+        w.advance(Duration::from_millis(500));
+        more += Duration::from_millis(500);
+        let deadline = std::time::Instant::now() + Duration::from_millis(200);
+        while !sending.is_finished() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        if sending.is_finished() {
+            break;
+        }
+        assert!(more < Duration::from_secs(10), "still held 19 s on");
+    }
+    assert!(
+        more >= Duration::from_secs(1),
+        "answered before 10 s: {more:?}"
+    );
     let sent = sending.join().unwrap().unwrap();
     assert_eq!(
         sent,
