@@ -1424,6 +1424,43 @@ function Get-ProtoFixtureDir {
     Join-Path (Split-Path -Parent $PSScriptRoot) 'agentnotch-proto\tests\fixtures'
 }
 
+# The hook printed HS§1.7's answer. Byte for byte, except that the keys of a permission suggestion
+# echoed in updatedPermissions may come in another order: the hook prints the order the app's
+# frame carries, and neither the Mac (JSONEncoder of [AnyCodable]) nor the engine (serde_json, whose
+# frames' key order is irrelevant, DESIGN-WIN §1.4) keeps the order Claude Code sent. So the same
+# length and the same JSON once every object's keys are sorted, and nothing else differs.
+function Test-PermissionBytes {
+    param([Parameter(Mandatory)][AllowEmptyCollection()][byte[]]$Got, [Parameter(Mandatory)][byte[]]$Want)
+    if ([Convert]::ToBase64String($Got) -ceq [Convert]::ToBase64String($Want)) { return $true }
+    if ($Got.Length -ne $Want.Length) { return $false }
+    $utf8 = [Text.UTF8Encoding]::new($false, $true)
+    try { $gotJson = $utf8.GetString($Got) | ConvertFrom-Json -AsHashtable -Depth 50; $wantJson = $utf8.GetString($Want) | ConvertFrom-Json -AsHashtable -Depth 50 } catch { return $false }
+    $decision = { param($j) $j['hookSpecificOutput']['decision'] }
+    if (-not ((& $decision $gotJson) -is [System.Collections.IDictionary]) -or -not (& $decision $wantJson).Contains('updatedPermissions')) { return $false }
+    # Only updatedPermissions may differ in order: everything else is compared as it was printed.
+    $outside = { param($j) $copy = ConvertFrom-Json (ConvertTo-Json $j -Depth 50 -Compress) -AsHashtable -Depth 50; $copy['hookSpecificOutput']['decision'].Remove('updatedPermissions'); ConvertTo-Json $copy -Depth 50 -Compress }
+    if ((& $outside $gotJson) -cne (& $outside $wantJson)) { return $false }
+    if ((@((& $decision $gotJson).Keys) -join ',') -cne (@((& $decision $wantJson).Keys) -join ',')) { return $false }
+    (ConvertTo-SortedJson (& $decision $gotJson)['updatedPermissions']) -ceq (ConvertTo-SortedJson (& $decision $wantJson)['updatedPermissions'])
+}
+
+# Compact JSON with every object's keys sorted (ordinal), so two values compare by content.
+function ConvertTo-SortedJson {
+    param($Value)
+    if ($null -eq $Value) { return 'null' }
+    if ($Value -is [System.Collections.IDictionary]) {
+        [string[]]$keys = @($Value.Keys | ForEach-Object { [string]$_ })
+        [Array]::Sort($keys, [StringComparer]::Ordinal)
+        $parts = foreach ($key in $keys) {
+            (ConvertTo-Json ([string]$key) -Compress) + ':' + (ConvertTo-SortedJson $Value[$key])
+        }
+        return '{' + (@($parts) -join ',') + '}'
+    }
+    if ($Value -is [string]) { return (ConvertTo-Json $Value -Compress) }
+    if ($Value -is [System.Collections.IEnumerable]) { return '[' + (@(foreach ($item in $Value) { ConvertTo-SortedJson $item }) -join ',') + ']' }
+    ConvertTo-Json $Value -Compress
+}
+
 function Get-ExpectedPermissionBytes {
     param([Parameter(Mandatory)][string]$Name, [string]$Fixtures = (Get-ProtoFixtureDir))
     [IO.File]::ReadAllBytes((Join-Path $Fixtures "v1-responses\$Name.stdout"))
@@ -1792,7 +1829,7 @@ function Invoke-EntriesAsWrittenPhase {
             if ($run['timedOut'] -or $run['exit'] -ne 0) { throw "answer '$($case.Name)': the hook exited with $($run['exit'])" }
             $got = [Convert]::FromBase64String([string]$run['stdout_b64'])
             $want = Get-ExpectedPermissionBytes -Name $case.Expected
-            if ([Convert]::ToBase64String($got) -cne [Convert]::ToBase64String($want)) {
+            if (-not (Test-PermissionBytes -Got $got -Want $want)) {
                 throw "answer '$($case.Name)' ($shell): the hook printed`n  $([Text.Encoding]::UTF8.GetString($got))`nexpected`n  $([Text.Encoding]::UTF8.GetString($want))"
             }
             Write-PhaseLog "  answer '$($case.Name)' ($shell): printed the expected $($want.Length) bytes, exit 0"

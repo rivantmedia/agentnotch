@@ -990,6 +990,24 @@ Test-Case 'the DevTools switches: the port first, then wry''s own, for the env a
     Assert-Equal $script:WebView2PolicySet.Count 0 'nothing recorded'
 }
 
+Test-Case 'a permission answer: HS 1.7 bytes, a suggestion''s keys in any order, nothing else' {
+    $fixtures = Join-Path $windowsDir 'agentnotch-proto/tests/fixtures/v1-responses'
+    $want = [IO.File]::ReadAllBytes((Join-Path $fixtures 'always.stdout'))
+    $sorted = [Text.Encoding]::UTF8.GetBytes('{"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": "allow", "updatedPermissions": [{"behavior": "allow", "destination": "localSettings", "rules": [{"ruleContent": "npm run test:*", "toolName": "Bash"}], "type": "addRules"}]}}}')
+    Assert-True (Test-PermissionBytes -Got $want -Want $want) 'the same bytes'
+    Assert-True (Test-PermissionBytes -Got $sorted -Want $want) 'the suggestion''s keys sorted (run 37307553355)'
+    $otherRule = [Text.Encoding]::UTF8.GetBytes(([Text.Encoding]::UTF8.GetString($sorted)).Replace('test:*', 'tesx:*'))
+    Assert-True (-not (Test-PermissionBytes -Got $otherRule -Want $want)) 'another rule'
+    $outerOrder = [Text.Encoding]::UTF8.GetBytes(([Text.Encoding]::UTF8.GetString($want)).Replace('{"behavior": "allow", "updatedPermissions": ', '{"updatedPermissions": ').Replace('"localSettings"}]}', '"localSettings"}], "behavior": "allow"}'))
+    Assert-Equal $outerOrder.Length $want.Length 'same length'
+    Assert-True (-not (Test-PermissionBytes -Got $outerOrder -Want $want)) 'the decision''s own keys reordered'
+    $allow = [IO.File]::ReadAllBytes((Join-Path $fixtures 'allow.stdout'))
+    $deny = [IO.File]::ReadAllBytes((Join-Path $fixtures 'deny.stdout'))
+    Assert-True (-not (Test-PermissionBytes -Got $deny -Want $allow)) 'deny is not allow'
+    Assert-True (-not (Test-PermissionBytes -Got ([byte[]]@()) -Want $allow)) 'nothing printed'
+    Assert-Equal (ConvertTo-SortedJson ([ordered]@{ b = @(1, @{ z = 'x'; a = $null }); a = @() })) '{"a":[],"b":[1,{"a":null,"z":"x"}]}' 'sorted JSON'
+}
+
 Test-Case 'phases 5-9 are in the table in order, behind the engine gate, between phase 4 and phase 13' {
     $table = @(Get-PhaseTable)
     $numbers = @($table | ForEach-Object { $_.Number })
