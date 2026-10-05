@@ -651,6 +651,23 @@ Test-Case 'control status lines are read as key: value, and the check names what
     Assert-Equal (ConvertFrom-ControlStatus -Text '').Count 0 'empty text is an empty status'
 }
 
+Test-Case 'Wait-ControlStatus compares with -Expect and runs a closure -Check, as the phases call it' {
+    $script:polls = 0
+    function Get-ControlStatus {
+        $script:polls++
+        [ordered]@{ transport = 'listening'; accounts = '2'; readings = [string][math]::Min($script:polls, 2); sessions = '1' }
+    }
+    $seen = Wait-ControlStatus -Seconds 10 -What 'readings' -Expect ([ordered]@{ transport = 'listening'; readings = '2' })
+    Assert-Equal $seen['readings'] '2' 'it waited for the readings'
+    $before = @{ sessions = '0' }
+    # A closure runs in a module of its own: it may use only what it captured.
+    $seen = Wait-ControlStatus -Seconds 5 -What 'sessions' -Check ({ param($s) if ([int]$s['sessions'] -le [int]$before['sessions']) { 'none' } }.GetNewClosure())
+    Assert-Equal $seen['sessions'] '1' 'the closure check passed'
+    $failed = $null
+    try { Wait-ControlStatus -Seconds 1 -What 'the cloud' -Expect @{ cloud = 'signed_in' } | Out-Null } catch { $failed = $_.Exception.Message }
+    Assert-Equal $failed "timed out after 1 s: the cloud (no 'cloud' line)" 'a timeout names what it last saw'
+}
+
 Test-Case 'a private DACL is protected and names only the user and SYSTEM' {
     $allowed = @('S-1-5-21-1-2-3-1001', 'S-1-5-18')
     Assert-Equal @(Test-PrivateAcl -Protected $true -Sids @('S-1-5-21-1-2-3-1001', 'S-1-5-18') -Allowed $allowed).Count 0 'user + SYSTEM'

@@ -1044,7 +1044,8 @@ function Wait-ControlStatus {
         $last = $null
         try { $last = Get-ControlStatus } catch { $last = "no status: $($_.Exception.Message)" }
         if ($last -isnot [string]) {
-            $problems = if ($Expect) { @(Test-ControlStatus -Status $last -Expect $Expect) } else { @() }
+            $problems = @()
+            if ($Expect) { $problems += @(Test-ControlStatus -Status $last -Expect $Expect) }
             if ($Check) { $problems += @(& $Check $last) }
             if (-not $problems.Count) { return $last }
             $seen = ($problems -join '; ')
