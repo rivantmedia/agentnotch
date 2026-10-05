@@ -1109,6 +1109,31 @@ Test-Case 'the fake website log is read line by line; a torn or foreign line is 
     Assert-Equal @(ConvertFrom-RequestLog -Text '').Count 0 'empty'
 }
 
+Test-Case 'the readings waiting for the website are read from the settings snapshot' {
+    Assert-Equal (Get-CloudPendingUsage -Settings @{ cloud = @{ pending_usage = 2 } }) 2 'two'
+    Assert-Equal (Get-CloudPendingUsage -Settings @{ cloud = @{ sync_enabled = $true } }) 0 'none named'
+    Assert-Equal (Get-CloudPendingUsage -Settings $null) 0 'no snapshot'
+}
+
+Test-Case 'the usage cache is added to a .claude.json the way Claude Code keeps it, the rest kept' {
+    $original = [IO.File]::ReadAllText((Join-Path $fixtures 'claude.json'))
+    $at = 1790000100000
+    $text = ConvertTo-ClaudeJsonWithCachedUsage -Text ([string][char]0xFEFF + $original) -FetchedAtMs $at
+    Assert-True ($text[0] -ne [char]0xFEFF) 'no BOM'
+    $config = $text | ConvertFrom-Json -AsHashtable
+    $before = $original | ConvertFrom-Json -AsHashtable
+    Assert-Equal $config['oauthAccount']['accountUuid'] $before['oauthAccount']['accountUuid'] 'the login kept'
+    Assert-Equal $config['hasCompletedOnboarding'] $true 'other keys kept'
+    $cached = $config['cachedUsageUtilization']
+    Assert-Equal $cached['accountUuid'] $before['oauthAccount']['accountUuid'] 'the cache names the login'
+    Assert-Equal ([long]$cached['fetchedAtMs']) $at 'fetched at'
+    Assert-Equal $cached['utilization']['five_hour']['utilization'] 17 'five-hour'
+    # Read from the text: ConvertFrom-Json turns the date into a local DateTime.
+    $iso = [DateTimeOffset]::FromUnixTimeMilliseconds($at + 3 * 3600 * 1000).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture)
+    Assert-True ($text.Contains("`"resets_at`": `"$iso`"")) "five-hour resets at $iso (three hours later, UTC)"
+    Assert-Throws { ConvertTo-ClaudeJsonWithCachedUsage -Text '{"numStartups":1}' -FetchedAtMs $at } 'login|null'
+}
+
 Test-Case 'the cloud switches are read from the settings snapshot; anything but true is off' {
     $on = Get-CloudSwitches -Settings @{ cloud = @{ sync_enabled = $true; summaries_enabled = $true } }
     Assert-True ($on.Sync -and $on.Summaries) 'both on'

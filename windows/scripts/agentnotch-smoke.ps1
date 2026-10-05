@@ -1891,6 +1891,7 @@ $script:Ui.CloudSignIn      = '[data-an-action="an-cloud-sign-in"]'
 $script:Ui.CloudSignOutAsk  = '[data-an-action="an-cloud-sign-out-ask"]'
 $script:Ui.CloudSignOut     = '[data-an-action="an-cloud-sign-out"]'
 $script:Ui.CloudSyncOff     = '[data-an-action="an-cloud-sync"][data-an-on="0"]'
+$script:Ui.CloudSyncNow     = '[data-an-action="an-cloud-sync-now"]'
 $script:Ui.HooksSwitchOff   = '[data-an-action="hooks-enabled"][data-an-on="0"]'
 $script:Ui.Reconsider       = '[data-an-action="reconsider"]'
 
@@ -1959,6 +1960,34 @@ function Get-CloudSwitches {
         Sync      = ($cloud.Contains('sync_enabled') -and $cloud['sync_enabled'] -eq $true)
         Summaries = ($cloud.Contains('summaries_enabled') -and $cloud['summaries_enabled'] -eq $true)
     }
+}
+
+# The readings the cloud holds to send (`pending_usage` of the settings snapshot's cloud).
+function Get-CloudPendingUsage {
+    param([Parameter(Mandatory)][AllowNull()]$Settings)
+    if ($Settings -is [System.Collections.IDictionary] -and $Settings.Contains('cloud') -and $Settings['cloud'] -is [System.Collections.IDictionary] -and $Settings['cloud'].Contains('pending_usage')) {
+        [int]$Settings['cloud']['pending_usage']
+    } else { 0 }
+}
+
+# A .claude.json as Claude Code leaves it after a response: its own usage cache
+# (`cachedUsageUtilization`, the shape `usage::parser::parse_cached_usage` reads) added, for the
+# file's own login, fetched at FetchedAtMs; every other key kept. Plain JSON, no BOM.
+function ConvertTo-ClaudeJsonWithCachedUsage {
+    param([Parameter(Mandatory)][string]$Text, [Parameter(Mandatory)][double]$FetchedAtMs)
+    $config = $Text.TrimStart([char]0xFEFF) | ConvertFrom-Json -AsHashtable
+    $uuid = [string]$config['oauthAccount']['accountUuid']
+    if (-not $uuid) { throw 'the .claude.json names no login' }
+    $resets = { param([double]$hours) [DateTimeOffset]::FromUnixTimeMilliseconds([long]$FetchedAtMs).AddHours($hours).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture) }
+    $config['cachedUsageUtilization'] = [ordered]@{
+        accountUuid = $uuid
+        fetchedAtMs = [long]$FetchedAtMs
+        utilization = [ordered]@{
+            five_hour = [ordered]@{ utilization = 17; resets_at = (& $resets 3) }
+            seven_day = [ordered]@{ utilization = 29; resets_at = (& $resets 100) }
+        }
+    }
+    $config | ConvertTo-Json -Depth 20
 }
 
 function Get-FakeWebsiteRequests {
@@ -2048,6 +2077,8 @@ function Invoke-CloudPhase {
     Remove-Item -LiteralPath $syncDir -Recurse -Force -ErrorAction SilentlyContinue
     $site = Start-FakeWebsite -LogFile $log -SyncDir $syncDir
     Write-PhaseLog "fake website on $($site.Url)"
+    $claudeJson = $null
+    $claudeJsonBefore = $null
     try {
         # A fresh start of the app, pointed at the fake website: only this run, only 127.0.0.1.
         Stop-LiveAppGracefully
@@ -2085,7 +2116,27 @@ function Invoke-CloudPhase {
 
         # 4. Sync on: one upload, in the contract's shape, with nothing of this machine's folders.
         Invoke-SettingsClick -Selector $script:Ui.CloudSyncOff
-        Wait-Until { (Get-RequestCount -Requests (Get-FakeWebsiteRequests -LogFile $log) -Method 'POST' -Path '/api/app/v1/sync') -ge 1 } 30 'a /sync request'
+        # Something to send: readings are recorded only while sync is on, and this profile's only
+        # source so far was the probe, which ran before the sign-in and is 5 minutes apart. So
+        # Claude Code "answers" now: it leaves its usage cache in .claude.json, which the app reads
+        # every 20 s (run 37320814137 waited for a /sync that had nothing to carry).
+        $claudeJson = Join-Path $script:P '.claude.json'
+        $claudeJsonBefore = [IO.File]::ReadAllBytes($claudeJson)
+        $withUsage = ConvertTo-ClaudeJsonWithCachedUsage -Text ([Text.Encoding]::UTF8.GetString($claudeJsonBefore)) -FetchedAtMs ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
+        [IO.File]::WriteAllText($claudeJson, $withUsage, [Text.UTF8Encoding]::new($false))
+        $syncCount = { Get-RequestCount -Requests (Get-FakeWebsiteRequests -LogFile $log) -Method 'POST' -Path '/api/app/v1/sync' }
+        Wait-Until { (& $syncCount) -ge 1 -or (Get-CloudPendingUsage -Settings (Get-SettingsSnapshot)) -ge 1 } 45 'the cached reading to be recorded for the website'
+        # The first pass after sync on runs at the next 20 s tick. When it came before the reading
+        # it had nothing to send, and the next is 5 minutes away (as on the Mac: setSyncEnabled,
+        # syncInterval); "Sync now" is what a user has for that.
+        try {
+            Wait-Until { (& $syncCount) -ge 1 } 21 'the scheduled /sync'
+            Write-PhaseLog 'the scheduled pass sent the reading'
+        } catch {
+            Write-PhaseLog 'the pass after sync on came before the reading; pressing Sync now'
+            Invoke-SettingsClick -Selector $script:Ui.CloudSyncNow
+        }
+        Wait-Until { (& $syncCount) -ge 1 } 30 'a /sync request'
         $bodies = @(Get-ChildItem -LiteralPath $syncDir -Filter 'sync-*.json' -ErrorAction SilentlyContinue | Sort-Object Name)
         if (-not $bodies.Count) { throw "the fake website saved no sync body under $syncDir" }
         Invoke-ContractShape -BodyFile $bodies[0].FullName
@@ -2114,6 +2165,8 @@ function Invoke-CloudPhase {
     } finally {
         Save-LiveRunLog
         Stop-OwnProcess -Process $site.Process
+        # The later phases compare P with what phase 2 built.
+        if ($claudeJsonBefore) { [IO.File]::WriteAllBytes($claudeJson, $claudeJsonBefore) }
     }
     # The phases after this one run the app as a user has it: no fake website, no dev switches.
     Stop-LiveAppGracefully
