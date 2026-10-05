@@ -803,6 +803,14 @@ Test-Case 'settings style: the byte order mark and CRLF must survive, and only t
     Assert-True (@(Test-SettingsStyle -Bytes ([Text.Encoding]::UTF8.GetBytes($text))) -match 'byte order mark') 'a lost BOM'
     $lf = [byte[]](0xEF, 0xBB, 0xBF) + [Text.Encoding]::UTF8.GetBytes(($text -replace ',', ",`n"))
     Assert-True (@(Test-SettingsStyle -Bytes $lf) -match 'bare LF') 'LF endings'
+    # Against the original: an LF file without a BOM stays one.
+    $plain = [Text.Encoding]::UTF8.GetBytes(($text -replace ',', ",`n"))
+    Assert-Equal @(Test-SettingsStyle -Bytes $plain -Original $plain).Count 0 'LF without a BOM, as it was'
+    Assert-True (@(Test-SettingsStyle -Bytes $lf -Original $plain) -match 'byte order mark was added') 'an added BOM'
+    $crlfNoBom = [Text.Encoding]::UTF8.GetBytes(($text -replace ',', ",`r`n"))
+    Assert-True (@(Test-SettingsStyle -Bytes $crlfNoBom -Original $plain) -match 'CRLF line ending') 'CRLF in an LF file'
+    Assert-True (@(Test-SettingsStyle -Bytes $plain -Original $crlf) -match 'byte order mark is gone') 'the BOM of a BOM file'
+    Assert-Equal @(Test-SettingsStyle -Bytes $crlf -Original $crlf).Count 0 'BOM and CRLF, as it was'
     $before = ConvertFrom-SettingsBytes -Bytes $crlf
     Assert-Equal $before.theme 'dark' 'the BOM is skipped when parsing'
     $after = ConvertFrom-SettingsBytes -Bytes ([Text.Encoding]::UTF8.GetBytes(($text -replace '"dark"', '"light"')))

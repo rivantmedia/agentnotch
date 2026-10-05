@@ -903,6 +903,10 @@ $script:Ui = @{
     # The list row's way into the chat ("Review plan"); {0} = session id.
     OpenChat        = '[data-an-action="open-chat"][data-an-arg="{0}"]'
     Back            = '[data-an-action="back"]'
+    # An account's "Show folders" link in Settings ({0} = the account's identity id); its folder
+    # rows, and their status line notes, are rendered only once it is open.
+    ShowFolders     = '[data-an-action="folders"][data-an-arg="{0}"]'
+    ShowFoldersText = 'Show folders'
 }
 # The panel's AnswerGate arms a button 0.35 s after it is on screen; clicking sooner does
 # nothing, so the script waits longer than that before a click (and for the page to say armed).
@@ -1243,11 +1247,25 @@ function ConvertFrom-SettingsBytes {
 function Read-Settings { param([Parameter(Mandatory)][string]$Path) ConvertFrom-SettingsBytes -Bytes ([IO.File]::ReadAllBytes($Path)) }
 
 # CRLF and a byte order mark are what Windows editors write; an edit must keep both.
+# The file kept the shape it had: a BOM if (and only if) $Original had one, CRLF line endings in a
+# CRLF file, LF in an LF file. Without $Original the file must be BOM and CRLF (.claude's shape).
 function Test-SettingsStyle {
-    param([Parameter(Mandatory)][byte[]]$Bytes)
-    if ($Bytes.Length -lt 3 -or $Bytes[0] -ne 0xEF -or $Bytes[1] -ne 0xBB -or $Bytes[2] -ne 0xBF) { 'the byte order mark is gone' }
-    $bare = [regex]::Matches([Text.Encoding]::UTF8.GetString($Bytes), "(?<!`r)`n").Count
-    if ($bare) { "$bare bare LF line ending(s): CRLF was not kept" }
+    param([Parameter(Mandatory)][byte[]]$Bytes, [byte[]]$Original = $null)
+    $hasBom = { param([byte[]]$b) $b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF }
+    $bareCount = { param([byte[]]$b) [regex]::Matches([Text.Encoding]::UTF8.GetString($b), "(?<!`r)`n").Count }
+    $crlfCount = { param([byte[]]$b) [regex]::Matches([Text.Encoding]::UTF8.GetString($b), "`r`n").Count }
+    $wantBom = if ($null -eq $Original) { $true } else { & $hasBom $Original }
+    $wantCrlf = if ($null -eq $Original) { $true } else { (& $crlfCount $Original) -gt (& $bareCount $Original) }
+    $bom = & $hasBom $Bytes
+    if ($wantBom -and -not $bom) { 'the byte order mark is gone' }
+    if ($bom -and -not $wantBom) { 'a byte order mark was added' }
+    if ($wantCrlf) {
+        $bare = & $bareCount $Bytes
+        if ($bare) { "$bare bare LF line ending(s): CRLF was not kept" }
+    } else {
+        $crlf = & $crlfCount $Bytes
+        if ($crlf) { "$crlf CRLF line ending(s) in a file written with LF" }
+    }
 }
 
 function ConvertTo-CompactJson { param($Value) ConvertTo-Json $Value -Depth 50 -Compress }
@@ -1568,9 +1586,9 @@ function Get-InstalledFolderProblems {
     $problems = [Collections.Generic.List[string]]::new()
     $add = { param($lines) foreach ($l in @($lines)) { if ($l) { $problems.Add("${Name}: $l") } } }
     $bytes = [IO.File]::ReadAllBytes($path)
-    & $add (Test-SettingsStyle -Bytes $bytes)
-    $now = ConvertFrom-SettingsBytes -Bytes $bytes
     $originalBytes = [IO.File]::ReadAllBytes((Join-Path $script:OriginalsDir "$Name.settings.json"))
+    & $add (Test-SettingsStyle -Bytes $bytes -Original $originalBytes)
+    $now = ConvertFrom-SettingsBytes -Bytes $bytes
     $before = ConvertFrom-SettingsBytes -Bytes $originalBytes
     $edited = if ($StatusLineWrapped) { @('hooks', 'statusLine') } else { @('hooks') }
     & $add (Test-OtherKeysUnchanged -Before $before -After $now -Edited $edited)
@@ -1639,7 +1657,8 @@ function Invoke-TurnOnPhase {
         $problems = [Collections.Generic.List[string]]::new()
         foreach ($line in (Get-InstalledFolderProblems -Name '.claude' -StatusLineWrapped $true -ExecFormAllowed $execAllowed)) { $problems.Add($line) }
         foreach ($line in (Get-InstalledFolderProblems -Name '.claude-work' -StatusLineWrapped $false -ExecFormAllowed $execAllowed)) { $problems.Add($line) }
-        # Settings says why the status line of .claude-work was left alone.
+        # Settings says why the status line of .claude-work was left alone (under its account's folders).
+        try { Show-SettingsFolders } catch { $problems.Add("Settings would not show the folders: $($_.Exception.Message)") }
         $note = ConvertTo-JsString $script:Ui.StatusLineAlone
         try { [void](Invoke-Cdp -Arguments @('wait', $script:Ui.SettingsPage, "document.body.innerText.includes($note)", '10000')) }
         catch { $problems.Add("Settings does not show '$($script:Ui.StatusLineAlone)'") }
@@ -1649,6 +1668,15 @@ function Invoke-TurnOnPhase {
     } finally {
         Save-LiveRunLog
     }
+}
+
+# Opens every account's folder list in Settings that is closed (a second click would close it).
+function Show-SettingsFolders {
+    $label = ConvertTo-JsString $script:Ui.ShowFoldersText
+    $expression = "Array.from(document.querySelectorAll('[data-an-action=`"folders`"]')).filter(b => b.textContent.trim() === $label).map(b => b.getAttribute('data-an-arg')).join('\n')"
+    $ids = @(([string](Invoke-Cdp -Arguments @('eval', $script:Ui.SettingsPage, $expression))) -split "`n" | Where-Object { $_ })
+    foreach ($id in $ids) { [void](Invoke-Cdp -Arguments @('click', $script:Ui.SettingsPage, ($script:Ui.ShowFolders -f $id))) }
+    Write-PhaseLog "Settings: opened the folders of $($ids.Count) account(s)"
 }
 
 # --- phase 8: every entry as written, then every answer ---------------------------------------------------------------
