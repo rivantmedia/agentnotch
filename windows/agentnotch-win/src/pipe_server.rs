@@ -10,7 +10,8 @@
 //! - One idle instance always listens. When a client connects, the next instance is created
 //!   before the connected one is served.
 //! - A connection sends one frame within 5 s. Only then is its user checked, by impersonating it
-//!   at identification level; a frame from anyone but this user is never delivered.
+//!   at identification level; a frame from anyone but this user, or from a process of this user
+//!   below Medium integrity, is never delivered.
 //! - A delivered connection stays open, with a read pending that ends when the hook goes away,
 //!   until the engine answers it (`respond`: one frame, then close) or closes it (`close`: no
 //!   frame, which a hook reads as "no decision").
@@ -30,7 +31,7 @@ pub mod squatter;
 use std::collections::BTreeMap;
 
 use agentnotch_engine::platform::{ConnId, TransportEvent};
-use agentnotch_proto::SYSTEM_SID;
+use agentnotch_proto::{MEDIUM_INTEGRITY_RID, SYSTEM_SID};
 
 /// What the hub shows when the pipe's name was made by someone else first: a second copy of the
 /// app, or a program squatting on the name.
@@ -92,6 +93,17 @@ pub fn peer_allowed(own_sid: &str, peer_sid: Option<&str>) -> bool {
         }
         None => false,
     }
+}
+
+/// Whether a frame from a client whose token is labelled `peer_rid` is delivered: only at Medium
+/// or above, and only when the label could be read (every token has one).
+///
+/// The pipe carries no label, which Windows reads as Medium and closes to writers below it, so a
+/// Low process can't open it today. This keeps that true if the pipe ever comes to be labelled
+/// lower: a sandboxed process of this user must never send the engine hook events or hold a
+/// permission request that the user then answers.
+pub fn peer_level_allowed(peer_rid: Option<u32>) -> bool {
+    peer_rid.is_some_and(|rid| rid >= MEDIUM_INTEGRITY_RID)
 }
 
 /// The body length a frame's header declares; `None` when it is above `max`, so nothing of an
@@ -242,8 +254,10 @@ mod server {
     use windows::Win32::System::Pipes::{GetNamedPipeClientProcessId, ImpersonateNamedPipeClient};
 
     use super::{
-        create_failure_message, declared_length, peer_allowed, ConnTable, Ended, StatusLog,
+        create_failure_message, declared_length, peer_allowed, peer_level_allowed, ConnTable,
+        Ended, StatusLog,
     };
+    use crate::integrity;
     use crate::sid::{self, SecurityDescriptor};
 
     const READ_DEADLINE: Duration = Duration::from_millis(SERVER_READ_DEADLINE_MS);
@@ -540,7 +554,10 @@ mod server {
         };
         let received_at = SystemTime::now();
         // The user can only be asked for now: impersonation needs data read from the pipe first.
-        if !peer_allowed(&context.own_sid, peer_sid(pipe).as_deref()) {
+        let Some((peer_sid, peer_rid)) = peer(pipe) else {
+            return Outcome::Closed;
+        };
+        if !peer_allowed(&context.own_sid, peer_sid.as_deref()) || !peer_level_allowed(peer_rid) {
             return Outcome::Closed;
         }
         let peer_pid = client_pid(pipe);
@@ -623,21 +640,25 @@ mod server {
         }
     }
 
-    /// The string SID of the user at the other end, read by impersonating it for the length of
-    /// this call; `None` when it can't be impersonated or its token can't be read.
+    /// The string SID of the user at the other end and its token's integrity RID, read by
+    /// impersonating it for the length of this call; `None` when it can't be impersonated, and
+    /// either part `None` when the token doesn't give it.
     ///
     /// Synchronous on purpose: the thread must never reach an await while it impersonates, or
     /// another connection's code would run as this client.
-    fn peer_sid(pipe: &NamedPipeServer) -> Option<String> {
+    fn peer(pipe: &NamedPipeServer) -> Option<(Option<String>, Option<u32>)> {
         // SAFETY: the handle is the pipe's own and stays open for the whole call.
         unsafe { ImpersonateNamedPipeClient(HANDLE(pipe.as_raw_handle())) }.ok()?;
-        let sid = sid::thread_token_sid();
+        let identity = Some((
+            sid::thread_token_sid(),
+            integrity::thread_token_integrity_rid(),
+        ));
         // SAFETY: no arguments; it ends the impersonation begun above.
         if unsafe { RevertToSelf() }.is_err() {
             // The thread would go on serving every hook as this client.
             std::process::abort();
         }
-        sid
+        identity
     }
 
     /// The client's process id, for the engine's diagnostics only: nothing is decided by it.
@@ -869,6 +890,19 @@ mod tests {
         // Not even when the app itself runs as SYSTEM, or its own SID is unknown.
         assert!(!peer_allowed(SYSTEM_SID, Some(SYSTEM_SID)));
         assert!(!peer_allowed("", Some("")));
+    }
+
+    #[test]
+    fn only_a_client_at_medium_integrity_or_above_is_a_hook() {
+        // Medium, Medium-plus (UI Access), High (an elevated terminal), System.
+        for rid in [MEDIUM_INTEGRITY_RID, 0x2100, 0x3000, 0x4000] {
+            assert!(peer_level_allowed(Some(rid)), "{rid:#x}");
+        }
+        // Low (a sandboxed process of this user), Untrusted, and a label that could not be read.
+        for rid in [0x1000, 0x1fff, 0] {
+            assert!(!peer_level_allowed(Some(rid)), "{rid:#x}");
+        }
+        assert!(!peer_level_allowed(None));
     }
 
     #[test]

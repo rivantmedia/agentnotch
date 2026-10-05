@@ -45,7 +45,8 @@ pub use permission::{
 };
 pub use pid::{pid_guess, ProcLink};
 pub use pipe::{
-    dev_pipe_override, pipe_name, pipe_sddl, PipeAce, PipeSecurity, PIPE_NAME_PREFIX, SYSTEM_SID,
+    dev_pipe_override, pipe_name, pipe_sddl, PipeAce, PipeSecurity, MEDIUM_INTEGRITY_RID,
+    PIPE_NAME_PREFIX, SYSTEM_SID,
 };
 pub use typing::{TypePhase, TypeRequest, TYPE_ABORT, TYPE_SUBMIT};
 

@@ -5,9 +5,10 @@
 //! - The pipe is opened with `SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION`: the server may
 //!   find out who the client is, but can never act as it.
 //! - Before a byte is written the pipe's own security descriptor is read back through the
-//!   handle: it must be owned by this user and closed to everyone but this user and SYSTEM
-//!   (`PipeSecurity::is_ours`). Pipe names are global, so another local user can make the name
-//!   first; a request written to that pipe, or an answer read from it, would be theirs.
+//!   handle: it must be owned by this user, labelled Medium or above, and closed to everyone but
+//!   this user and SYSTEM (`PipeSecurity::is_ours`). Pipe names are global, so another local
+//!   user, or a sandboxed process of this user at Low integrity, can make the name first; a
+//!   request written to that pipe, or an answer read from it, would be theirs.
 //! - One request frame goes out and at most one response frame comes back, all of it within the
 //!   caller's timeout. A server that closes without a frame answered "nothing".
 //!
@@ -145,8 +146,10 @@ mod imp {
     };
     use windows::Win32::Security::{
         AclSizeInformation, GetAce, GetAclInformation, GetSecurityDescriptorControl,
-        ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, DACL_SECURITY_INFORMATION,
+        GetSidSubAuthority, GetSidSubAuthorityCount, IsValidSid, ACCESS_ALLOWED_ACE, ACE_HEADER,
+        ACL, ACL_SIZE_INFORMATION, DACL_SECURITY_INFORMATION, LABEL_SECURITY_INFORMATION,
         OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SE_DACL_PROTECTED,
+        SYSTEM_MANDATORY_LABEL_ACE,
     };
     use windows::Win32::Storage::FileSystem::{
         CreateFileW, ReadFile, WriteFile, FILE_FLAG_OVERLAPPED, FILE_SHARE_NONE, OPEN_EXISTING,
@@ -175,6 +178,8 @@ mod imp {
 
     /// `ACCESS_ALLOWED_ACE_TYPE`: the one kind of entry the app's pipe carries.
     const ACCESS_ALLOWED: u8 = 0;
+    /// `SYSTEM_MANDATORY_LABEL_ACE_TYPE`: an integrity label, in the SACL.
+    const MANDATORY_LABEL: u8 = 0x11;
     /// One write or read hands Windows at most this much, so a length always fits its `u32`.
     const CHUNK: usize = 1 << 30;
 
@@ -306,32 +311,34 @@ mod imp {
         }
     }
 
-    /// The pipe object's owner and DACL, read through the client's own handle, so it works
-    /// whatever the server's integrity level is.
+    /// The pipe object's owner, DACL and integrity label, read through the client's own handle,
+    /// so it works whatever the server's integrity level is.
     fn security(pipe: HANDLE) -> Option<PipeSecurity> {
         let mut owner = PSID::default();
         let mut dacl: *mut ACL = null_mut();
+        let mut sacl: *mut ACL = null_mut();
         let mut descriptor = PSECURITY_DESCRIPTOR::default();
-        // SAFETY: the handle is open (with READ_CONTROL, part of GENERIC_READ); the out pointers
-        // are valid; the group and SACL are not asked for.
+        // SAFETY: the handle is open (with READ_CONTROL, part of GENERIC_READ, which is all the
+        // label needs: no privilege); the out pointers are valid; the group is not asked for,
+        // and the SACL comes back with the label entry only.
         let status = unsafe {
             GetSecurityInfo(
                 pipe,
                 SE_KERNEL_OBJECT,
-                OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+                OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION,
                 Some(&mut owner),
                 None,
                 Some(&mut dacl),
-                None,
+                Some(&mut sacl),
                 Some(&mut descriptor),
             )
         };
         if status != ERROR_SUCCESS || descriptor.0.is_null() {
             return None;
         }
-        let security = read_descriptor(owner, dacl, descriptor);
-        // SAFETY: GetSecurityInfo allocated the descriptor with LocalAlloc; `owner` and `dacl`
-        // point into it and are not used after this.
+        let security = read_descriptor(owner, dacl, sacl, descriptor);
+        // SAFETY: GetSecurityInfo allocated the descriptor with LocalAlloc; `owner`, `dacl` and
+        // `sacl` point into it and are not used after this.
         unsafe { LocalFree(Some(HLOCAL(descriptor.0))) };
         security
     }
@@ -339,6 +346,7 @@ mod imp {
     fn read_descriptor(
         owner: PSID,
         dacl: *const ACL,
+        sacl: *const ACL,
         descriptor: PSECURITY_DESCRIPTOR,
     ) -> Option<PipeSecurity> {
         let mut control = 0u16;
@@ -350,20 +358,27 @@ mod imp {
         } else {
             Some(read_aces(dacl)?)
         };
+        let integrity_rid = if sacl.is_null() {
+            None
+        } else {
+            label_rid(sacl)?
+        };
         Some(PipeSecurity {
             owner: sid_to_string(owner),
             dacl_protected: control & SE_DACL_PROTECTED.0 != 0,
             dacl: aces,
+            integrity_rid,
         })
     }
 
-    fn read_aces(dacl: *const ACL) -> Option<Vec<PipeAce>> {
+    /// The entries of `acl`, in order; `None` when the ACL or one of them can't be read.
+    fn aces_of(acl: *const ACL) -> Option<Vec<*mut c_void>> {
         let mut info = ACL_SIZE_INFORMATION::default();
-        // SAFETY: `dacl` is the valid ACL of the descriptor; `info` is a valid out buffer of the
+        // SAFETY: `acl` is a valid ACL of the descriptor; `info` is a valid out buffer of the
         // size passed.
         unsafe {
             GetAclInformation(
-                dacl,
+                acl,
                 addr_of_mut!(info).cast::<c_void>(),
                 size_of::<ACL_SIZE_INFORMATION>() as u32,
                 AclSizeInformation,
@@ -374,30 +389,74 @@ mod imp {
         for index in 0..info.AceCount {
             let mut ace: *mut c_void = null_mut();
             // SAFETY: `index` is below the ACL's entry count; `ace` is a valid out pointer.
-            unsafe { GetAce(dacl, index, &mut ace) }.ok()?;
+            unsafe { GetAce(acl, index, &mut ace) }.ok()?;
             if ace.is_null() {
                 return None;
             }
-            // SAFETY: every ACE starts with a header, and GetAce returned one inside the ACL.
-            let kind = unsafe { (*ace.cast::<ACE_HEADER>()).AceType };
-            if kind == ACCESS_ALLOWED {
-                // SAFETY: an access-allowed ACE is a header, a mask and then the SID, which
-                // starts where `SidStart` is.
-                let sid = unsafe { addr_of_mut!((*ace.cast::<ACCESS_ALLOWED_ACE>()).SidStart) };
-                aces.push(PipeAce {
-                    allow: true,
-                    sid: sid_to_string(PSID(sid.cast::<c_void>())).unwrap_or_default(),
-                });
-            } else {
-                // Deny, audit, object and callback entries have other layouts, and none belongs
-                // on the app's pipe.
-                aces.push(PipeAce {
-                    allow: false,
-                    sid: String::new(),
-                });
-            }
+            aces.push(ace);
         }
         Some(aces)
+    }
+
+    fn read_aces(dacl: *const ACL) -> Option<Vec<PipeAce>> {
+        let aces = aces_of(dacl)?
+            .into_iter()
+            .map(|ace| {
+                // SAFETY: every ACE starts with a header, and `aces_of` returned one inside the
+                // ACL.
+                let kind = unsafe { (*ace.cast::<ACE_HEADER>()).AceType };
+                if kind == ACCESS_ALLOWED {
+                    // SAFETY: an access-allowed ACE is a header, a mask and then the SID, which
+                    // starts where `SidStart` is.
+                    let sid = unsafe { addr_of_mut!((*ace.cast::<ACCESS_ALLOWED_ACE>()).SidStart) };
+                    PipeAce {
+                        allow: true,
+                        sid: sid_to_string(PSID(sid.cast::<c_void>())).unwrap_or_default(),
+                    }
+                } else {
+                    // Deny, audit, object and callback entries have other layouts, and none
+                    // belongs on the app's pipe.
+                    PipeAce {
+                        allow: false,
+                        sid: String::new(),
+                    }
+                }
+            })
+            .collect();
+        Some(aces)
+    }
+
+    /// The RID of the lowest mandatory label in `sacl`: `Some(None)` when it holds none (the pipe
+    /// is then Medium), `None` when the ACL can't be read. A label whose SID is unreadable counts
+    /// as Untrusted (0), so it is refused rather than taken for Medium.
+    fn label_rid(sacl: *const ACL) -> Option<Option<u32>> {
+        let mut lowest: Option<u32> = None;
+        for ace in aces_of(sacl)? {
+            // SAFETY: every ACE starts with a header, and `aces_of` returned one inside the ACL.
+            if unsafe { (*ace.cast::<ACE_HEADER>()).AceType } != MANDATORY_LABEL {
+                continue;
+            }
+            // SAFETY: a label ACE is a header, a mask and then the label's SID, at `SidStart`.
+            let sid = unsafe { addr_of_mut!((*ace.cast::<SYSTEM_MANDATORY_LABEL_ACE>()).SidStart) };
+            let rid = sid_rid(PSID(sid.cast::<c_void>())).unwrap_or(0);
+            lowest = Some(lowest.map_or(rid, |low| low.min(rid)));
+        }
+        Some(lowest)
+    }
+
+    /// The last sub-authority of `sid` (for a label `S-1-16-<rid>`, the level).
+    fn sid_rid(sid: PSID) -> Option<u32> {
+        // SAFETY: `sid` points into a live ACL; IsValidSid only reads it.
+        if !unsafe { IsValidSid(sid) }.as_bool() {
+            return None;
+        }
+        // SAFETY: the SID is valid, so its count is readable.
+        let count = unsafe { *GetSidSubAuthorityCount(sid) };
+        if count == 0 {
+            return None;
+        }
+        // SAFETY: the index is below the SID's sub-authority count.
+        Some(unsafe { *GetSidSubAuthority(sid, u32::from(count) - 1) })
     }
 
     /// The string form of a SID that lives inside a descriptor this module holds.

@@ -2,8 +2,10 @@
 //! writes (test-only; the exe is never bundled).
 //!
 //! The squatter stands in for another local user who created the hook pipe's name before the
-//! app did, with a DACL that lets everyone in (DESIGN-WIN §7.3 `win_admin.rs`). The hook must
-//! connect, see that the pipe is not its user's, and leave without writing a byte; the record
+//! app did, with a DACL that lets everyone in (DESIGN-WIN §7.3 `win_admin.rs`), or, with
+//! `--descriptor app`, for a sandboxed process of the app's own user at Low integrity that gives
+//! the pipe exactly the app's owner and DACL (only its label, Low, differs). The hook must
+//! connect, see that the pipe is not its user's app's, and leave without writing a byte; the record
 //! proves it: one line per connection with the number of bytes received on it (`0` when the
 //! client wrote nothing), or `error <why>` when the squatter itself failed (it runs as another
 //! user, whose stderr the test can't see).
@@ -22,7 +24,18 @@ pub const DEFAULT_MAX_SECONDS: u64 = 300;
 pub const EVERYONE_SDDL: &str = "D:P(A;;GA;;;WD)";
 
 pub const USAGE: &str = "usage: pipe-squatter --pipe <\\\\.\\pipe\\name> --record <file> \
-                         --ready <file> [--max-seconds <n>]";
+                         --ready <file> [--max-seconds <n>] [--descriptor everyone|app]";
+
+/// The security descriptor the squatter gives its pipe.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Descriptor {
+    /// [`EVERYONE_SDDL`], owned by whoever runs the squatter: another user's pipe.
+    #[default]
+    Everyone,
+    /// `agentnotch_proto::pipe_sddl` of the user running the squatter: the app's own owner and
+    /// DACL, which only the pipe's integrity label can tell apart.
+    App,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Args {
@@ -34,12 +47,15 @@ pub struct Args {
     pub ready: PathBuf,
     /// The squatter exits 0 this long after it started.
     pub max_seconds: u64,
+    /// What the pipe's descriptor is.
+    pub descriptor: Descriptor,
 }
 
 /// Reads the arguments after the program's name. Every flag takes one value and may appear
 /// once; anything unknown is an error, as in `pipe-test-server`.
 pub fn parse_args(args: &[String]) -> Result<Args, String> {
     let (mut pipe, mut record, mut ready, mut max_seconds) = (None, None, None, None);
+    let mut descriptor = None;
     let mut rest = args.iter();
     while let Some(flag) = rest.next() {
         let slot_is_free = match flag.as_str() {
@@ -47,6 +63,7 @@ pub fn parse_args(args: &[String]) -> Result<Args, String> {
             "--record" => record.is_none(),
             "--ready" => ready.is_none(),
             "--max-seconds" => max_seconds.is_none(),
+            "--descriptor" => descriptor.is_none(),
             _ => return Err(format!("unknown argument: {flag}")),
         };
         if !slot_is_free {
@@ -65,6 +82,13 @@ pub fn parse_args(args: &[String]) -> Result<Args, String> {
             }
             "--record" => record = Some(path(flag, value)?),
             "--ready" => ready = Some(path(flag, value)?),
+            "--descriptor" => {
+                descriptor = Some(match value {
+                    "everyone" => Descriptor::Everyone,
+                    "app" => Descriptor::App,
+                    _ => return Err(format!("--descriptor must be everyone or app, not {value}")),
+                });
+            }
             _ => {
                 let seconds = value
                     .parse::<u64>()
@@ -82,6 +106,7 @@ pub fn parse_args(args: &[String]) -> Result<Args, String> {
         record: record.ok_or("--record is required")?,
         ready: ready.ok_or("--ready is required")?,
         max_seconds: max_seconds.unwrap_or(DEFAULT_MAX_SECONDS),
+        descriptor: descriptor.unwrap_or_default(),
     })
 }
 
@@ -164,7 +189,32 @@ mod tests {
                 record: PathBuf::from(r"C:\s\record.txt"),
                 ready: PathBuf::from(r"C:\s\ready.txt"),
                 max_seconds: 60,
+                descriptor: Descriptor::Everyone,
             }
+        );
+    }
+
+    #[test]
+    fn the_descriptor_is_everyones_unless_asked_for_the_apps() {
+        let base = ["--pipe", PIPE, "--record", "x", "--ready", "r"];
+        assert_eq!(
+            parse_args(&args(&base)).expect("valid").descriptor,
+            Descriptor::Everyone
+        );
+        for (value, expected) in [("everyone", Descriptor::Everyone), ("app", Descriptor::App)] {
+            let mut line = base.to_vec();
+            line.extend(["--descriptor", value]);
+            assert_eq!(parse_args(&args(&line)).expect(value).descriptor, expected);
+        }
+        let mut line = base.to_vec();
+        line.extend(["--descriptor", "App"]);
+        let error = parse_args(&args(&line)).expect_err("case matters");
+        assert!(error.contains("--descriptor must be"), "{error}");
+        let mut twice = base.to_vec();
+        twice.extend(["--descriptor", "app", "--descriptor", "app"]);
+        assert_eq!(
+            parse_args(&args(&twice)).expect_err("twice"),
+            "--descriptor was given twice"
         );
     }
 

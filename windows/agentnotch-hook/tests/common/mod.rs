@@ -53,8 +53,10 @@ use windows_sys::Win32::Security::Authorization::{
 };
 use windows_sys::Win32::Security::{
     AclSizeInformation, GetAce, GetAclInformation, GetSecurityDescriptorControl,
-    ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, ACL_SIZE_INFORMATION, DACL_SECURITY_INFORMATION,
+    GetSidSubAuthority, GetSidSubAuthorityCount, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL,
+    ACL_SIZE_INFORMATION, DACL_SECURITY_INFORMATION, LABEL_SECURITY_INFORMATION,
     OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES, SE_DACL_PROTECTED,
+    SYSTEM_MANDATORY_LABEL_ACE,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     GetShortPathNameW, ReadFile, FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX,
@@ -698,23 +700,24 @@ pub fn open_client(pipe: &str) -> File {
     }
 }
 
-/// The pipe object's owner and DACL as a client reads them through its own handle: what the
-/// hook checks before it writes a byte.
+/// The pipe object's owner, DACL and integrity label as a client reads them through its own
+/// handle: what the hook checks before it writes a byte.
 pub fn pipe_security(client: &File) -> PipeSecurity {
     let mut owner: PSID = null_mut();
     let mut dacl: *mut ACL = null_mut();
+    let mut sacl: *mut ACL = null_mut();
     let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();
-    // SAFETY: the handle is open with READ_CONTROL (part of GENERIC_READ); the out pointers are
-    // valid; the group and the SACL are not asked for.
+    // SAFETY: the handle is open with READ_CONTROL (part of GENERIC_READ), which is all the label
+    // needs; the out pointers are valid; the group is not asked for.
     let status = unsafe {
         GetSecurityInfo(
             client.as_raw_handle(),
             SE_KERNEL_OBJECT,
-            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION,
             &mut owner,
             null_mut(),
             &mut dacl,
-            null_mut(),
+            &mut sacl,
             &mut descriptor,
         )
     };
@@ -729,11 +732,56 @@ pub fn pipe_security(client: &File) -> PipeSecurity {
         owner: sid_to_string(owner),
         dacl_protected: control & SE_DACL_PROTECTED != 0,
         dacl: (!dacl.is_null()).then(|| read_aces(dacl)),
+        integrity_rid: if sacl.is_null() {
+            None
+        } else {
+            label_rid(sacl)
+        },
     };
-    // SAFETY: GetSecurityInfo allocated the descriptor with LocalAlloc; `owner` and `dacl` point
-    // into it and are not used after this.
+    // SAFETY: GetSecurityInfo allocated the descriptor with LocalAlloc; `owner`, `dacl` and `sacl`
+    // point into it and are not used after this.
     unsafe { LocalFree(descriptor) };
     security
+}
+
+/// The RID of the first mandatory label in `sacl` (Windows allows one), `None` without one.
+fn label_rid(sacl: *const ACL) -> Option<u32> {
+    let mut info = ACL_SIZE_INFORMATION {
+        AceCount: 0,
+        AclBytesInUse: 0,
+        AclBytesFree: 0,
+    };
+    // SAFETY: `sacl` is the valid ACL of the descriptor; `info` is a valid out buffer of the
+    // size passed.
+    let read = unsafe {
+        GetAclInformation(
+            sacl,
+            addr_of_mut!(info).cast::<c_void>(),
+            size_of::<ACL_SIZE_INFORMATION>() as u32,
+            AclSizeInformation,
+        )
+    };
+    assert_ne!(read, 0, "GetAclInformation (SACL)");
+    (0..info.AceCount).find_map(|index| {
+        let mut ace: *mut c_void = null_mut();
+        // SAFETY: `index` is below the ACL's entry count; `ace` is a valid out pointer.
+        let found = unsafe { GetAce(sacl, index, &mut ace) };
+        assert!(found != 0 && !ace.is_null(), "GetAce({index}) (SACL)");
+        // SAFETY: every ACE starts with a header, and GetAce returned one inside the ACL.
+        // SYSTEM_MANDATORY_LABEL_ACE_TYPE.
+        if unsafe { (*ace.cast::<ACE_HEADER>()).AceType } != 0x11 {
+            return None;
+        }
+        // SAFETY: a label ACE is a header, a mask and then the SID, at `SidStart`; Windows only
+        // stores valid SIDs in an ACL.
+        let sid = unsafe { addr_of_mut!((*ace.cast::<SYSTEM_MANDATORY_LABEL_ACE>()).SidStart) };
+        let sid = sid.cast::<c_void>();
+        // SAFETY: as above.
+        let count = unsafe { *GetSidSubAuthorityCount(sid) };
+        assert!(count > 0, "a label SID without a RID");
+        // SAFETY: the index is below the SID's sub-authority count.
+        Some(unsafe { *GetSidSubAuthority(sid, u32::from(count) - 1) })
+    })
 }
 
 fn read_aces(dacl: *const ACL) -> Vec<PipeAce> {

@@ -1,8 +1,10 @@
 //! Test-only: creates the hook pipe's name first, as another local user would, with an Everyone
-//! DACL, and records how many bytes each connection sent, so `win_admin.rs` can prove the hook
-//! refuses to write to it (DESIGN-WIN §7.3; WP1). Never shipped.
+//! DACL (or, with `--descriptor app`, the app's own owner and DACL, as a sandboxed process of the
+//! same user at Low integrity would), and records how many bytes each connection sent, so
+//! `win_admin.rs` can prove the hook refuses to write to it (DESIGN-WIN §7.3; WP1). Never shipped.
 //!
-//! `pipe-squatter --pipe <\\.\pipe\name> --record <file> --ready <file> [--max-seconds <n>]`
+//! `pipe-squatter --pipe <\\.\pipe\name> --record <file> --ready <file> [--max-seconds <n>]
+//! [--descriptor everyone|app]`
 //!
 //! Exit codes: 0 at the time limit, 1 it could not run, 2 a wrong command line, 3 the name was
 //! taken already. The command line and the record's lines are
@@ -60,10 +62,12 @@ mod win {
     use std::time::Duration;
 
     use agentnotch_proto::limits::PIPE_BUFFER_BYTES;
+    use agentnotch_proto::pipe_sddl;
     use agentnotch_win::pipe_server::squatter::{
-        connection_line, error_line, Args, EVERYONE_SDDL, EXIT_FAILED, EXIT_OK, EXIT_PIPE_IN_USE,
+        connection_line, error_line, Args, Descriptor, EVERYONE_SDDL, EXIT_FAILED, EXIT_OK,
+        EXIT_PIPE_IN_USE,
     };
-    use agentnotch_win::sid::SecurityDescriptor;
+    use agentnotch_win::sid::{self, SecurityDescriptor};
     use windows::core::HSTRING;
     use windows::Win32::Foundation::{
         CloseHandle, ERROR_ACCESS_DENIED, ERROR_NO_DATA, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED,
@@ -127,7 +131,14 @@ mod win {
     }
 
     fn serve(args: &Args, record: &mut Record) -> Result<(), (u8, String)> {
-        let descriptor = SecurityDescriptor::from_sddl(EVERYONE_SDDL)
+        let sddl = match args.descriptor {
+            Descriptor::Everyone => EVERYONE_SDDL.to_owned(),
+            Descriptor::App => pipe_sddl(
+                &sid::current_user_sid()
+                    .ok_or_else(|| (EXIT_FAILED, "this user's SID is unreadable".to_owned()))?,
+            ),
+        };
+        let descriptor = SecurityDescriptor::from_sddl(&sddl)
             .map_err(|why| (EXIT_FAILED, format!("the descriptor can't be built: {why}")))?;
         let mut current = create(&args.pipe, true, &descriptor).map_err(|error| {
             let code = match error.raw_os_error() {
