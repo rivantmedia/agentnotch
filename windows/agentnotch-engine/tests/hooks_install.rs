@@ -12,7 +12,7 @@
 use agentnotch_engine::core::settings_doc::Json;
 use agentnotch_engine::hooks::apply::{
     apply_install_with, apply_installs_with, previous_status_line_path, read_saved_status_line,
-    read_status, remove_codenotch_hooks, uninstall_everything, Setup, CONFIG_DIR_MISSING,
+    read_status, remove_codenotch_hooks, uninstall_everything, Setup, CONFIG_DIR_MISSING, IN_USE,
     KEPT_CHANGING, MAX_REPLANS, NOT_AN_INSTALL_TARGET, READ_ONLY, STORE_MARKER_NAME, VANISHED,
 };
 use agentnotch_engine::hooks::backups::{our_backups, ORIGINAL_BACKUP_NAME};
@@ -270,6 +270,8 @@ struct Faulty {
     settings_writes: AtomicUsize,
     private_writes_fail: bool,
     short: Option<(PathBuf, PathBuf)>,
+    /// Another program holds settings.json past the retries.
+    settings_busy: bool,
 }
 
 impl Faulty {
@@ -279,6 +281,7 @@ impl Faulty {
             settings_writes: AtomicUsize::new(0),
             private_writes_fail: false,
             short: None,
+            settings_busy: false,
         }
     }
 
@@ -337,6 +340,16 @@ impl SecureFiles for Faulty {
 
     fn is_private(&self, path: &Path) -> io::Result<bool> {
         StdSecureFiles.is_private(path)
+    }
+
+    fn read_file(&self, path: &Path) -> io::Result<Vec<u8>> {
+        if self.settings_busy && path.file_name().is_some_and(|name| name == "settings.json") {
+            return Err(io::Error::new(
+                io::ErrorKind::ResourceBusy,
+                "The process cannot access the file because it is being used by another process.",
+            ));
+        }
+        StdSecureFiles.read_file(path)
     }
 
     fn short_path(&self, path: &Path) -> Option<PathBuf> {
@@ -796,6 +809,29 @@ fn a_pass_writes_a_shared_settings_file_once() {
     assert_eq!(our_backups(&first).len(), 1);
 }
 
+/// A folder no command can name takes ours out of its file, so through a
+/// link it would strip what a folder that can be hooked just wrote there:
+/// it goes after that folder's install, and the file keeps its hooks.
+#[cfg(unix)]
+#[test]
+fn a_folder_no_command_can_name_never_strips_a_shared_file() {
+    let fx = fixture();
+    let first = fx.config_dir(".claude-first", Some(REALISTIC));
+    let unnamed = fx.config_dir("O'Brien", None);
+    std::os::unix::fs::symlink(settings(&first), settings(&unnamed)).unwrap();
+
+    let mut cannot = fx.plan(&unnamed, StatusLineIntent::Wrap);
+    cannot.form = CommandForm::NotPossible("Can't be hooked here".to_owned());
+    let plans = [cannot, fx.plan(&first, StatusLineIntent::Wrap)];
+    let outcomes = apply_installs_with(&plans, &StdSecureFiles, &fx.clock, &SETUP);
+    assert_eq!(outcomes[0].folder, folder(&unnamed));
+    assert_eq!(outcomes[0].result, Ok(InstallChange::Unchanged));
+    assert_eq!(outcomes[1].result, Ok(InstallChange::Written));
+    let written = json(&settings(&first));
+    assert!(commands(&written, "Stop").contains(&hook_command(&first)));
+    assert!(read_status(&first, &StdSecureFiles, &SETUP).hooks_installed);
+}
+
 /// The same rule without a link: one file named by two plans of a pass.
 #[test]
 fn a_removal_never_undoes_an_install_of_the_same_file() {
@@ -1185,7 +1221,10 @@ fn uninstalls_everything_from_the_record() {
 #[test]
 fn a_folder_no_command_can_name_is_left_untouched() {
     let fx = fixture();
-    let dir = fx.config_dir("my claude", Some(REALISTIC));
+    // Nothing of ours in it (`REALISTIC`'s stale entry is, and would come
+    // out: the next test).
+    let none_of_ours = realistic_none_of_ours();
+    let dir = fx.config_dir("my claude", Some(&none_of_ours));
     let before = snapshot_dir(&dir).unwrap();
     let reason = "Can't be hooked here: its path has characters a hook command can't carry";
 
@@ -1198,6 +1237,133 @@ fn a_folder_no_command_can_name_is_left_untouched() {
     assert_eq!(files.settings_writes(), 0);
     assert_eq!(snapshot_dir(&dir).unwrap(), before);
     assert!(!dir.join("hooks").exists());
+}
+
+/// A settings.json another program holds (past `WinFiles`' retries) is
+/// busy, not broken: the user is told to try again, not to fix the file,
+/// and nothing is written.
+#[test]
+fn a_settings_json_held_by_another_program_is_said_to_be_in_use() {
+    let fx = fixture();
+    let dir = fx.config_dir(".claude-test", Some(REALISTIC));
+    let before = snapshot_dir(&dir).unwrap();
+    let files = Faulty {
+        settings_busy: true,
+        ..Faulty::plain()
+    };
+
+    let outcome = fx.apply_with(&fx.plan(&dir, StatusLineIntent::Wrap), &files);
+    assert_eq!(outcome.result, Err(IN_USE.to_owned()));
+    assert_ne!(IN_USE, Refusal::Unreadable.message());
+    assert_eq!(
+        fx.apply_with(&fx.removal(&dir), &files).result,
+        Err(IN_USE.to_owned())
+    );
+    assert_eq!(
+        remove_codenotch_hooks(&settings(&dir), &files, &fx.clock),
+        Err(IN_USE.to_owned())
+    );
+    assert_eq!(files.settings_writes(), 0);
+    assert_eq!(snapshot_dir(&dir).unwrap(), before);
+
+    let status = read_status(&dir, &files, &SETUP);
+    assert!(status.settings_in_use && !status.settings_readable);
+    // A file that really doesn't parse is not "in use".
+    write_file(&settings(&dir), "{\"hooks\": ");
+    let status = read_status(&dir, &StdSecureFiles, &SETUP);
+    assert!(!status.settings_in_use && !status.settings_readable);
+}
+
+/// `REALISTIC` as text without our stale entry.
+fn realistic_none_of_ours() -> String {
+    let stale = ",\n    \"TeammateIdle\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"C:/old/path/hooks/agentnotch-hook.exe hook\"}]}]";
+    assert!(REALISTIC.contains(stale));
+    let text = REALISTIC.replace(stale, "");
+    assert!(parsed(&text).is_equivalent(&realistic_without_ours()));
+    text
+}
+
+/// Exec-form hooks were written while every Claude Code here could run
+/// them; then an older one showed up, and this folder's path has no string
+/// form (`(` or `'`, no 8.3 name). That copy would ignore `args` and hand
+/// the bare path to Git Bash: a syntax error, exit 2, which blocks every tool
+/// call, prompt and Stop. So ours come out, and only ours; the folder still
+/// reports why it can't be hooked.
+#[test]
+fn exec_form_hooks_come_out_when_the_folder_can_no_longer_be_named() {
+    let fx = fixture();
+    for name in ["Claude (work)", "O'Brien"] {
+        let dir = fx.config_dir(name, Some(REALISTIC));
+        let exe = hook_copy_path(&dir);
+        assert!(string_command(&exe.to_string_lossy(), Subcommand::Hook).is_none());
+
+        let mut plan = fx.plan(&dir, StatusLineIntent::Wrap);
+        plan.form = exec_form(&exe);
+        assert_eq!(fx.apply(&plan).result, Ok(InstallChange::Written));
+        let installed = fs::read(settings(&dir)).unwrap();
+        assert!(read_status(&dir, &StdSecureFiles, &SETUP).hooks_registered);
+
+        let reason = "Can't be hooked here: its path needs Claude Code 2.1.139 or later everywhere on this PC";
+        plan.form = CommandForm::NotPossible(reason.to_owned());
+        let files = Faulty::plain();
+        let outcome = fx.apply_with(&plan, &files);
+        assert_eq!(outcome.result, Err(reason.to_owned()), "{name}");
+        assert_eq!(outcome.entry, None);
+        assert_eq!(files.settings_writes(), 1);
+        // The backup holds what was there, ours included.
+        let backup = outcome.backup.expect("a backup of the file with ours");
+        assert_eq!(fs::read(&backup).unwrap(), installed);
+
+        // Nothing of ours left; everything else as the user had it.
+        let after = json(&settings(&dir));
+        assert!(after.is_equivalent(&realistic_without_ours()), "{name}");
+        assert_eq!(
+            commands(&after, "PreToolUse"),
+            vec![
+                "~/bin/guard-bash.sh".to_owned(),
+                UPSTREAM_COMMAND.to_owned()
+            ]
+        );
+        assert_eq!(
+            commands(&after, "PermissionRequest"),
+            vec![MENTION_COMMAND.to_owned()]
+        );
+        let status = read_status(&dir, &StdSecureFiles, &SETUP);
+        assert!(!status.hooks_registered && status.settings_readable);
+        // The copy stays for the record's removal to take.
+        assert!(exe.is_file());
+
+        // A second pass has nothing to do.
+        let before = snapshot_dir(&dir).unwrap();
+        let again = Faulty::plain();
+        let outcome = fx.apply_with(&plan, &again);
+        assert_eq!(outcome.result, Err(reason.to_owned()));
+        assert_eq!(outcome.backup, None);
+        assert_eq!(again.settings_writes(), 0);
+        assert_eq!(snapshot_dir(&dir).unwrap(), before);
+    }
+}
+
+/// Taking ours out of a folder no command can name is still a write to the
+/// user's file, under the same refusals as any other.
+#[test]
+fn withdrawing_hooks_refuses_a_file_it_cannot_read() {
+    let fx = fixture();
+    let reason = "Can't be hooked here: its path has characters a hook command can't carry";
+    for (name, text, refusal) in [
+        ("bad (json)", "{\"hooks\": ", Refusal::Unreadable),
+        ("bad (hooks)", "{\"hooks\": []}", Refusal::HooksNotAnObject),
+    ] {
+        let dir = fx.config_dir(name, Some(text));
+        let before = snapshot_dir(&dir).unwrap();
+        let mut plan = fx.plan(&dir, StatusLineIntent::Wrap);
+        plan.form = CommandForm::NotPossible(reason.to_owned());
+        let files = Faulty::plain();
+        let outcome = fx.apply_with(&plan, &files);
+        assert_eq!(outcome.result, Err(refusal.message().to_owned()), "{name}");
+        assert_eq!(files.settings_writes(), 0);
+        assert_eq!(snapshot_dir(&dir).unwrap(), before);
+    }
 }
 
 /// The same folder where the volume has 8.3 names: the short spelling is

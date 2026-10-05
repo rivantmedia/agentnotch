@@ -1,0 +1,78 @@
+{
+  "name": "first Windows release (no previous feed): windows=true, no continuity check, six files",
+  "previous": {
+    "version": "1.0.1"
+  },
+  "expect": {
+    "jobs": {
+      "plan": "success",
+      "release-tool": "success",
+      "keys": "success",
+      "mac": "success",
+      "windows": "success",
+      "sign-windows": "success",
+      "publish": "success"
+    },
+    "outputs": {
+      "plan": {
+        "version": "1.1.0",
+        "tag": "agentnotch-v1.1.0",
+        "previous_tag": "agentnotch-v1.0.1",
+        "previous_has_feed": "false",
+        "windows": "true"
+      },
+      "keys": {
+        "key_id": "B5A5638361FBD019"
+      }
+    },
+    "noAnnotations": [
+      "error",
+      "warning"
+    ],
+    "gh": {
+      "notCalled": [
+        "release download"
+      ],
+      "order": [
+        "release create agentnotch-v1.1.0",
+        "release view agentnotch-v1.1.0 --json assets",
+        "release edit agentnotch-v1.1.0 --draft=false --latest"
+      ]
+    },
+    "release": {
+      "tag": "agentnotch-v1.1.0",
+      "isDraft": false,
+      "isLatest": true,
+      "assets": [
+        "AgentNotch-1.1.0.dmg",
+        "AgentNotch-1.1.0.zip",
+        "appcast.xml",
+        "AgentNotch-1.1.0-Setup.exe",
+        "AgentNotch-1.1.0-Setup.exe.sig",
+        "latest.json"
+      ],
+      "name": "Agent Notch 1.1.0",
+      "targetCommitish": "c0ffeec0ffeec0ffeec0ffeec0ffeec0ffeeabcd",
+      "generateNotes": true,
+      "notesStartTag": "agentnotch-v1.0.1",
+      "notesContain": [
+        "## Install",
+        "## Windows (preview)",
+        "AgentNotch-1.1.0-Setup.exe",
+        "isn't code-signed yet",
+        "## Updates (Windows)"
+      ]
+    },
+    "artifacts": {
+      "windows-release": [
+        "AgentNotch-1.1.0-Setup.exe",
+        "AgentNotch-1.1.0-Setup.exe.sig",
+        "latest.json",
+        "windows-release-info.env"
+      ],
+      "AgentNotch-1.1.0-dry-run": null
+    },
+    "curl": 2,
+    "website": true
+  }
+}

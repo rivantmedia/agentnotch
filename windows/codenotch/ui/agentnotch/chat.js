@@ -481,7 +481,8 @@
     sent: 'Sent to Claude',
     showTerminalTip: 'Bring the session’s terminal to the front (Ctrl+J)',
   };
-  var LIMITS_BAR = { request: 4000, reason: 300, question: 1000, option: 300, header: 60, plan: 40000, always: 400, failure: 600 };
+  // The request and the plan are drawn whole up to C.SHOWN_WHOLE (see cutNote), never cut silently.
+  var LIMITS_BAR = { reason: 300, question: 1000, option: 300, header: 60, always: 400, failure: 600 };
 
   function panelCall(name) {
     var args = Array.prototype.slice.call(arguments, 1);
@@ -614,32 +615,46 @@
       '<div class="an-bbar-line"><span class="an-bbar-msg" data-an-text>' + C.esc(message) + '</span>' + jumpButton(row, !!title) + '</div>');
   }
 
+  /**
+   * What a request or plan longer than the chat draws left out, said outside its scrolling box so
+   * it shows without scrolling. An answer approves the whole text, so such a bar offers no
+   * approval at all (C.primaryActions' `cut`): the terminal shows it all.
+   */
+  function cutNote(left) {
+    return '<div class="an-bbar-note an-bbar-cut" data-key="cut" role="status" data-an-text>' +
+      C.esc('… ' + plural(left, 'more character', 'more characters') + ' not shown. Open the terminal to read it all.') + '</div>';
+  }
+
   // -- a permission ---------------------------------------------------------------------------
 
   function approvalBar(row, p, armed) {
     var results = window.agentnotchToolResults;
     var tool = toolNameOf(p.tool_name);
-    var request = clip(str(p.request), LIMITS_BAR.request);
-    var always = p.always != null && str(p.always) ? sentence(p.always, LIMITS_BAR.always) : '';
+    var left = C.cutOff(p.request, C.SHOWN_WHOLE.request);
+    var request = clip(str(p.request), C.SHOWN_WHOLE.request);
+    // No Always caption on a cut request: nothing here could save the rule.
+    var always = !left && p.always != null && str(p.always) ? sentence(p.always, LIMITS_BAR.always) : '';
     var diff = Array.isArray(p.diff) && p.diff.length && results && typeof results.diffView === 'function' ? results.diffView(p.diff, null) : '';
     var sid = row.session_id;
     var id = p.tool_use_id;
     return bar('perm', 'bar-perm-' + id, armed,
       barTitle((tool || 'A tool') + ' needs your permission') +
       (request.trim() ? '<div class="an-bbar-box an-bbar-req" data-key="req" tabindex="0" aria-label="The request"><div class="an-bbar-req-t">' + C.esc(request) + '</div></div>' : '') +
+      (left ? cutNote(left) : '') +
       (diff ? '<div class="an-bbar-diff" data-key="diff">' + diff + '</div>' : '') +
       (always ? '<div class="an-bbar-note an-bbar-always" data-key="always" data-an-text>' + C.esc('Always allow: ' + always + '.') + '</div>' : '') +
       '<div class="an-bbar-acts' + (always ? ' an-bbar-acts-always' : '') + '" data-key="acts">' +
       answerButton('secondary', 'Deny', 'Deny (Ctrl+Backspace)', sid, id, 'deny', armed) +
       (always ? answerButton('secondary', 'Always allow', always + ' (Ctrl+Alt+Enter)', sid, id, 'always', armed) : '') +
-      answerButton('primary', 'Allow', 'Allow (Ctrl+Enter)', sid, id, 'allow', armed) +
+      (left ? jumpButton(row, true) : answerButton('primary', 'Allow', 'Allow (Ctrl+Enter)', sid, id, 'allow', armed)) +
       '</div>');
   }
 
   // -- a plan -----------------------------------------------------------------------------------
 
   function planBar(row, p, armed) {
-    var plan = clip(str(p.plan_markdown), LIMITS_BAR.plan);
+    var left = C.cutOff(p.plan_markdown, C.SHOWN_WHOLE.plan);
+    var plan = clip(str(p.plan_markdown), C.SHOWN_WHOLE.plan);
     var md = window.agentnotchMarkdown;
     var body = plan.trim() ? (md ? md.render(plan, { cls: 'an-md-plan' }) : '<div class="an-md an-md-plan">' + C.esc(plan) + '</div>') : '';
     var sid = row.session_id;
@@ -647,9 +662,10 @@
     return bar('plan', 'bar-plan-' + id, armed,
       barTitle('Plan ready for approval') +
       (body ? '<div class="an-bbar-box an-bbar-plantext" data-key="plan" tabindex="0" aria-label="The plan">' + body + '</div>' : '') +
+      (left ? cutNote(left) : '') +
       '<div class="an-bbar-foot" data-key="foot"><span class="an-bbar-note an-bbar-foot-t" data-an-text data-an-clip>' + C.esc(COPY.planNote) + '</span>' +
       answerButton('secondary', 'Keep planning', 'Stay in plan mode and say what to change (Ctrl+Backspace)', sid, id, 'keep', armed) +
-      answerButton('primary', 'Approve plan', 'Approve the plan (Ctrl+Enter)', sid, id, 'approve', armed) +
+      (left ? jumpButton(row, true) : answerButton('primary', 'Approve plan', 'Approve the plan (Ctrl+Enter)', sid, id, 'approve', armed)) +
       '</div>');
   }
 

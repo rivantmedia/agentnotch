@@ -1,0 +1,9 @@
+{
+  "_about": "Fake Messages API turns for the interactive run of real-claude.ps1 (scenario 5): one plain answer, so the terminal UI renders and runs its status line.",
+  "apiKey": "fake-key-not-a-secret",
+  "turns": [
+    { "promptIncludes": "[hello]", "content": [{ "type": "text", "text": "Hello from the fake Messages API." }] }
+  ],
+  "afterToolResult": [{ "type": "text", "text": "Done." }],
+  "passiveText": "ok"
+}

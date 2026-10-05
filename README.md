@@ -70,6 +70,8 @@ runs on macOS 15 or later, on Apple silicon and Intel (one universal app).
    If a release is ever notarized, its release notes leave this step out.
 3. Go on with [First use](#first-use).
 
+On Windows (a preview), see [Windows (preview)](#windows-preview).
+
 From then on it [updates itself](#updates). A copy built from source, which every copy from
 before 1.0.0 is, never does: replace it by hand once, as [Updates](#updates) describes.
 
@@ -512,6 +514,160 @@ keeps its hooks and usage check. This app follows that layout:
 - To see what the app makes of your folders without running it:
   `swift run --package-path Packages/ClaudeControl agentnotch-inspect-accounts` (read-only).
 - **Logs:** `log stream --predicate 'subsystem == "com.rivantmedia.agentnotch"' --level debug`.
+
+## Windows (preview)
+
+Agent Notch also runs on Windows 10 and 11 (x64), as a **preview**: it is built and tested
+automatically (including against the real Claude Code, in one hermetic CI job), but it has
+not been used by people yet. Please report anything odd. It is upstream's Windows port
+(`windows/`, Rust and Tauri 2 on WebView2) with the same Claude Code session control as the
+Mac app, in Rust crates named `agentnotch-*`. It shows the same rings, sessions panel and
+cloud sync, and follows the same rules as everything above (consent before writes, nothing
+sent before you turn sync on, no login token). This section covers what differs.
+
+### Download (Windows)
+
+Download `AgentNotch-<version>-Setup.exe` from the
+[latest release](https://github.com/rivantmedia/agentnotch/releases/latest), or from the
+website's **Download** page.
+
+1. **Run the installer.** It installs for your user only, with no administrator, into
+   `%LOCALAPPDATA%\Agent Notch`, and fetches Microsoft's WebView2 if it is missing.
+2. **Let SmartScreen run it.** The installer isn't code-signed yet, so Windows SmartScreen
+   may say "Windows protected your PC": choose **More info**, then **Run anyway**.
+3. **Smart App Control.** With Smart App Control turned on (Windows 11), unsigned apps are
+   blocked with no way around it: Agent Notch can't be used there until it is code-signed
+   (see *Code signing* under [Releases (Windows)](#releases-windows)).
+4. Go on with [First use (Windows)](#first-use-windows).
+
+### Build from source (Windows)
+
+You need a Windows PC with Rust 1.98.1, Node 22, PowerShell 7 and a network connection (the
+bundler fetches NSIS once). From the repository root:
+
+```powershell
+npm ci --prefix windows/tools
+windows\scripts\agentnotch-build.ps1 -Out out
+```
+
+`agentnotch-build.ps1` builds the hook (`agentnotch-hook.exe`), the app and the installer, and
+leaves `AgentNotch-<version>-Setup.exe` in `out`. A copy built this way carries no update key
+and no feed: it [never updates itself](#updates-windows). The fork's crates also build and
+test on a Mac (`cd windows && cargo test --locked -p agentnotch-engine`); only the
+Windows-only code needs Windows, and CI type-checks it for `x86_64-pc-windows-msvc`.
+
+### First use (Windows)
+
+The first start asks for the same consent as the Mac app: **Turn on** writes the hook entries
+into each tracked account's `settings.json` (`%USERPROFILE%\.claude\settings.json`, and the
+other folders a session runs in), and **Not now** writes nothing. Before every change it saves
+a backup (`settings.json.agentnotch-<time>.bak`, the five newest, and the file as it was before
+the first change as `settings.json.agentnotch.original.bak`), keeps the file's line endings and
+byte order mark, and refuses a file that doesn't parse. The hook is a small program,
+`agentnotch-hook.exe`, copied into `<config folder>\hooks\`; it talks only to this app's local
+pipe (`\\.\pipe\agentnotch-hook-<your SID>`, no network port) and always exits 0, so a missing
+or stopped app never blocks Claude Code.
+
+### Privacy (Windows)
+
+The rules in [Privacy](#privacy-what-it-reads-writes-and-runs) hold, with the Windows paths:
+
+- **Its own state** lives in `%LOCALAPPDATA%\com.rivantmedia.agentnotch\Claude` (accounts, the
+  review queue, usage state, the website sign-in and cloud sync's files, as on the Mac) and,
+  for upstream's own settings and logs, `%APPDATA%\Agent Notch`.
+- **It never reads a Claude login token**: not `.credentials.json`, not the Credential
+  Manager, not `sessions\*.key`. Usage comes from Claude Code's own `get_usage`, the cache in
+  `.claude.json` and the status line.
+- **The GLM provider is upstream's, and reads one key.** Codenotch's GLM provider (a usage
+  ring for Z.ai's GLM plan) reads `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_API_KEY` from the `env`
+  of Claude Code's `settings.json`, and keeps it only when `ANTHROPIC_BASE_URL` points at a
+  Z.ai host. It reads the value before it checks the host, so an Anthropic API key you set
+  there is held in memory for that moment and dropped unused. That is an API key you
+  configured, not a Claude login token, and it goes nowhere else. It is kept as upstream
+  ships it, and `Scripts/verify-token-free.sh` pins it, so it can only ever be that one read.
+- **Updates** read the Windows feed (see [Updates (Windows)](#updates-windows)), about once
+  at start; nothing else is sent to GitHub.
+
+### Uninstalling (Windows)
+
+Settings › Apps removes the program. Your Claude Code hooks are **kept** unless you tick
+**Delete the application data** in the uninstaller or pass `/REMOVEHOOKS` to it: an
+uninstall that ran by itself (a reinstall, an update) must never touch a `settings.json`. A
+hook left behind exits at once while the app is gone, so it does no harm. To take the hooks
+out first, switch off Claude Code control (the hooks) in Settings (it restores each
+status line exactly), or run `"%LOCALAPPDATA%\Agent Notch\agentnotch.exe" uninstall-hooks`.
+Signed in to the website? **Sign out…** under *Cloud* first. **Delete the application data**
+also removes `%LOCALAPPDATA%\com.rivantmedia.agentnotch` and `%APPDATA%\Agent Notch`.
+
+### Updates (Windows)
+
+An installed copy checks for an update shortly after it starts; **Settings › General**
+installs one. It reads `latest.json` from the latest release
+(`https://github.com/rivantmedia/agentnotch/releases/latest/download/latest.json`). Every
+update is signed, and the app verifies the signature with the key built into it before the
+installer runs; the signature names the version, so a feed can't pair a newer number with an
+older installer. The key is derived from the Mac updates' key (see
+[Releases (Windows)](#releases-windows)). **Copies built from source never update
+themselves**: they carry no key and no feed, and the General pane says so.
+
+### Development (Windows)
+
+The same switches as above work, with these differences; the full table is Appendix C of
+`docs/design/DESIGN-WIN.md`.
+
+- `AGENTNOTCH_SAFE_MODE=1` seals the run (fixtures; no settings, sessions, network or
+  subprocesses), failing closed. `--no-install` / `AGENTNOTCH_NO_INSTALL`,
+  `AGENTNOTCH_NO_NOTIFICATIONS`, `AGENTNOTCH_USAGE_PROBE`, `--dump-state` and
+  `AGENTNOTCH_WEB_URL` behave as on the Mac.
+- Paths: `AGENTNOTCH_SUPPORT_DIR`, `AGENTNOTCH_SOCKET` (a pipe name, `\\.\pipe\…`; the hook
+  follows it only with `AGENTNOTCH_DEV=1`) and `AGENTNOTCH_EXTRA_CONFIG_DIRS` (separated by `;`).
+- `USERPROFILE` is the home the engine uses, as it is for Claude Code: point it at a temporary
+  folder to run against a throwaway setup.
+- `AGENTNOTCH_DEV_BROWSER_LOG` (with `AGENTNOTCH_DEV=1`, never sealed) appends the sign-in's
+  address to a file instead of opening a browser.
+- CI: `.github/workflows/agentnotch-windows.yml` builds the installer, runs the smoke test
+  (`windows/scripts/agentnotch-smoke.ps1`: install, sealed self-tests, the real hook program,
+  a fake website, updates, uninstall) and, in a job of its own, the pinned real Claude Code
+  against the installed app. `.github/workflows/claude-code-facts.yml` checks weekly what newer
+  Claude Code versions changed (it only reads their packages; it runs none of them).
+
+### Releases (Windows)
+
+Windows goes out in the same release as the Mac, from the same *Release* workflow: one tag,
+`agentnotch-v<VERSION>`, and everything or nothing is published.
+
+- **Six files.** `AgentNotch-<V>.dmg`, `AgentNotch-<V>.zip` and `appcast.xml` for the Mac, then
+  `AgentNotch-<V>-Setup.exe` (the download), `AgentNotch-<V>-Setup.exe.sig` (its update
+  signature) and `latest.json` (the Windows feed) for Windows. The website's `/download` page
+  offers the disk image and the installer, and never a signature, a feed or the Sparkle zip.
+- **Version.** `VERSION` and the `"version"` line of `windows/codenotch/tauri.conf.json` must
+  be equal. `Scripts/bump-version.sh <V>` sets both (the release commit is its output);
+  `Scripts/bump-version.sh --sync` copies `VERSION` into the Windows file, which is what a
+  branch needs after merging `main`.
+- **The update key.** There is no second secret: the Windows key is derived from the Mac
+  update key (`SPARKLE_ED_PRIVATE_KEY`) in a job of its own, with the `windows/agentnotch-release`
+  tool, which also signs the installer and writes `latest.json`. The Windows build job only ever
+  sees the public key. A release is refused when the derived key differs from the one the
+  previous release's `latest.json` names, unless a manual run ticks *Publish although the update
+  key changed*. After the first Windows release, commit the key the run summary prints as
+  `Scripts/tauri-update-public-key.txt` (an optional pin file): every later release then has to
+  derive that key. Rotating the Mac key also changes the Windows key, and an installed Windows
+  copy takes only an update signed with the key it was built with. Moving them over takes one
+  bridge release whose installer carries the new key but is signed with the old key's
+  derivative; the Release workflow can't make one yet (it signs with `SPARKLE_ED_PRIVATE_KEY`
+  only). So keep the old private key (as `SPARKLE_ED_PRIVATE_KEY_PREVIOUS`) and add that signing
+  path before rotating, or every installed Windows copy has to be reinstalled by hand.
+- **`skip_windows`.** A manual run can tick *Publish without the Windows build*: the last resort
+  that keeps a Mac release from waiting on Windows. Installed Windows copies then miss that
+  release until the next one, and the run warns when a previous release had Windows files.
+- **Code signing.** Windows releases are unsigned until the maintainer adds signing secrets.
+  Make an environment named `windows-signing` (deployment branches: `main` only) and put in it
+  either `WINDOWS_SIGN_PFX_BASE64` and `WINDOWS_SIGN_PFX_PASSWORD` (a code signing certificate
+  as a `.pfx`; optionally `WINDOWS_SIGN_TIMESTAMP_URL`) or all six `WINDOWS_SIGN_AZURE_*`
+  values (Azure Artifact Signing: endpoint, account, profile, tenant, client id and secret).
+  The next release then signs the app, the hook and the installer, and its notes drop the
+  SmartScreen steps. Half a set is an error. Without the environment, release builds come out
+  unsigned and the notes say so.
 
 ## Development
 

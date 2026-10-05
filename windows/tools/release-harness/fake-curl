@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# A stand-in for curl, for the release workflow harness (run.py). It serves only what the
+# publish job's feed check fetches, https://github.com/<GH_REPO>/releases/latest/download/<name>,
+# from the fake gh's state: the asset of the release marked latest, as GitHub's redirect does
+# once a release is published. Anything else (another address, a POST, headers) is refused, so
+# no step reaches the network through it. Every call is recorded first.
+#
+# Environment: FAKE_GH_STATE, FAKE_GH_FILES (see fake-gh), FAKE_CURL_LOG, GH_REPO.
+set -euo pipefail
+
+state="${FAKE_GH_STATE:?fake curl: no FAKE_GH_STATE}"
+files="${FAKE_GH_FILES:?fake curl: no FAKE_GH_FILES}"
+log="${FAKE_CURL_LOG:?fake curl: no FAKE_CURL_LOG}"
+
+printf '%s\0' "$@" | jq -Rsc 'split("\u0000")[:-1]' >> "$log"
+
+if [[ $# -ne 2 || "$1" != -fsSL ]]; then
+  echo "fake curl: not scripted: curl $*" >&2
+  exit 2
+fi
+url="$2"
+prefix="https://github.com/${GH_REPO:?fake curl: no GH_REPO}/releases/latest/download/"
+if [[ "$url" != "$prefix"* ]]; then
+  echo "fake curl: not scripted: $url" >&2
+  exit 6
+fi
+name="${url#"$prefix"}"
+tag="$(jq -r '[.releases[] | select(.isLatest == true and .isDraft == false)] | first | .tagName // empty' "$state")"
+if [[ -z "$tag" ]] || ! jq -e --arg t "$tag" --arg n "$name" \
+    '.releases[] | select(.tagName == $t) | .assets | any(.name == $n)' "$state" > /dev/null \
+    || [[ ! -f "$files/$tag/$name" ]]; then
+  echo "curl: (22) The requested URL returned error: 404" >&2
+  exit 22
+fi
+cat "$files/$tag/$name"

@@ -1,0 +1,23 @@
+{
+  "env": {
+    "SMOKE_FIXTURE": "agentnotch smoke test ✓"
+  },
+  "permissions": {
+    "allow": ["Bash(git status)"]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "echo foreign-hook" }
+        ]
+      }
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "echo smoke-status"
+  },
+  "theme": "dark"
+}

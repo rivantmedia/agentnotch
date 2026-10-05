@@ -67,6 +67,8 @@ describe("tRPC routers", () => {
       anon.projects.detail({ id: "x", period: "7d" }),
       anon.projects.visible({ id: "x" }),
       anon.usage.history({ accountKey: K1 }),
+      anon.usage.combined({ period: "7d" }),
+      anon.usage.timeline({ period: "7d", timeZone: "UTC" }),
       anon.pools.list(),
       anon.pools.create({ accountKey: K1 }),
       anon.pools.join({ code: "7K3M9QX2H4TB" }),
@@ -156,6 +158,27 @@ describe("tRPC routers", () => {
       "weekly_all",
       "weekly_opus",
     ]);
+
+    // Usage across accounts: both, or the ones named.
+    const combined = await api.usage.combined({ period: "all" });
+    expect(combined.accountKeys).toEqual([K1, K2].sort());
+    expect(combined.total.sessions).toBe(2);
+    expect(
+      (await api.usage.combined({ period: "all", accountKeys: [K2] }))
+        .accountKeys,
+    ).toEqual([K2]);
+    const timeline = await api.usage.timeline({
+      period: "30d",
+      accountKeys: [K1],
+      timeZone: "Europe/Berlin",
+    });
+    expect(timeline).toMatchObject({ timeZone: "Europe/Berlin", unit: "day" });
+    expect(timeline.buckets.reduce((n, b) => n + b.sessions, 0)).toBe(1);
+    expect(
+      (
+        await api.projects.usage({ period: "all", accountKeys: [K2] })
+      ).projects.map((p) => p.name),
+    ).toEqual(["billing-service"]);
   });
 
   it("turn access refusals into NOT_FOUND / FORBIDDEN / BAD_REQUEST", async () => {
@@ -279,6 +302,9 @@ describe("tRPC routers", () => {
         await api.accounts.get({ accountKey: K1 }),
         await api.pools.list(),
         await api.usage.history({ accountKey: K1 }),
+        await api.usage.combined({ period: "all" }),
+        await api.usage.timeline({ period: "all", timeZone: "UTC" }),
+        await api.projects.usage({ period: "all", accountKeys: [K1, K2] }),
       ];
       const text = superjson.stringify(outputs);
       for (const key of projectKeys) expect(text).not.toContain(key);
@@ -321,6 +347,29 @@ describe("tRPC routers", () => {
     expect(
       await trpcCode(api.projects.detail({ id: "\u0000", period: "7d" })),
     ).toBe("BAD_REQUEST");
+    // A selection names at least one account and at most a selection's worth, each a key, and
+    // usage by project takes one account or several, never both.
+    const many = Array.from({ length: 101 }, (_, i) =>
+      i.toString(16).padStart(64, "0"),
+    );
+    for (const accountKeys of [[], ["not-a-key"], many]) {
+      expect(
+        await trpcCode(api.usage.combined({ period: "7d", accountKeys })),
+      ).toBe("BAD_REQUEST");
+      expect(
+        await trpcCode(api.projects.usage({ period: "7d", accountKeys })),
+      ).toBe("BAD_REQUEST");
+    }
+    expect(
+      await trpcCode(
+        api.projects.usage({ period: "7d", accountKey: K1, accountKeys: [K1] }),
+      ),
+    ).toBe("BAD_REQUEST");
+    for (const timeZone of ["", "x".repeat(65), "Europe/\u0000"]) {
+      expect(
+        await trpcCode(api.usage.timeline({ period: "7d", timeZone })),
+      ).toBe("BAD_REQUEST");
+    }
   });
 
   it("run the pool flow and share sessions through it", async () => {
@@ -434,6 +483,22 @@ describe("tRPC routers", () => {
     const k1 = back.find((a) => a.key === K1)!;
     expect(typeof k1.last30Days.tokens.total).toBe("bigint");
     expect(k1.lastActivityAt).toBeInstanceOf(Date);
+
+    const combined = await caller(ann).usage.combined({ period: "all" });
+    const combinedBack = superjson.parse<typeof combined>(
+      superjson.stringify(combined),
+    );
+    expect(combinedBack).toEqual(combined);
+    expect(typeof combinedBack.total.tokens.total).toBe("bigint");
+    const timeline = await caller(ann).usage.timeline({
+      period: "7d",
+      timeZone: "UTC",
+    });
+    const timelineBack = superjson.parse<typeof timeline>(
+      superjson.stringify(timeline),
+    );
+    expect(timelineBack).toEqual(timeline);
+    expect(timelineBack.buckets[0]!.start).toBeInstanceOf(Date);
 
     const usage = await caller(ann).projects.usage({ period: "all" });
     const usageBack = superjson.parse<typeof usage>(superjson.stringify(usage));

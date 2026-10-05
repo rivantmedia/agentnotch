@@ -1,0 +1,29 @@
+{
+  "name": "a draft this workflow did not make: plan stops",
+  "previous": {
+    "version": "1.0.1"
+  },
+  "draft": "foreign",
+  "expect": {
+    "jobs": {
+      "plan": "failure",
+      "mac": "skipped",
+      "keys": "skipped",
+      "publish": "skipped"
+    },
+    "annotations": [
+      {
+        "level": "error",
+        "job": "plan",
+        "contains": "did not make"
+      }
+    ],
+    "gh": {
+      "notCalled": [
+        "release create",
+        "release delete"
+      ]
+    },
+    "website": false
+  }
+}

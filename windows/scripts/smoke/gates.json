@@ -1,0 +1,16 @@
+{
+  "engine": false,
+  "selftest": false,
+  "cloud": false,
+  "glue": false,
+  "realClaude": false,
+  "rustContract": false,
+  "_why": {
+    "engine": "WP7 (consent and hook install) + WP1/2/4/5/6 (the engine) + WP9 (the glue) + WP10 (the pages)",
+    "selftest": "WP9 + WP10 (milestone M1: the sealed self-test and the snapshots)",
+    "cloud": "WP8 (sign-in and sync) + WP7",
+    "glue": "WP9 (the command line: autostart, control, the deep link)",
+    "realClaude": "WP2 + WP7 + WP1 (the hermetic job with a real Claude Code)",
+    "rustContract": "WP8 (the Rust side of the app-website contract)"
+  }
+}

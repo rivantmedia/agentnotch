@@ -32,7 +32,8 @@
 #   claudeAiOauth  api/oauth/usage  oauth-2025-04-20  CredReadW  CredEnumerateW
 #   read_credentials(  probe_credentials(  run_renewal(  maybe_renew(
 #   start_login(  auth login  setup-token  sessions\*.key  usage::start(
-#   claude_auth::
+#   claude_auth::  doctor::run(  watcher::start(  usage::profile_dirs
+#   usage::request_refresh  usage::find_cli
 #  - The fork's own Windows code (windows/agentnotch-*, the glue and its pages,
 #    the NSIS hooks, the smoke and build scripts, windows/tools; not target,
 #    gen or node_modules): none of them, comments included, except
@@ -50,8 +51,10 @@
 #    providers read their own credentials with functions of the same names, in
 #    grok.rs, cursor.rs and antigravity.rs; those are not Claude's.)
 #    Upstream merges keep bringing new code, so three rules go by name rather
-#    than by pattern: code outside the dormant files (usage.rs, claude_auth.rs,
-#    doctor.rs, watcher.rs) reaches into usage.rs only for the names in
+#    than by pattern, over upstream's files and the fork's glue alike (the glue
+#    is where a new call to upstream's code would be written): code outside the
+#    dormant files (usage.rs, claude_auth.rs, doctor.rs, watcher.rs) reaches
+#    into usage.rs only for the names in
 #    USAGE_REVIEWED (its types and the saved snapshot: a poller start, a
 #    refresh or a new credential helper called from any file fails until
 #    someone reviews it); doctor::run() (it reads the credential) is called
@@ -92,6 +95,9 @@ PATTERNS=(
 # the XCTest that pins the keychain remap to leave Claude's item alone.
 ALLOWED_LINES=(
     'XCTAssertEqual(Fork.keychainService("Claude Code-credentials"), "Claude Code-credentials")'
+    # The Windows smoke script's assertion that the doctor's report never names a credential
+    # (DESIGN-WIN §7.5 phase 3). The one line of the script that may name them.
+    "foreach (\$secret in '.credentials.json', 'claudeAiOauth', 'accessToken') {"
 )
 # The Windows fork's code: the Mac's patterns plus these (DESIGN-WIN §6.7).
 WIN_PATTERNS=(
@@ -110,6 +116,13 @@ WIN_PATTERNS=(
     'sessions\*.key'
     'usage::start('
     'claude_auth::'
+    # Upstream's indirect routes to the credential: its doctor (probe_credentials), its
+    # transcript watcher and usage.rs's profile walk, refresh and CLI lookup.
+    'doctor::run('
+    'watcher::start('
+    'usage::profile_dirs'
+    'usage::request_refresh'
+    'usage::find_cli'
 )
 # sha256 of glm.rs's `fn claude_code_key` (its line through the closing `}` at
 # the start of a line), as reviewed at upstream 642d329.
@@ -158,6 +171,8 @@ done
 is_allowed_line() {
     local line="$1" allowed
     line="${line#"${line%%[![:space:]]*}"}"
+    # .ps1 files are checked out with CRLF (.gitattributes): the line end is not the line.
+    line="${line%$'\r'}"
     for allowed in "${ALLOWED_LINES[@]}"; do [[ "$line" == "$allowed" ]] && return 0; done
     return 1
 }
@@ -252,12 +267,13 @@ if [[ -d "$UP" ]]; then
                | grep -vE '^[0-9]+:[[:space:]]*//' || true)
     [[ -z "$code" ]] || fail "upstream's Claude poller is started or refreshed in $UP/main.rs: $code"
 
-    # Everything else upstream's code uses of usage.rs, by name (comment lines
-    # aside): `usage::X`, `usage::{X, Y}` and `usage::*` in any file but the
-    # dormant ones, each kept unreachable by its own rule here: claude_auth.rs
-    # (start_login, claude_auth::), doctor.rs (below) and watcher.rs (upstream's
-    # transcript watcher, which walks usage.rs's credential-checked profile
-    # list: never started, and named by no other file).
+    # Everything else upstream's code or the fork's glue uses of usage.rs, by
+    # name (comment lines aside): `usage::X`, `usage::{X, Y}` and `usage::*` in
+    # any file but the dormant ones, each kept unreachable by its own rule
+    # here: claude_auth.rs (start_login, claude_auth::), doctor.rs (below) and
+    # watcher.rs (upstream's transcript watcher, which walks usage.rs's
+    # credential-checked profile list: never started, and named by no other
+    # file).
     usage_ref='(^|[^A-Za-z0-9_])usage::(\{[^}]*\}|\*|[A-Za-z_][A-Za-z0-9_]*)'
     while IFS= read -r hit; do
         [[ -n "$hit" ]] || continue
@@ -273,16 +289,18 @@ if [[ -d "$UP" ]]; then
                 [[ $reviewed -eq 1 ]] || fail "upstream code reaches usage::$name (its Claude token path) from outside usage.rs; review what it reads, then add it to USAGE_REVIEWED: $hit"
             done
         done < <(grep -oE "$usage_ref" <<< "$text" || true)
-    done < <(grep -rnE --exclude-dir=agentnotch "$usage_ref" "$UP" \
+    done < <(grep -rnE "$usage_ref" "$UP" \
                  | grep -vE "^$UP/(usage|claude_auth|doctor|watcher)\.rs:" \
                  | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
-    watcher=$(grep -rnE --exclude-dir=agentnotch '(^|[^A-Za-z0-9_])watcher::' "$UP" \
+    watcher=$(grep -rnE '(^|[^A-Za-z0-9_])watcher::' "$UP" \
                   | grep -vE "^$UP/(watcher|doctor)\.rs:" | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
     [[ -z "$watcher" ]] || fail "upstream's transcript watcher (it walks usage.rs's profile list) is reached from: $watcher"
 
     # Upstream's doctor reads the credential (usage::probe_credentials): called
-    # once, from main's "doctor" arm, which WCLI claims first.
-    doctor_calls=$(grep -rnE --exclude-dir=agentnotch '(^|[^A-Za-z0-9_])doctor::' "$UP" \
+    # once, from main's "doctor" arm, which WCLI claims first. The glue is
+    # searched too: its own doctor is cli.rs's, and a call to upstream's from
+    # there would be reachable.
+    doctor_calls=$(grep -rnE '(^|[^A-Za-z0-9_])doctor::' "$UP" \
                        | grep -vE "^$UP/doctor\.rs:" | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true)
     doctor_ok=0
     if [[ -n "$doctor_calls" && $(grep -c . <<< "$doctor_calls") -eq 1 && "$doctor_calls" == "$UP/main.rs:"*'doctor::run()'* ]]; then

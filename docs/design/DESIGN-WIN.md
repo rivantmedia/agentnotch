@@ -1674,7 +1674,17 @@ suites listed there into Rust tests under the owning package.
     string form;
   - neither possible → the folder is not hooked and shows "Can't be hooked here: its path needs
     Claude Code <EXEC_FORM_MIN> or later everywhere on this PC" (or "…has characters a hook
-    command can't carry" when exec form is not established at all);
+    command can't carry" when exec form is not established at all). Exec-form entries an
+    earlier pass wrote there are **taken out** (ours only; the status line, the hook copy and
+    everything else stay; refused like any write when settings.json is unreadable): a Claude
+    Code older than `EXEC_FORM_MIN` does not skip them but ignores `args` and runs `command`
+    through Git Bash, where an unquoted path with `(`, `)`, `'`, `"` or a backtick is a syntax
+    error that exits 2, which blocks every tool call, prompt and Stop. Such a plan runs after
+    the pass's other installs, so a settings.json it shares with a hookable folder (a link)
+    keeps that folder's entries;
+  - a settings.json another program holds without read sharing (a backup or sync tool) is read
+    again on the rename's retry schedule; one still held is reported as "in use by another
+    program" (`FolderHookStatus.settings_in_use`), never as invalid JSON;
   - PermissionRequest adds `"timeout":86400`; events per version exactly as HS§3.5;
   - status line (a string, always): the same unquoted / 8.3 rule with `statusline`; when neither
     works the status line is not taken over ("Live status line isn't available for this folder";
@@ -2625,7 +2635,9 @@ script's output.
 - Windows pattern set (added to the Mac set): `claudeAiOauth`, `api/oauth/usage`,
   `oauth-2025-04-20`, `CredReadW`, `CredEnumerateW`, `read_credentials(`, `probe_credentials(`,
   `run_renewal(`, `maybe_renew(`, `start_login(`, `auth login`, `setup-token`, `sessions\\*.key`,
-  `usage::start(`, `claude_auth::`, plus the Mac's `.credentials.json` and `sessions/*.key`.
+  `usage::start(`, `claude_auth::`, `doctor::run(`, `watcher::start(`, `usage::profile_dirs`,
+  `usage::request_refresh`, `usage::find_cli`, plus the Mac's `.credentials.json` and
+  `sessions/*.key`.
 - Fork-owned Windows dirs: none of the patterns anywhere (excluding `target`, `gen`,
   `node_modules`), except `ALLOWED_LINES` (e.g. the smoke script's assertion that the doctor
   output never contains `.credentials.json`, listed verbatim).
@@ -2640,6 +2652,12 @@ script's output.
   `usage::probe_credentials(` or anything in `claude_auth::`); `start_login` only in
   `claude_auth.rs`, and main.rs's WU1c-replaced line must be gone; seams WU1a–e, WD1, WCLI
   present; `usage::start(` absent from main.rs code lines.
+- By name, over upstream's files and the fork's glue (`src/agentnotch/`) alike, comment lines
+  aside: `usage::` only for the reviewed names (`USAGE_REVIEWED`: the snapshot types and
+  `load_persisted`), `doctor::` only in main's `"doctor"` arm (`doctor::run()`, which WCLI
+  claims first), `watcher::` only in `watcher.rs` and `doctor.rs`. The glue is where a new call
+  into the dormant path would be written, so it is not exempt
+  (`windows/tools/tests/verify-token-free.test.sh`).
 - GLM's read of `env.ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` (§4.16) is pinned: those two names
   appear in `windows/codenotch/src/` only in `glm.rs`, and the SHA-256 of `glm.rs`'s
   `claude_code_key` function (its text from `fn claude_code_key` to the next top-level `fn`)

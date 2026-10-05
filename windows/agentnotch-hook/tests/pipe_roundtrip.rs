@@ -30,7 +30,7 @@ use agentnotch_proto::limits::{
 };
 use agentnotch_proto::{
     build_hook_message, encode_hook_message, ControlOp, ControlResponse, ControlStatus,
-    PermissionResponse, SYSTEM_SID,
+    PermissionResponse, MEDIUM_INTEGRITY_RID, SYSTEM_SID,
 };
 use agentnotch_win::pipe_server::client::{self, ClientError};
 use agentnotch_win::pipe_server::PIPE_IN_USE;
@@ -917,6 +917,14 @@ fn the_pipe_is_this_users_and_closed_to_everyone_else() {
         let mut expected = vec![me.to_ascii_uppercase(), SYSTEM_SID.to_owned()];
         expected.sort();
         assert_eq!(allowed, expected);
+        // The test runs at Medium or High: the pipe it made is never labelled below Medium.
+        assert!(
+            security
+                .integrity_rid
+                .is_none_or(|rid| rid >= MEDIUM_INTEGRITY_RID),
+            "labelled {:?}",
+            security.integrity_rid
+        );
         assert!(security.is_ours(&me));
         assert!(!security.is_ours(SYSTEM_SID));
     }

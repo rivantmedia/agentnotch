@@ -1,0 +1,21 @@
+{
+  "name": "the seed is not the committed Mac key's: keys stops",
+  "macKey": "other",
+  "previous": {
+    "version": "1.0.1"
+  },
+  "expect": {
+    "jobs": {
+      "keys": "failure",
+      "publish": "skipped"
+    },
+    "annotations": [
+      {
+        "level": "error",
+        "job": "keys",
+        "contains": "The update seed is not the one Scripts/sparkle-public-ed-key.txt belongs to"
+      }
+    ],
+    "website": false
+  }
+}

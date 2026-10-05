@@ -34,6 +34,18 @@ export function formatCost(usd: number | null | undefined): string | null {
   return USD.format(usd);
 }
 
+const USD_COMPACT = new Intl.NumberFormat("en-US", {
+  style: "currency",
+  currency: "USD",
+  notation: "compact",
+  maximumFractionDigits: 2,
+});
+
+/** "$0", "$2.5", "$1.2K": a cost axis' ticks, where the axis' step carries the precision. */
+export function formatCostTick(usd: number): string {
+  return Number.isFinite(usd) ? USD_COMPACT.format(usd) : "–";
+}
+
 /**
  * "42%". Below 100 the value is rounded down, so a reading never looks closer to (or at) the
  * limit than it is; 99.6 reads "99%", not "100%".

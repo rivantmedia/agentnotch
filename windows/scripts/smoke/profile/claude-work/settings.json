@@ -1,0 +1,7 @@
+{
+  "statusLine": {
+    "type": "command",
+    "command": "node C:\\tools\\sl.js"
+  },
+  "model": "sonnet"
+}

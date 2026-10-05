@@ -5,6 +5,11 @@
 //! only it could have given it ([`pipe_sddl`]), and every client reads that
 //! descriptor back and checks it ([`PipeSecurity::is_ours`]) before it writes
 //! a byte: the Windows form of the Mac script's `st_uid` check on the socket.
+//!
+//! The owner and the DACL are not enough on their own: a process of the same user running at
+//! Low integrity (a sandboxed helper) can give the pipe exactly the app's owner and DACL, since
+//! its token's user is ours. Windows labels what it creates Low, though, and it cannot raise the
+//! label. So the client reads the pipe's mandatory label too and trusts nothing below Medium.
 
 /// Every pipe name the fork uses starts with this (case-insensitively, as
 /// Windows compares them).
@@ -15,6 +20,10 @@ pub const PIPE_NAME_PREFIX: &str = r"\\.\pipe\";
 pub fn pipe_name(user_sid: &str) -> String {
     format!(r"{PIPE_NAME_PREFIX}agentnotch-hook-{user_sid}")
 }
+
+/// `SECURITY_MANDATORY_MEDIUM_RID`: the level of a normal user's process, and what Windows
+/// takes an object without a mandatory label to be.
+pub const MEDIUM_INTEGRITY_RID: u32 = 0x2000;
 
 /// Local System, the one other account the pipe's DACL names.
 pub const SYSTEM_SID: &str = "S-1-5-18";
@@ -49,20 +58,31 @@ pub struct PipeSecurity {
     pub dacl_protected: bool,
     /// `None`: the pipe has no DACL at all (everyone may do anything).
     pub dacl: Option<Vec<PipeAce>>,
+    /// The RID of the pipe's mandatory label (`S-1-16-<rid>`), the lowest when there are
+    /// several; `None` when it carries none, which Windows reads as Medium. A label whose SID
+    /// can't be read counts as 0 (Untrusted).
+    pub integrity_rid: Option<u32>,
 }
 
 impl PipeSecurity {
     /// Whether the pipe is the app of `user_sid` and no one else's: owned by
-    /// that user, with a protected DACL holding only allow entries for the
-    /// user and SYSTEM.
+    /// that user, labelled Medium or above, with a protected DACL holding only
+    /// allow entries for the user and SYSTEM.
     ///
     /// Another local user who created the name first cannot make our SID the
-    /// owner of their pipe, and a pipe of ours that anyone else may open is
-    /// not the one the app made. Either way the client must not write: what
-    /// it sends are tool inputs, and what it would read back approves tools.
+    /// owner of their pipe, a process of ours at Low integrity cannot label
+    /// its pipe above Low, and a pipe of ours that anyone else may open is not
+    /// the one the app made. In every case the client must not write: what it
+    /// sends are tool inputs, and what it would read back approves tools that
+    /// run at the hook's level, not the squatter's.
     pub fn is_ours(&self, user_sid: &str) -> bool {
         let same = |sid: &str| sid.eq_ignore_ascii_case(user_sid);
         if user_sid.is_empty() || !self.owner.as_deref().is_some_and(same) {
+            return false;
+        }
+        // The app's own pipe carries no label, elevated or not (Windows labels only what a
+        // process below Medium creates).
+        if self.integrity_rid.unwrap_or(MEDIUM_INTEGRITY_RID) < MEDIUM_INTEGRITY_RID {
             return false;
         }
         let Some(dacl) = &self.dacl else {
@@ -169,6 +189,7 @@ mod tests {
             owner: Some(ME.into()),
             dacl_protected: true,
             dacl: Some(vec![allow(ME), allow(SYSTEM_SID)]),
+            integrity_rid: None,
         }
     }
 
@@ -200,6 +221,7 @@ mod tests {
             owner: Some(OTHER.into()),
             dacl_protected: false,
             dacl: Some(vec![allow("S-1-1-0")]),
+            integrity_rid: None,
         };
         assert!(!squatter.is_ours(ME));
         // They can copy our DACL, but never become us as the owner.
@@ -210,6 +232,27 @@ mod tests {
         let mut elevated_default = the_apps_pipe();
         elevated_default.owner = Some("S-1-5-32-544".into());
         assert!(!elevated_default.is_ours(ME));
+    }
+
+    #[test]
+    fn a_pipe_made_below_medium_integrity_is_refused() {
+        // A sandboxed process of the same user can copy our owner and DACL exactly, but what it
+        // creates is labelled Low, and Untrusted below that.
+        for rid in [0x1000, 0x0, 0x1fff] {
+            let mut low = the_apps_pipe();
+            low.integrity_rid = Some(rid);
+            assert!(!low.is_ours(ME), "{rid:#x}");
+        }
+    }
+
+    #[test]
+    fn a_pipe_labelled_medium_or_above_is_trusted() {
+        // No label is Medium; an explicit one at Medium, Medium-plus, High or System is fine.
+        for rid in [MEDIUM_INTEGRITY_RID, 0x2100, 0x3000, 0x4000] {
+            let mut labelled = the_apps_pipe();
+            labelled.integrity_rid = Some(rid);
+            assert!(labelled.is_ours(ME), "{rid:#x}");
+        }
     }
 
     #[test]

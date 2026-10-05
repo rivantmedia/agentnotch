@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use agentnotch_engine::core::settings_doc::Json;
 use agentnotch_engine::hooks::apply::{
     apply_installs_with, previous_status_line_path, read_saved_status_line, read_status, Setup,
-    MAX_REPLANS, VANISHED,
+    IN_USE, MAX_REPLANS, VANISHED,
 };
 use agentnotch_engine::hooks::backups::{our_backups, ORIGINAL_BACKUP_NAME};
 use agentnotch_engine::hooks::commands::{
@@ -430,6 +430,10 @@ impl SecureFiles for Hooked {
         self.inner.is_private(path)
     }
 
+    fn read_file(&self, path: &Path) -> io::Result<Vec<u8>> {
+        self.inner.read_file(path)
+    }
+
     fn short_path(&self, path: &Path) -> Option<PathBuf> {
         self.inner.short_path(path)
     }
@@ -465,6 +469,25 @@ fn hold_open(path: &Path, hold: Duration) -> Hold {
     };
     is_open.recv().unwrap();
     (thread, releasing)
+}
+
+/// As `hold_open`, but nobody else may even read the file while it is held (a backup or sync
+/// tool taking it exclusively).
+fn hold_exclusively(path: &Path, hold: Duration) -> JoinHandle<()> {
+    let (opened, is_open) = mpsc::channel();
+    let path = path.to_owned();
+    let thread = thread::spawn(move || {
+        let held = OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&path)
+            .unwrap();
+        opened.send(()).unwrap();
+        thread::sleep(hold);
+        drop(held);
+    });
+    is_open.recv().unwrap();
+    thread
 }
 
 /// As `hold_open`, but the holder saves: after `save_after` it writes `bytes` over the file in
@@ -734,6 +757,30 @@ fn watch_for_gaps(path: &Path) -> Watch<Gaps> {
 /// (the design accepts a hook that fails to start there), so a poll can land in it; what must
 /// never happen is a gap the length of a copy or a pass, which is what the limit tells apart.
 const LONGEST_GAP: Duration = Duration::from_millis(100);
+
+/// A settings.json someone holds without read sharing is busy, not broken: the read is tried
+/// again on the rename's schedule, so a holder that lets go soon costs nothing, and one that
+/// holds on past the retries is reported as in use (never as invalid JSON), with nothing
+/// written.
+#[test]
+fn a_settings_json_held_without_read_sharing_is_waited_for_then_said_to_be_in_use() {
+    let fx = fixture();
+    let original = original();
+    let dir = fx.config_dir(".claude", Some(&original));
+
+    let holder = hold_exclusively(&settings(&dir), Duration::from_secs(4));
+    assert_eq!(fx.install(&dir).result, Err(IN_USE.to_owned()));
+    let status = read_status(&dir, &fx.files, &SETUP);
+    assert!(status.settings_in_use && !status.settings_readable);
+    holder.join().unwrap();
+    assert_eq!(fs::read(settings(&dir)).unwrap(), original);
+    assert!(our_backups(&dir).is_empty());
+
+    let holder = hold_exclusively(&settings(&dir), Duration::from_millis(120));
+    assert_eq!(fx.install(&dir).result, Ok(InstallChange::Written));
+    holder.join().unwrap();
+    assert!(read_status(&dir, &fx.files, &SETUP).hooks_installed);
+}
 
 #[test]
 fn a_running_hook_copy_is_replaced() {

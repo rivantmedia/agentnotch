@@ -1,0 +1,34 @@
+{
+  "name": "previous latest.json signed with another key: keys stops the release",
+  "previous": {
+    "version": "1.0.1",
+    "feed": "other-key"
+  },
+  "expect": {
+    "jobs": {
+      "plan": "success",
+      "keys": "failure",
+      "mac": "success",
+      "windows": "skipped",
+      "sign-windows": "skipped",
+      "publish": "skipped"
+    },
+    "annotations": [
+      {
+        "level": "error",
+        "job": "keys",
+        "contains": "is not the one agentnotch-v1.0.1 was signed with (BBAE346681FA028D)"
+      }
+    ],
+    "gh": {
+      "notCalled": [
+        "release create",
+        "release edit"
+      ]
+    },
+    "noRelease": [
+      "agentnotch-v1.1.0"
+    ],
+    "website": false
+  }
+}

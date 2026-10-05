@@ -284,8 +284,10 @@ while IFS= read -r file; do
         winnames=$((winnames + 1))
     done <<< "$hits"
 done <<< "$fork_files"
+# windows/tools is the fork's own (the release harness's fixtures name upstream's files on
+# purpose, to prove the release refuses them); upstream has no such folder.
 added=$(git diff -U0 "$BASE" -- windows ':!windows/agentnotch-*' ':!windows/codenotch/src/agentnotch' \
-            ':!windows/codenotch/ui/agentnotch' ':!windows/Cargo.lock' | grep -E '^\+[^+]' || true)
+            ':!windows/codenotch/ui/agentnotch' ':!windows/tools' ':!windows/Cargo.lock' | grep -E '^\+[^+]' || true)
 while IFS= read -r line; do
     [[ -n "$line" ]] || continue
     text="${line#+}"
@@ -336,11 +338,14 @@ echo "CreateFileW calls checked for SECURITY_SQOS_PRESENT: $sqos"
 
 # g. Upstream's hook server and hook installer stay unreachable. The seams
 #    replace their call sites in main.rs; this catches a merge that calls them
-#    from anywhere else (comment lines aside).
+#    from anywhere else (comment lines aside), the fork's glue included: the
+#    fork's hook server and installer live in its own crates (agentnotch-win's
+#    pipe server, the engine's hooks), and a call to upstream's from the glue
+#    would be reachable.
 UPSRC=windows/codenotch/src
 if [[ -d "$UPSRC" ]]; then
     code_refs() {  # $1 = module name: `grep -n` hits naming it in other files
-        grep -rnE --exclude-dir=agentnotch "(^|[^A-Za-z0-9_])$1::" "$UPSRC" \
+        grep -rnE "(^|[^A-Za-z0-9_])$1::" "$UPSRC" \
             | grep -vE "^$UPSRC/$1\.rs:" | grep -vE '^[^:]+:[0-9]+:[[:space:]]*//' || true
     }
     hits=$(code_refs server)

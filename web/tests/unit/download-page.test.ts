@@ -163,6 +163,48 @@ describe("the download page", () => {
     expect(html).toMatch(/Settings &gt; General<\/strong> and choose/);
     expect(html).toContain("Check now");
   });
+
+  it("offers Windows as a preview, with the SmartScreen and Smart App Control caveats", async () => {
+    const exe: ReleaseAsset = {
+      name: "AgentNotch-1.1.0-Setup.exe",
+      url: "https://github.com/rivantmedia/agentnotch/releases/download/agentnotch-v1.1.0/AgentNotch-1.1.0-Setup.exe",
+      size: 9_000_000,
+    };
+    if (OK.kind !== "ok") throw new Error("OK is a release");
+    getLatestRelease.mockResolvedValue({
+      ...OK,
+      downloads: { mac: DMG, windows: exe, linux: null },
+    });
+    userAgent = WINDOWS_UA;
+    const html = await render();
+    const { Windows } = cards(html);
+    expect(Windows).toContain('href="/download/windows"');
+    expect(Windows).toContain("Preview: Windows 10 or 11 (x64)");
+    expect(Windows).toContain("btn btn-primary");
+    expect(html).toMatch(/Installing on Windows[\s\S]*?>Preview</);
+    expect(html).toContain("isn&#x27;t code-signed yet");
+    expect(html).toContain("Windows protected your PC");
+    expect(html).toMatch(/More info[\s\S]*Run anyway/);
+    expect(html).toContain("Smart App Control");
+    expect(html).toContain("can&#x27;t be used there until it is");
+    expect(html).toContain("Delete the application data");
+  });
+
+  it("leaves the Windows steps out while the latest release has no installer", async () => {
+    getLatestRelease.mockResolvedValue(OK);
+    let html = await render();
+    expect(html).not.toContain("Installing on Windows");
+    // The card still says what Windows will need.
+    expect(cards(html).Windows).toContain("Preview: Windows 10 or 11 (x64)");
+
+    getLatestRelease.mockResolvedValue({ kind: "none" });
+    expect(await render()).not.toContain("Installing on Windows");
+
+    // GitHub can't say what the latest release holds: the steps stay.
+    getLatestRelease.mockResolvedValue({ kind: "unavailable" });
+    html = await render();
+    expect(html).toContain("Installing on Windows");
+  });
 });
 
 describe("download links", () => {

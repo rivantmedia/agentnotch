@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import {
   accountKeyInput,
+  accountKeysInput,
   idInput,
   usagePeriodInput,
 } from "~/server/api/routers/inputs";
@@ -33,16 +34,23 @@ export const projectsRouter = createTRPCRouter({
 
   /**
    * Usage by project in a period: each person's folders of one name across every account the
-   * viewer sees (or on `accountKey` only), with their split by account, most tokens first. With
-   * `limit`, the projects past it are added up as `rest`.
+   * viewer sees (or on `accountKey` only, or on those of `accountKeys` they see), with their
+   * split by account, most tokens first. With `limit`, the projects past it are added up as
+   * `rest`.
    */
   usage: protectedProcedure
     .input(
-      z.object({
-        period: usagePeriodInput,
-        accountKey: accountKeyInput.optional(),
-        limit: z.number().int().min(1).max(100).optional(),
-      }),
+      z
+        .object({
+          period: usagePeriodInput,
+          accountKey: accountKeyInput.optional(),
+          accountKeys: accountKeysInput.optional(),
+          limit: z.number().int().min(1).max(100).optional(),
+        })
+        .refine((v) => !v.accountKey || !v.accountKeys, {
+          message: "Name one account or several, not both",
+          path: ["accountKeys"],
+        }),
     )
     .query(async ({ ctx, input }) =>
       projectUsage(ctx.db, await ctx.scope(), input),

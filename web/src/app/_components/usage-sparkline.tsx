@@ -1,10 +1,8 @@
 "use client";
 
 import {
-  useEffect,
   useId,
   useMemo,
-  useRef,
   useState,
   type KeyboardEvent,
   type PointerEvent,
@@ -31,30 +29,12 @@ import {
 } from "~/lib/usage-chart";
 
 import { formatDateTime, formatDay, useHydrated } from "./time";
+import { useWidth } from "./use-width";
 
 const PLOT_HEIGHT = 96;
 const AXIS_BAND = 20;
 const PAD_X = 6;
 const PAD_TOP = 16;
-
-/** Width of an element, tracked with a ResizeObserver (a fixed guess until it is measured). */
-function useWidth<T extends HTMLElement>(fallback: number) {
-  const ref = useRef<T>(null);
-  const [width, setWidth] = useState(fallback);
-  useEffect(() => {
-    const element = ref.current;
-    if (!element) return;
-    const update = () => {
-      const next = Math.round(element.getBoundingClientRect().width);
-      if (next > 0) setWidth(next);
-    };
-    update();
-    const observer = new ResizeObserver(update);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
-  return [ref, width] as const;
-}
 
 /**
  * Utilization of one usage window over a period, as a line on a fixed 0–100% scale. Readings

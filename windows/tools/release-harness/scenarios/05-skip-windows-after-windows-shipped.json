@@ -1,0 +1,56 @@
+{
+  "name": "skip_windows after a release with latest.json: a warning, the Mac alone",
+  "event": "workflow_dispatch",
+  "inputs": {
+    "skip_windows": true
+  },
+  "previous": {
+    "version": "1.0.1",
+    "feed": "test-key"
+  },
+  "expect": {
+    "jobs": {
+      "plan": "success",
+      "release-tool": "skipped",
+      "keys": "skipped",
+      "mac": "success",
+      "windows": "skipped",
+      "sign-windows": "skipped",
+      "publish": "success"
+    },
+    "outputs": {
+      "plan": {
+        "windows": "false",
+        "previous_has_feed": "true"
+      }
+    },
+    "annotations": [
+      {
+        "level": "warning",
+        "job": "plan",
+        "contains": "installed Windows copies find no update feed"
+      }
+    ],
+    "noAnnotations": [
+      "error"
+    ],
+    "release": {
+      "tag": "agentnotch-v1.1.0",
+      "isDraft": false,
+      "isLatest": true,
+      "assets": [
+        "AgentNotch-1.1.0.dmg",
+        "AgentNotch-1.1.0.zip",
+        "appcast.xml"
+      ],
+      "name": "Agent Notch 1.1.0",
+      "targetCommitish": "c0ffeec0ffeec0ffeec0ffeec0ffeec0ffeeabcd",
+      "generateNotes": true,
+      "notesLack": [
+        "Windows (preview)"
+      ]
+    },
+    "curl": 1,
+    "website": true
+  }
+}

@@ -1,0 +1,217 @@
+#!/usr/bin/env bash
+# shellcheck disable=SC2016 # the single-quoted $names are jq's variables
+# A stand-in for the GitHub CLI, for the release workflow harness (run.py). It answers only the
+# calls release.yml's shell steps make, from a scenario's state file, and refuses everything
+# else, so a step that starts calling something new fails the harness instead of reaching
+# GitHub. Every call is recorded first, refused ones too.
+#
+# Environment (run.py sets all of it):
+#   FAKE_GH_STATE  JSON state, changed in place by create/edit/delete:
+#                  {"releases": [{"tagName", "name", "isDraft", "isPrerelease", "isLatest",
+#                                 "assets": [{"name", "size", "state"}]}],
+#                   "contents": {"<path>@<ref>": "<file text>"},
+#                   "refs": [{"ref": "refs/tags/<tag>", "object": {"type", "sha"}}],
+#                   "tagObjects": {"<sha>": {"object": {"sha"}}},
+#                   "faults": {"failCalls": ["<start of the joined argv>"],
+#                              "uploadShort": "<asset>", "uploadExtra": "<asset>"}}
+#   FAKE_GH_FILES  folder of asset bytes: <tag>/<name> (read by download, written by create)
+#   FAKE_GH_LOG    one JSON array of argv per call
+#   GH_REPO, GH_TOKEN  as the workflow sets them; the repository must be GH_REPO's
+set -euo pipefail
+
+state="${FAKE_GH_STATE:?fake gh: no FAKE_GH_STATE}"
+files="${FAKE_GH_FILES:?fake gh: no FAKE_GH_FILES}"
+log="${FAKE_GH_LOG:?fake gh: no FAKE_GH_LOG}"
+
+printf '%s\0' "$@" | jq -Rsc 'split("\u0000")[:-1]' >> "$log"
+
+refuse() {
+  echo "fake gh: not scripted: gh $* " >&2
+  exit 64
+}
+
+[[ -n "${GH_TOKEN:-}" ]] || { echo "fake gh: GH_TOKEN is not set (gh would ask to log in)" >&2; exit 4; }
+[[ -n "${GH_REPO:-}" ]] || { echo "fake gh: GH_REPO is not set" >&2; exit 4; }
+
+joined="$*"
+while IFS= read -r prefix; do
+  if [[ -n "$prefix" && "$joined" == "$prefix"* ]]; then
+    echo "fake gh: HTTP 502: scripted failure for 'gh $prefix'" >&2
+    exit 1
+  fi
+done < <(jq -r '.faults.failCalls // [] | .[]' "$state")
+
+json_fields="" jq_filter="" pattern="" dir="" target="" title="" notes_file="" start_tag="" limit=30
+accept="" draft="" latest=false clobber=false yes=false generate=false
+exclude_drafts=false exclude_pre=false
+positional=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --json | --jq | -H | --pattern | --dir | --target | --title | --notes-file | --notes-start-tag | --limit)
+      [[ $# -ge 2 ]] || refuse "$joined"
+      case "$1" in
+        --json) json_fields="$2" ;;
+        --jq) jq_filter="$2" ;;
+        -H) accept="$2" ;;
+        --pattern) pattern="$2" ;;
+        --dir) dir="$2" ;;
+        --target) target="$2" ;;
+        --title) title="$2" ;;
+        --notes-file) notes_file="$2" ;;
+        --notes-start-tag) start_tag="$2" ;;
+        --limit) limit="$2" ;;
+      esac
+      shift 2 ;;
+    --draft) draft=true; shift ;;
+    --draft=false) draft=false; shift ;;
+    --latest) latest=true; shift ;;
+    --clobber) clobber=true; shift ;;
+    --yes) yes=true; shift ;;
+    --generate-notes) generate=true; shift ;;
+    --exclude-drafts) exclude_drafts=true; shift ;;
+    --exclude-pre-releases) exclude_pre=true; shift ;;
+    -*) refuse "$joined" ;;
+    *) positional+=("$1"); shift ;;
+  esac
+done
+[[ ${#positional[@]} -ge 1 ]] || refuse "$joined"
+
+# Prints a JSON value as gh does: through --jq (raw strings) when one was given.
+emit() {
+  if [[ -n "$jq_filter" ]]; then
+    jq -r "$jq_filter" <<< "$1"
+  else
+    printf '%s\n' "$1"
+  fi
+}
+
+save() {
+  local tmp="$state.tmp"
+  jq "$@" "$state" > "$tmp"
+  mv "$tmp" "$state"
+}
+
+release_json() {
+  jq -c --arg t "$1" '[.releases[] | select(.tagName == $t)] | first // empty' "$state"
+}
+
+fields_of() {
+  jq -c --arg f "$json_fields" '. as $r | reduce ($f | split(","))[] as $k ({}; . + {($k): $r[$k]})'
+}
+
+case "${positional[0]} ${positional[1]:-}" in
+  "release view")
+    [[ ${#positional[@]} -eq 3 && -n "$json_fields" ]] || refuse "$joined"
+    release="$(release_json "${positional[2]}")"
+    if [[ -z "$release" ]]; then echo "release not found" >&2; exit 1; fi
+    emit "$(fields_of <<< "$release")"
+    ;;
+
+  "release list")
+    [[ ${#positional[@]} -eq 2 && -n "$json_fields" ]] || refuse "$joined"
+    listed="$(jq -c --argjson d "$exclude_drafts" --argjson p "$exclude_pre" --argjson n "$limit" \
+      '[.releases[] | select(($d | not) or (.isDraft | not)) | select(($p | not) or (.isPrerelease | not))] | .[:$n]' "$state")"
+    emit "$(jq -c --arg f "$json_fields" 'map(. as $r | reduce ($f | split(","))[] as $k ({}; . + {($k): $r[$k]}))' <<< "$listed")"
+    ;;
+
+  "release download")
+    [[ ${#positional[@]} -eq 3 && -n "$pattern" && -n "$dir" ]] || refuse "$joined"
+    tag="${positional[2]}"
+    release="$(release_json "$tag")"
+    if [[ -z "$release" ]]; then echo "release not found" >&2; exit 1; fi
+    mkdir -p "$dir"
+    found=0
+    while IFS= read -r name; do
+      # shellcheck disable=SC2053 # the pattern is a glob, as gh's --pattern is
+      if [[ "$name" == $pattern ]]; then
+        if [[ ! -f "$files/$tag/$name" ]]; then echo "fake gh: no bytes for $tag/$name" >&2; exit 1; fi
+        if [[ -e "$dir/$name" && $clobber != true ]]; then echo "$dir/$name already exists" >&2; exit 1; fi
+        cp "$files/$tag/$name" "$dir/$name"
+        found=$((found + 1))
+      fi
+    done < <(jq -r '.assets[].name' <<< "$release")
+    if [[ $found -eq 0 ]]; then echo "no assets match the file pattern" >&2; exit 1; fi
+    ;;
+
+  "release delete")
+    [[ ${#positional[@]} -eq 3 && $yes == true ]] || refuse "$joined"
+    if [[ -z "$(release_json "${positional[2]}")" ]]; then echo "release not found" >&2; exit 1; fi
+    save --arg t "${positional[2]}" '.releases |= map(select(.tagName != $t))'
+    rm -rf "${files:?}/${positional[2]}"
+    ;;
+
+  "release create")
+    [[ ${#positional[@]} -ge 3 && -n "$title" && -n "$notes_file" ]] || refuse "$joined"
+    tag="${positional[2]}"
+    if [[ -n "$(release_json "$tag")" ]]; then
+      echo "a release with the same tag name already exists: $tag" >&2
+      exit 1
+    fi
+    [[ -f "$notes_file" ]] || { echo "open $notes_file: no such file or directory" >&2; exit 1; }
+    short="$(jq -r '.faults.uploadShort // ""' "$state")"
+    extra="$(jq -r '.faults.uploadExtra // ""' "$state")"
+    mkdir -p "$files/$tag"
+    assets="[]"
+    for file in "${positional[@]:3}"; do
+      [[ -f "$file" ]] || { echo "open $file: no such file or directory" >&2; exit 1; }
+      name="${file##*/}"
+      size="$(wc -c < "$file" | tr -d '[:space:]')"
+      [[ "$name" == "$short" ]] && size=$((size - 1))
+      cp "$file" "$files/$tag/$name"
+      assets="$(jq -c --arg n "$name" --argjson s "$size" '. + [{name: $n, size: $s, state: "uploaded"}]' <<< "$assets")"
+    done
+    if [[ -n "$extra" ]]; then
+      printf 'x' > "$files/$tag/$extra"
+      assets="$(jq -c --arg n "$extra" '. + [{name: $n, size: 1, state: "uploaded"}]' <<< "$assets")"
+    fi
+    save --arg t "$tag" --arg title "$title" --arg target "$target" --arg start "$start_tag" \
+      --argjson draft "${draft:-false}" --argjson generate "$generate" --argjson assets "$assets" \
+      --rawfile notes "$notes_file" \
+      '.releases += [{tagName: $t, name: $title, isDraft: $draft, isPrerelease: false, isLatest: false,
+                      targetCommitish: $target, notesStartTag: $start, generateNotes: $generate,
+                      notes: $notes, assets: $assets}]'
+    echo "https://github.com/$GH_REPO/releases/tag/$tag"
+    ;;
+
+  "release edit")
+    [[ ${#positional[@]} -eq 3 && -n "$draft" ]] || refuse "$joined"
+    tag="${positional[2]}"
+    if [[ -z "$(release_json "$tag")" ]]; then echo "release not found" >&2; exit 1; fi
+    save --arg t "$tag" --argjson draft "$draft" --argjson latest "$latest" \
+      '.releases |= map(if .tagName == $t then .isDraft = $draft | (if $latest then .isLatest = true else . end)
+                        elif $latest then .isLatest = false else . end)'
+    ;;
+
+  "api "*)
+    [[ ${#positional[@]} -eq 2 ]] || refuse "$joined"
+    path="${positional[1]}"
+    prefix="repos/$GH_REPO/"
+    [[ "$path" == "$prefix"* ]] || refuse "$joined"
+    rest="${path#"$prefix"}"
+    case "$rest" in
+      contents/*\?ref=*)
+        [[ "$accept" == "Accept: application/vnd.github.raw+json" && -z "$jq_filter" ]] || refuse "$joined"
+        file="${rest#contents/}"
+        key="${file%%\?ref=*}@${file#*\?ref=}"
+        if ! jq -e --arg k "$key" '.contents | has($k)' "$state" > /dev/null; then
+          echo "gh: Not Found (HTTP 404)" >&2
+          exit 1
+        fi
+        jq -j --arg k "$key" '.contents[$k]' "$state"
+        ;;
+      git/matching-refs/tags/*)
+        [[ -z "$accept" ]] || refuse "$joined"
+        emit "$(jq -c --arg r "refs/tags/${rest#git/matching-refs/tags/}" '[.refs // [] | .[] | select(.ref | startswith($r))]' "$state")"
+        ;;
+      git/tags/*)
+        [[ -z "$accept" ]] || refuse "$joined"
+        object="$(jq -c --arg s "${rest#git/tags/}" '.tagObjects[$s] // empty' "$state")"
+        if [[ -z "$object" ]]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
+        emit "$object"
+        ;;
+      *) refuse "$joined" ;;
+    esac
+    ;;
+
+  *) refuse "$joined" ;;
+esac

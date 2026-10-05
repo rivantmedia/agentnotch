@@ -1,0 +1,9 @@
+{
+  "session_id": "5d1e0a7b-3c21-4f7e-9a0b-1c2d3e4f5a6b",
+  "transcript_path": "C:\\smoke\\none.jsonl",
+  "cwd": "C:\\smoke\\work-app",
+  "permission_mode": "default",
+  "hook_event_name": "PermissionRequest",
+  "tool_name": "Bash",
+  "tool_input": { "command": "npm run test", "description": "Run the suite" }
+}

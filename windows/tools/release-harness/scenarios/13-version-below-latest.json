@@ -1,0 +1,21 @@
+{
+  "name": "VERSION below the latest release: plan stops",
+  "version": "1.0.0",
+  "previous": {
+    "version": "1.0.1"
+  },
+  "expect": {
+    "jobs": {
+      "plan": "failure",
+      "publish": "skipped"
+    },
+    "annotations": [
+      {
+        "level": "error",
+        "job": "plan",
+        "contains": "VERSION 1.0.0 is below the latest release, 1.0.1"
+      }
+    ],
+    "website": false
+  }
+}

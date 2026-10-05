@@ -25,6 +25,11 @@
 #     stops updating and has to be reinstalled by hand, and the Release
 #     workflow refuses to publish with a key other than the latest release's
 #     unless a manual run says so. Back up the private key; never lose it.
+#     The same key signs the Windows updates (the Windows key is derived from
+#     it), so a rotation strands every Windows copy too, unless one bridge
+#     release (carrying the new key, signed with the old key's derivative)
+#     goes out first. Release can't make one yet: keep the old key (as
+#     SPARKLE_ED_PRIVATE_KEY_PREVIOUS) and add that signing path before rotating.
 #
 # --signing-cert <dir> [--cert-name <name>]
 #     Optional, for releases without a Developer ID: a self-signed code signing
@@ -116,7 +121,7 @@ if [[ -n "$UPDATE_DIR" ]]; then
     [[ ! -e "$SEED" ]] || fail "$SEED exists already; it is never overwritten"
     OLD="$(committed_key)"
     if [[ -n "$OLD" && $ROTATE -eq 0 ]]; then
-        fail "$KEY_FILE holds a key already ($OLD). Replacing it strands every installed copy, however it is signed (release builds verify the update with the installed app's key before unpacking it); they would have to be reinstalled by hand. Pass --rotate if that is really meant."
+        fail "$KEY_FILE holds a key already ($OLD). Replacing it strands every installed copy, however it is signed (release builds verify the update with the installed app's key before unpacking it); they would have to be reinstalled by hand. The same key also signs the Windows updates (a key derived from it), so every installed Windows copy would be stranded too, unless a bridge release signed with the old key's derivative goes out first, which the Release workflow can't make yet. Pass --rotate if that is really meant."
     fi
 fi
 if [[ -n "$CERT_DIR" ]]; then
@@ -162,7 +167,7 @@ PY
     echo "  private  $SEED (keep a copy somewhere safe; never commit it)"
     echo "  public   $PUBLIC -> $KEY_FILE (commit this file)"
     if [[ -n "$OLD" ]]; then
-        echo "  ROTATED: every installed copy keeps the old key ($OLD) and will not take updates signed with the new one; each has to be reinstalled by hand."
+        echo "  ROTATED: every installed copy keeps the old key ($OLD) and will not take updates signed with the new one; each has to be reinstalled by hand. Windows copies verify their updates with a key derived from the old one: keep the OLD private key (as SPARKLE_ED_PRIVATE_KEY_PREVIOUS); only a bridge release signed with its derivative and carrying the new key reaches them, and the Release workflow can't make one yet. Without it every installed Windows copy is stranded as well."
     fi
     SECRETS+=("SPARKLE_ED_PRIVATE_KEY $SEED")
 fi

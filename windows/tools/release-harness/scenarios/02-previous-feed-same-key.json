@@ -1,0 +1,50 @@
+{
+  "name": "previous release has latest.json signed with the same key: continuity ok",
+  "previous": {
+    "version": "1.0.1",
+    "feed": "test-key"
+  },
+  "expect": {
+    "jobs": {
+      "plan": "success",
+      "release-tool": "success",
+      "keys": "success",
+      "mac": "success",
+      "windows": "success",
+      "sign-windows": "success",
+      "publish": "success"
+    },
+    "outputs": {
+      "plan": {
+        "previous_has_feed": "true",
+        "windows": "true"
+      }
+    },
+    "noAnnotations": [
+      "error",
+      "warning"
+    ],
+    "gh": {
+      "called": [
+        "release download agentnotch-v1.0.1 --pattern latest.json"
+      ]
+    },
+    "release": {
+      "tag": "agentnotch-v1.1.0",
+      "isDraft": false,
+      "isLatest": true,
+      "assets": [
+        "AgentNotch-1.1.0.dmg",
+        "AgentNotch-1.1.0.zip",
+        "appcast.xml",
+        "AgentNotch-1.1.0-Setup.exe",
+        "AgentNotch-1.1.0-Setup.exe.sig",
+        "latest.json"
+      ],
+      "name": "Agent Notch 1.1.0",
+      "targetCommitish": "c0ffeec0ffeec0ffeec0ffeec0ffeec0ffeeabcd",
+      "generateNotes": true
+    },
+    "website": true
+  }
+}

@@ -362,9 +362,25 @@
   C.MAX_INLINE_OPTIONS = 4;
 
   /**
+   * The longest request and plan the chat draws. The engine sends both whole and an answer
+   * approves all of it, so past this the chat says how much it left out and nothing offers
+   * Allow, Always or Approve: never an approval of text the user wasn't shown. Far above any
+   * real command or plan; the chat's box scrolls.
+   */
+  C.SHOWN_WHOLE = { request: 200000, plan: 200000 };
+
+  /** How many characters of `text` lie past `max` (0 when it all fits). */
+  C.cutOff = function (text, max) {
+    var s = typeof text === 'string' ? text : '';
+    return s.length > max ? s.length - max : 0;
+  };
+
+  /**
    * What the row or chat under the keyboard offers, as the router needs it.
    * actions: {kind:'none'|'permission'|'question_chips'|'answer_in_chat'|'plan'|'answer_in_terminal',
-   *           toolUseId, alwaysInline, hasAlways, needsReview, options}
+   *           toolUseId, alwaysInline, hasAlways, needsReview, cut, options}
+   * `cut`: the request or plan is longer than the chat draws (C.SHOWN_WHOLE), so it can only be
+   * denied or kept planning here; approving it is the terminal's.
    */
   C.primaryActions = function (row) {
     var p = row && row.pending;
@@ -384,13 +400,16 @@
       if (chips) return { kind: 'question_chips', toolUseId: p.tool_use_id, question: q };
       return { kind: 'answer_in_chat', toolUseId: p.tool_use_id };
     }
-    if (p.kind === 'plan') return { kind: 'plan', toolUseId: p.tool_use_id };
+    if (p.kind === 'plan') return { kind: 'plan', toolUseId: p.tool_use_id, cut: C.cutOff(p.plan_markdown, C.SHOWN_WHOLE.plan) > 0 };
+    var cut = C.cutOff(p.request, C.SHOWN_WHOLE.request) > 0;
     return {
       kind: 'permission',
       toolUseId: p.tool_use_id,
       hasAlways: p.always != null,
       alwaysInline: !!p.inline_always && p.always != null,
-      needsReview: !!p.needs_review,
+      // A request too long for the chat is too long for the row: the row sends it to the chat.
+      needsReview: !!p.needs_review || cut,
+      cut: cut,
     };
   };
 
@@ -411,8 +430,11 @@
     switch (a.kind) {
       case 'permission':
         if (a.needsReview && !inChat) return { cmd: 'openChat', sessionId: id };
+        // The chat could not show it all: no key approves what it left out.
+        if (a.cut) return null;
         return { cmd: 'allow', sessionId: id, toolUseId: a.toolUseId };
       case 'plan':
+        if (a.cut) return inChat ? null : { cmd: 'openChat', sessionId: id };
         return { cmd: 'approvePlan', sessionId: id, toolUseId: a.toolUseId };
       case 'question_chips':
       case 'answer_in_chat':
@@ -452,7 +474,7 @@
     if (key === 'return' && ctrl && alt && !shift) {
       // From the list only what the row offers: a narrow rule, for a request short enough to
       // be read there whole. In the chat, any suggestion.
-      if (!target || target.actions.kind !== 'permission' || !target.actions.hasAlways) return null;
+      if (!target || target.actions.kind !== 'permission' || !target.actions.hasAlways || target.actions.cut) return null;
       if (!inChat && !(target.actions.alwaysInline && !target.actions.needsReview)) return null;
       return { cmd: 'alwaysAllow', sessionId: target.sessionId, toolUseId: target.actions.toolUseId };
     }

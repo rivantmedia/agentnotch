@@ -1,0 +1,36 @@
+{
+  "name": "VERSION is out already: plan skips, nothing runs, the website still refreshes",
+  "previous": {
+    "version": "1.0.1"
+  },
+  "published": true,
+  "expect": {
+    "jobs": {
+      "plan": "success",
+      "release-tool": "skipped",
+      "keys": "skipped",
+      "mac": "skipped",
+      "windows": "skipped",
+      "sign-windows": "skipped",
+      "publish": "skipped"
+    },
+    "outputs": {
+      "plan": {
+        "skip": "true"
+      }
+    },
+    "annotations": [
+      {
+        "level": "notice",
+        "job": "plan",
+        "contains": "is released already"
+      }
+    ],
+    "gh": {
+      "notCalled": [
+        "release create"
+      ]
+    },
+    "website": true
+  }
+}

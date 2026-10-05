@@ -180,6 +180,46 @@ test('a plan offers Review plan (the chat) and Approve', async () => {
   assert.deepEqual(answers(page), []);
 });
 
+test('a request or plan longer than the chat draws is never approved from the panel, by a button, a key or a stray command', async () => {
+  const LIMIT = 200000;
+  const page = await ready((s) => {
+    // The engine flags long requests itself; this one is cut even without its flag.
+    Object.assign(session(s, 'needs-permission').pending, { request: 'echo ok' + ' '.repeat(LIMIT) + '; rm -rf ~', needs_review: false });
+    session(s, 'needs-plan').pending.plan_markdown = 'x'.repeat(LIMIT + 1);
+  });
+  assert.deepEqual(buttons(page, 'needs-permission'), ['Deny', 'Review…'], 'the row sends it to the chat');
+  assert.deepEqual(buttons(page, 'needs-plan'), ['Review plan'], 'no Approve');
+  select(page, 'needs-plan');
+  page.key(CTRL_ENTER);
+  assert.equal(state(page).route, 'session:needs-plan', 'Ctrl+Enter opens the plan instead of approving it');
+  assert.deepEqual(answers(page), []);
+  page.run("agentnotchPanel._.state.route = 'sessions'; agentnotchPanel._.render();");
+  select(page, 'needs-permission');
+  page.key(CTRL_ALT_ENTER);
+  assert.deepEqual(answers(page), []);
+  // Whatever asks (a button drawn before the request grew, a scripted command), the answer is
+  // refused at the last check before sending, in the list and in either chat; refusing is not.
+  const answerFor = (c, id, tool) => plain(page.run(`agentnotchPanel._.answerFor(${JSON.stringify({ cmd: c, sessionId: id, toolUseId: tool })})`));
+  for (const route of ['sessions', 'session:needs-permission', 'session:needs-plan']) {
+    page.run(`agentnotchPanel._.state.route = ${JSON.stringify(route)}; agentnotchPanel._.render();`);
+    assert.equal(answerFor('allow', 'needs-permission', 'toolu_sample_bash'), null, route);
+    assert.equal(answerFor('alwaysAllow', 'needs-permission', 'toolu_sample_bash'), null, route);
+    assert.equal(answerFor('approvePlan', 'needs-plan', 'toolu_sample_plan'), null, route);
+    assert.deepEqual(answerFor('deny', 'needs-permission', 'toolu_sample_bash'), { deny: { reason: null } }, route);
+    assert.equal(answerFor('keepPlanning', 'needs-plan', 'toolu_sample_plan'), 'keep_planning', route);
+  }
+  page.run("agentnotchPanel._.state.route = 'sessions'; agentnotchPanel._.render();");
+  page.tick(350);
+  const perform = (c, id, tool) => page.run(`agentnotchPanel._.perform(${JSON.stringify({ cmd: c, sessionId: id, toolUseId: tool })})`);
+  perform('allow', 'needs-permission', 'toolu_sample_bash');
+  perform('approvePlan', 'needs-plan', 'toolu_sample_plan');
+  assert.deepEqual(answers(page), [], 'no approval of text nobody was shown');
+  perform('deny', 'needs-permission', 'toolu_sample_bash');
+  perform('keepPlanning', 'needs-plan', 'toolu_sample_plan');
+  assert.deepEqual(answers(page).map((a) => a.answer), [{ deny: { reason: null } }, 'keep_planning'], 'refusing still works');
+  clean(page);
+});
+
 test('a dialog only the terminal can answer offers its terminal, once, and nothing to answer with', async () => {
   const page = await ready();
   assert.deepEqual(buttons(page, 'needs-elicitation'), ['Show terminal']);
