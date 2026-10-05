@@ -562,6 +562,31 @@ test('moving stops at the ends', () => {
   assert.equal(C.moveSelection('a', 1, undefined), null);
 });
 
+test('a request or plan longer than the chat draws (C.SHOWN_WHOLE) is cut, and no key approves it', () => {
+  assert.deepEqual(plain(C.SHOWN_WHOLE), { request: 200000, plan: 200000 });
+  assert.equal(C.cutOff('x'.repeat(200000), 200000), 0);
+  assert.equal(C.cutOff('x'.repeat(200003), 200000), 3);
+  assert.equal(C.cutOff(null, 10), 0);
+  const fits = C.primaryActions(permissionRow({ request: 'x'.repeat(200000), always: 'r', inline_always: true }));
+  assert.equal(fits.cut, false);
+  assert.equal(fits.needsReview, false);
+  const cut = C.primaryActions(permissionRow({ request: 'x'.repeat(200001), always: 'r', inline_always: true }));
+  assert.equal(cut.cut, true);
+  assert.equal(cut.needsReview, true, 'too long for the chat is too long for the row');
+  assert.deepEqual(cmd('return', CTRL, list(cut)), { cmd: 'openChat', sessionId: 's' });
+  assert.equal(cmd('return', CTRL, chat(cut, false)), null);
+  assert.equal(cmd('return', CTRL_ALT, chat(cut, false)), null);
+  assert.equal(cmd('return', CTRL_ALT, list(cut)), null);
+  assert.deepEqual(cmd('delete', CTRL, chat(cut, false)), { cmd: 'deny', sessionId: 's', toolUseId: 't' });
+  const planRow = (markdown) => ({ session_id: 's', bucket: 'needs_you', pending: { kind: 'plan', tool_use_id: 'p', plan_markdown: markdown } });
+  assert.equal(C.primaryActions(planRow('x'.repeat(200000))).cut, false);
+  const longPlan = C.primaryActions(planRow('x'.repeat(200001)));
+  assert.equal(longPlan.cut, true);
+  assert.deepEqual(cmd('return', CTRL, list(longPlan)), { cmd: 'openChat', sessionId: 's' });
+  assert.equal(cmd('return', CTRL, chat(longPlan, false)), null);
+  assert.deepEqual(cmd('delete', CTRL, chat(longPlan, false)), { cmd: 'keepPlanning', sessionId: 's', toolUseId: 'p' });
+});
+
 test('primaryActions reads the snapshot\'s rows the way the Mac reads its own', () => {
   const rows = harness.fixture('snapshot.json').sessions;
   const byId = (id) => rows.find((r) => r.session_id === id);

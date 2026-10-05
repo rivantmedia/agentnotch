@@ -772,8 +772,11 @@
         return '<div class="an-acts" data-key="acts">' + chatButton('primary', 'Answer…', 'Answer in the chat (Ctrl+Enter)', row, 'answer-chat') + '</div>';
       case 'plan':
         return '<div class="an-acts" data-key="acts">' +
-          chatButton('secondary', 'Review plan', 'Read the whole plan (Enter)', row, 'review-plan') +
-          answerButton('primary', 'Approve', 'Approve the plan and let Claude start (Ctrl+Enter)', row, a.toolUseId, 'approve') + '</div>';
+          (a.cut
+            // Longer than the chat shows: it can only be read, and approved, in the terminal.
+            ? chatButton('primary', 'Review plan', 'Read the plan (Ctrl+Enter)', row, 'review-plan')
+            : chatButton('secondary', 'Review plan', 'Read the whole plan (Enter)', row, 'review-plan') +
+              answerButton('primary', 'Approve', 'Approve the plan and let Claude start (Ctrl+Enter)', row, a.toolUseId, 'approve')) + '</div>';
       case 'answer_in_terminal':
         return '<div class="an-acts an-acts-term" data-key="acts"><span class="an-act-note" data-an-text>Answer in the terminal</span>' +
           (row.focus_label ? pill('secondary', true, cut(C.oneLine(row.focus_label), 40), ' data-key="jump" data-an-action="jump" data-an-arg="' + C.esc(row.session_id) +
@@ -829,14 +832,15 @@
     if (!a.toolUseId || a.toolUseId !== cmd.toolUseId) return null;
     var inChat = mode() === 'chat';
     switch (cmd.cmd) {
+      // Never an approval of a request or plan longer than the chat could show (`cut`).
       case 'allow':
-        return a.kind === 'permission' && (inChat || !a.needsReview) ? { allow: { always: false } } : null;
+        return a.kind === 'permission' && !a.cut && (inChat || !a.needsReview) ? { allow: { always: false } } : null;
       case 'alwaysAllow':
-        return a.kind === 'permission' && a.hasAlways && (inChat || (a.alwaysInline && !a.needsReview)) ? { allow: { always: true } } : null;
+        return a.kind === 'permission' && !a.cut && a.hasAlways && (inChat || (a.alwaysInline && !a.needsReview)) ? { allow: { always: true } } : null;
       case 'deny':
         return a.kind === 'permission' ? { deny: { reason: null } } : null;
       case 'approvePlan':
-        return a.kind === 'plan' ? 'approve_plan' : null;
+        return a.kind === 'plan' && !a.cut ? 'approve_plan' : null;
       case 'keepPlanning':
         return a.kind === 'plan' ? 'keep_planning' : null;
       case 'chooseOption': {
