@@ -2069,6 +2069,16 @@ function Get-SettingsSnapshot {
 
 # --- phase 10: sign-in and sync against the fake website ---------------------------------------------------------------
 
+# One line of what the app shows now (control status) and the account lines of its doctor, for the log.
+function Write-AccountsSeen {
+    param([Parameter(Mandatory)][string]$When)
+    try { Write-PhaseLog "$When, control status: $(@((Get-ControlStatus).GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ' ')" } catch { Write-PhaseLog "$When, control status: $($_.Exception.Message)" }
+    try {
+        $doctor = Invoke-Cli -Arguments @('doctor') -Environment (Get-AppEnvironment)
+        foreach ($line in @(($doctor.Text -split "`r?`n") | Where-Object { $_ -match '^(accounts|account|folder|store)\b' })) { Write-PhaseLog "$When, doctor: $line" }
+    } catch { Write-PhaseLog "$When, doctor: $($_.Exception.Message)" }
+}
+
 function Invoke-CloudPhase {
     $log = Join-Path $script:ArtifactsDir 'fake-website.jsonl'
     $syncDir = Join-Path $script:ArtifactsDir 'fake-website-sync'
@@ -2080,8 +2090,10 @@ function Invoke-CloudPhase {
     $claudeJsonBefore = [ordered]@{}
     try {
         # A fresh start of the app, pointed at the fake website: only this run, only 127.0.0.1.
+        Write-AccountsSeen -When 'before the restart'
         Stop-LiveAppGracefully
         Start-LiveApp -Extra @{ AGENTNOTCH_WEB_URL = $site.Url; AGENTNOTCH_DEV = '1'; AGENTNOTCH_DEV_BROWSER_LOG = $browserLog }
+        Write-AccountsSeen -When 'after the restart'
 
         # 1. Sign in: the URL the app would have opened.
         Invoke-SettingsClick -Selector $script:Ui.CloudSignIn
@@ -2121,7 +2133,9 @@ function Invoke-CloudPhase {
         # Claude Code "answers" now: it leaves its usage cache in .claude.json, which the app reads
         # every 20 s (run 37320814137 waited for a /sync that had nothing to carry).
         # Both accounts' Claude Code do (the default folder's login lives in P\.claude.json, the
-        # other's in its own folder), so each account has a reading: two are recorded.
+        # other's in its own folder), so each account the app shows has a reading.
+        $shownAccounts = [int](Get-ControlStatus)['accounts']
+        if ($shownAccounts -ne 2) { Write-Host "::warning::phase 10: the restarted app shows $shownAccounts account(s), not 2 (see the doctor lines in its log)" }
         $fetchedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         foreach ($file in (Join-Path $script:P '.claude.json'), (Join-Path $script:P '.claude-work\.claude.json')) {
             $bytes = [IO.File]::ReadAllBytes($file)
@@ -2131,14 +2145,15 @@ function Invoke-CloudPhase {
         }
         $syncCount = { Get-RequestCount -Requests (Get-FakeWebsiteRequests -LogFile $log) -Method 'POST' -Path '/api/app/v1/sync' }
         try {
-            Wait-Until { (& $syncCount) -ge 1 -or (Get-CloudPendingUsage -Settings (Get-SettingsSnapshot)) -ge 2 } 45 'a cached reading of each account to be recorded for the website'
+            Wait-Until { (& $syncCount) -ge 1 -or (Get-CloudPendingUsage -Settings (Get-SettingsSnapshot)) -ge [Math]::Max(1, $shownAccounts) } 45 'a cached reading of each account shown to be recorded for the website'
             Write-PhaseLog "readings waiting for the website: $(Get-CloudPendingUsage -Settings (Get-SettingsSnapshot)); /sync requests so far: $(& $syncCount)"
         } catch {
             # What the cloud, the app's support folder and the file say, for the next round.
             try { Write-PhaseLog "settings cloud: $((Get-SettingsSnapshot)['cloud'] | ConvertTo-Json -Compress -Depth 6)" } catch { Write-PhaseLog "settings: $($_.Exception.Message)" }
-            try { Write-PhaseLog "control status: $((Get-ControlStatus).GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" })" } catch { Write-PhaseLog "control status: $($_.Exception.Message)" }
+            Write-AccountsSeen -When 'no reading'
             $supportNow = Find-SupportDir -Profile $script:P
-            if ($supportNow) { Write-PhaseLog "support files: $(@(Get-ChildItem -LiteralPath $supportNow -Force | ForEach-Object { "$($_.Name)($($_.Length))" }) -join ' ')" }
+            # Strict mode: a folder has no Length.
+            if ($supportNow) { Write-PhaseLog "support files: $(@(Get-ChildItem -LiteralPath $supportNow -Force | ForEach-Object { if ($_ -is [IO.FileInfo]) { "$($_.Name)($($_.Length))" } else { "$($_.Name)\" } }) -join ' ')" }
             foreach ($file in $claudeJsonBefore.Keys) { Write-PhaseLog "$file now: $([IO.File]::ReadAllText($file) -replace '\s+', ' ')" }
             try {
                 $shown = (Invoke-CdpCall -Page $script:Ui.NotchPage -Method 'snapshot') | ConvertTo-Json -Compress -Depth 8
