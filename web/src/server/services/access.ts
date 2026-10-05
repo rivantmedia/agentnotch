@@ -113,6 +113,18 @@ export function visibleAccountKeys(scope: AccessScope): string[] {
   ].sort();
 }
 
+/**
+ * The accounts out of `accountKeys` the viewer can see, sorted and without repeats. One they
+ * can't see is left out exactly as one that doesn't exist is, so a selection learns nothing.
+ */
+export function coveredAccountKeys(
+  scope: AccessScope,
+  accountKeys: Iterable<string>,
+): string[] {
+  const wanted = new Set(accountKeys);
+  return visibleAccountKeys(scope).filter((key) => wanted.has(key));
+}
+
 /** Users whose rows on `accountKey` the viewer sees (always the viewer themself). */
 export function visibleOwnerIds(
   scope: AccessScope,

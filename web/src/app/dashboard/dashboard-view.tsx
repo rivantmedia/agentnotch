@@ -50,6 +50,14 @@ export function DashboardView({
       <PageHeader
         title="Dashboard"
         description="Your Claude accounts, from every Mac you sync and every pool you're in."
+        actions={
+          <Link
+            href={withPeriod("/usage", period)}
+            className="btn btn-secondary btn-sm"
+          >
+            Usage across accounts
+          </Link>
+        }
       />
       <QueryBoundary
         what="your accounts"

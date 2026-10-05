@@ -19,27 +19,23 @@ import {
   AccessDenied,
   canSeeAccount,
   canSeeRow,
+  coveredAccountKeys,
   ownedRowWhere,
   type AccessScope,
 } from "~/server/services/access";
 import { clampedTime, ownedRowSql, sqlTime } from "~/server/services/sql";
 import {
+  addUp,
   daysBefore,
   decimalToNumber,
   peopleById,
   personOrUnknown,
   tokenTotals,
   type Person,
-  type TokenTotals,
+  type UsageTotals,
 } from "~/server/services/totals";
 
-/** What a period's sessions added up to. */
-export type UsageTotals = {
-  sessions: number;
-  tokens: TokenTotals;
-  /** The sum of the sessions' costs (Claude Code's own, else estimated at list prices); null when none has one. */
-  costUsd: number | null;
-};
+export type { UsageTotals };
 
 /** One project's usage on one account. */
 export type ProjectAccountUsage = UsageTotals & {
@@ -100,13 +96,18 @@ export type ProjectUsageFilter = {
   period: UsagePeriod;
   /** Only this account's projects (and only their usage on it). */
   accountKey?: string;
+  /**
+   * Only these accounts' projects, and only their usage on them (the usage page's selection).
+   * Keys the viewer can't see are left out, as missing ones are.
+   */
+  accountKeys?: readonly string[];
   /** How many projects to list; the rest are added up in `rest`. */
   limit?: number;
 };
 
 /**
- * The projects with sessions in the period on the accounts the viewer sees (or on one of them),
- * most tokens first.
+ * The projects with sessions in the period on the accounts the viewer sees (or on one or some
+ * of them), most tokens first.
  */
 export async function projectUsage(
   db: Db,
@@ -121,14 +122,23 @@ export async function projectUsage(
     throw new AccessDenied("NOT_FOUND", "No such account.");
   }
   const from = periodStart(filter.period, now);
-  const rows = await usageRows(
-    db,
-    scope,
-    filter.accountKey,
-    Prisma.sql`TRUE`,
-    from,
-    now,
-  );
+  const keys =
+    filter.accountKeys === undefined
+      ? null
+      : coveredAccountKeys(scope, filter.accountKeys);
+  const rows =
+    keys?.length === 0
+      ? []
+      : await usageRows(
+          db,
+          scope,
+          filter.accountKey,
+          keys === null
+            ? Prisma.sql`TRUE`
+            : Prisma.sql`p."accountKey" IN (${Prisma.join(keys)})`,
+          from,
+          now,
+        );
   const projects = (await toProjects(db, scope, rows))
     .map((project) => ({
       ...project,
@@ -326,33 +336,6 @@ async function toProjects(
       accounts,
     };
   });
-}
-
-function addUp(parts: readonly UsageTotals[]): UsageTotals {
-  let sessions = 0;
-  let input = 0n;
-  let output = 0n;
-  let cacheCreation = 0n;
-  let cacheRead = 0n;
-  let cost: number | null = null;
-  for (const part of parts) {
-    sessions += part.sessions;
-    input += part.tokens.input;
-    output += part.tokens.output;
-    cacheCreation += part.tokens.cacheCreation;
-    cacheRead += part.tokens.cacheRead;
-    if (part.costUsd !== null) cost = (cost ?? 0) + part.costUsd;
-  }
-  return {
-    sessions,
-    tokens: tokenTotals({
-      inputTokens: input,
-      outputTokens: output,
-      cacheCreationTokens: cacheCreation,
-      cacheReadTokens: cacheRead,
-    }),
-    costUsd: cost,
-  };
 }
 
 function latest(dates: ReadonlyArray<Date | null>): Date | null {

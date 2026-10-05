@@ -13,6 +13,14 @@ export type TokenTotals = {
   total: bigint;
 };
 
+/** What a period's sessions added up to. */
+export type UsageTotals = {
+  sessions: number;
+  tokens: TokenTotals;
+  /** The sum of the sessions' costs (Claude Code's own, else estimated at list prices); null when none has one. */
+  costUsd: number | null;
+};
+
 /**
  * Someone whose rows the viewer sees: the viewer, or a member of a shared pool. `displayName` is
  * their email; `name` (which they can change) is only ever shown next to it.
@@ -42,6 +50,34 @@ export function tokenTotals(row: TokenColumns | null | undefined): TokenTotals {
     cacheCreation,
     cacheRead,
     total: input + output + cacheCreation + cacheRead,
+  };
+}
+
+/** Parts added up. A cost is null only when no part has one: unknown stays unknown, not zero. */
+export function addUp(parts: readonly UsageTotals[]): UsageTotals {
+  let sessions = 0;
+  let input = 0n;
+  let output = 0n;
+  let cacheCreation = 0n;
+  let cacheRead = 0n;
+  let cost: number | null = null;
+  for (const part of parts) {
+    sessions += part.sessions;
+    input += part.tokens.input;
+    output += part.tokens.output;
+    cacheCreation += part.tokens.cacheCreation;
+    cacheRead += part.tokens.cacheRead;
+    if (part.costUsd !== null) cost = (cost ?? 0) + part.costUsd;
+  }
+  return {
+    sessions,
+    tokens: tokenTotals({
+      inputTokens: input,
+      outputTokens: output,
+      cacheCreationTokens: cacheCreation,
+      cacheReadTokens: cacheRead,
+    }),
+    costUsd: cost,
   };
 }
 
