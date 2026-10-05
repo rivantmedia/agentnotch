@@ -1728,9 +1728,13 @@ function Start-DummyClaude {
     Register-OwnProcess $process
 }
 
+# What Claude Code started in P's default folder hands its hooks. No CLAUDE_CONFIG_DIR: a `claude`
+# run in ~\.claude has none, and one set to that folder is another login file for Claude Code (and
+# the engine): <dir>\.claude.json instead of ~\.claude.json. Run 37331085715 set it, and from
+# phase 8 on the app filed ~\.claude as signed out (one account left).
 function Get-HookEnvironmentArguments {
     param([Parameter(Mandatory)][int]$ClaudePid)
-    @('--env', "CLAUDE_PID=$ClaudePid", '--env', "CLAUDE_CONFIG_DIR=$(Get-Folder '.claude')", '--env', 'CLAUDE_CODE_ENTRYPOINT=cli')
+    @('--env', "CLAUDE_PID=$ClaudePid", '--env', 'CLAUDE_CODE_ENTRYPOINT=cli')
 }
 
 # run-hook.mjs's runs, parsed. A tool that fails to run is an error here; what the hooks did is
@@ -2135,7 +2139,7 @@ function Invoke-CloudPhase {
         # Both accounts' Claude Code do (the default folder's login lives in P\.claude.json, the
         # other's in its own folder), so each account the app shows has a reading.
         $shownAccounts = [int](Get-ControlStatus)['accounts']
-        if ($shownAccounts -ne 2) { Write-Host "::warning::phase 10: the restarted app shows $shownAccounts account(s), not 2 (see the doctor lines in its log)" }
+        if ($shownAccounts -ne 2) { throw "the restarted app shows $shownAccounts account(s), not P's 2 (see the doctor lines above)" }
         $fetchedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         foreach ($file in (Join-Path $script:P '.claude.json'), (Join-Path $script:P '.claude-work\.claude.json')) {
             $bytes = [IO.File]::ReadAllBytes($file)
@@ -2145,7 +2149,7 @@ function Invoke-CloudPhase {
         }
         $syncCount = { Get-RequestCount -Requests (Get-FakeWebsiteRequests -LogFile $log) -Method 'POST' -Path '/api/app/v1/sync' }
         try {
-            Wait-Until { (& $syncCount) -ge 1 -or (Get-CloudPendingUsage -Settings (Get-SettingsSnapshot)) -ge [Math]::Max(1, $shownAccounts) } 45 'a cached reading of each account shown to be recorded for the website'
+            Wait-Until { (& $syncCount) -ge 1 -or (Get-CloudPendingUsage -Settings (Get-SettingsSnapshot)) -ge 2 } 45 'a cached reading of each account to be recorded for the website'
             Write-PhaseLog "readings waiting for the website: $(Get-CloudPendingUsage -Settings (Get-SettingsSnapshot)); /sync requests so far: $(& $syncCount)"
         } catch {
             # What the cloud, the app's support folder and the file say, for the next round.

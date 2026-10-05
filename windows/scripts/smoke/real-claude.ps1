@@ -86,6 +86,8 @@ $script:ClaudeCodeNativeIntegrity = 'sha512-7TR0I2gOkYBADZlazRQERyP9WHCOKTZPPUSY
 
 # Obviously not a key; fake-anthropic.mjs accepts exactly this and nothing else.
 $script:FakeKey = 'fake-key-not-a-secret'
+# The entrypoint of the headless (stream-json) runs: the VS Code extension's (see Start-ClaudeDriver).
+$script:HeadlessEntrypoint = 'claude-vscode'
 $script:ConfigFolderName = '.claude-real'
 # The temporary account's identity (no token: Claude Code signs in with the fake key). The
 # engine files P\.claude-real under it.
@@ -678,6 +680,11 @@ function Start-ClaudeDriver {
     foreach ($argument in $ClaudeArgs) { $psi.ArgumentList.Add('--arg'); $psi.ArgumentList.Add($argument) }
     $psi.Environment.Clear()
     $environment = Get-ClaudeEnvironmentFor -Api $Api
+    # The stream-json host these runs stand for is the VS Code extension's chat panel, which starts
+    # Claude Code this way with CLAUDE_CODE_ENTRYPOINT=claude-vscode (2.1.285 keeps a preset value).
+    # Left unset, `-p` makes it sdk-cli, and the engine ignores sdk-* sessions as the Mac does
+    # (HS 4.3, SessionFilter): run 37331085715 waited for a session the app rightly never listed.
+    $environment['CLAUDE_CODE_ENTRYPOINT'] = $script:HeadlessEntrypoint
     foreach ($key in $environment.Keys) { $psi.Environment[$key] = $environment[$key] }
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true

@@ -1109,6 +1109,11 @@ Test-Case 'the fake website log is read line by line; a torn or foreign line is 
     Assert-Equal @(ConvertFrom-RequestLog -Text '').Count 0 'empty'
 }
 
+Test-Case "the hooks of the default folder's Claude Code get no CLAUDE_CONFIG_DIR" {
+    $arguments = @(Get-HookEnvironmentArguments -ClaudePid 4242)
+    Assert-Equal ($arguments -join ' ') '--env CLAUDE_PID=4242 --env CLAUDE_CODE_ENTRYPOINT=cli' 'the variables'
+}
+
 Test-Case 'the readings waiting for the website are read from the settings snapshot' {
     Assert-Equal (Get-CloudPendingUsage -Settings @{ cloud = @{ pending_usage = 2 } }) 2 'two'
     Assert-Equal (Get-CloudPendingUsage -Settings @{ cloud = @{ sync_enabled = $true } }) 0 'none named'
