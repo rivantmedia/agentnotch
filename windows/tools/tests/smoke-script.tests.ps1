@@ -974,6 +974,14 @@ Test-Case 'a free port can be bound again right after it is handed out' {
     $listener.Stop()
 }
 
+Test-Case 'the DevTools switches: the port first, then wry''s own, for the env and the WebView2 override' {
+    Assert-Equal (Get-DevToolsBrowserArguments -Port 4242) '--remote-debugging-port=4242 --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection' 'override'
+    Assert-Equal @($script:WebView2PolicyKeys | Where-Object { $_ -match '^HK(LM|CU):\\Software\\Policies\\Microsoft\\Edge\\WebView2\\AdditionalBrowserArguments$' }).Count 2 'override keys'
+    Assert-Equal $script:WebView2PolicyValue 'agentnotch.exe' 'value name'
+    Clear-DevToolsOverride   # nothing set: nothing to take away
+    Assert-Equal $script:WebView2PolicySet.Count 0 'nothing recorded'
+}
+
 Test-Case 'phases 5-9 are in the table in order, behind the engine gate, between phase 4 and phase 13' {
     $table = @(Get-PhaseTable)
     $numbers = @($table | ForEach-Object { $_.Number })

@@ -978,6 +978,10 @@ function Write-CdpDiagnostics {
             foreach ($c in @(Get-NetTCPConnection -OwningProcess $b.ProcessId -State Listen -ErrorAction SilentlyContinue)) { Write-PhaseLog "    listens on $($c.LocalAddress):$($c.LocalPort)" }
         }
         if (-not $browsers) { Write-PhaseLog '  none' }
+        foreach ($key in $script:WebView2PolicyKeys) {
+            $value = (Get-ItemProperty -LiteralPath $key -Name $script:WebView2PolicyValue -ErrorAction SilentlyContinue).$($script:WebView2PolicyValue)
+            Write-PhaseLog "  override ${key}: $(if ($value) { $value } else { '(none)' })"
+        }
         foreach ($file in @(Get-ChildItem -LiteralPath (Join-Path $script:P 'AppData\Local') -Recurse -Force -Filter 'DevToolsActivePort' -ErrorAction SilentlyContinue)) {
             Write-PhaseLog "  $($file.FullName): $((Get-Content -LiteralPath $file.FullName -Raw -ErrorAction SilentlyContinue) -replace '\s+', ' ')"
         }
@@ -1028,6 +1032,55 @@ function Get-FreeTcpPort {
     $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
     $listener.Start()
     try { $listener.LocalEndpoint.Port } finally { $listener.Stop() }
+}
+
+# The DevTools port for the app's WebView2 browser. On the runner the browser ignores
+# WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS (run 37300672648: the app, elevated there, started it with
+# wry's switches only), so the same switches also go into WebView2's per-app registry override,
+# <root>\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments, value agentnotch.exe:
+# HKLM, which an elevated process reads, and HKCU. wry's own switches are repeated, so the browser
+# runs as it does for a user whether the override replaces them or is appended to them.
+$script:WebView2PolicyKeys = @(
+    'HKLM:\SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments',
+    'HKCU:\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments')
+$script:WebView2PolicyValue = 'agentnotch.exe'
+$script:WebView2PolicyCreated = [Collections.Generic.List[string]]::new()
+$script:WebView2PolicySet = [Collections.Generic.List[string]]::new()
+
+function Get-DevToolsBrowserArguments {
+    param([Parameter(Mandatory)][int]$Port)
+    "--remote-debugging-port=$Port --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"
+}
+
+# Sets the override for $Port and returns the environment layer for the app; what it did goes to $Log.
+function Get-DevToolsEnvironment {
+    param([Parameter(Mandatory)][int]$Port, [scriptblock]$Log = { param($line) Write-Host $line })
+    $arguments = Get-DevToolsBrowserArguments -Port $Port
+    foreach ($key in $script:WebView2PolicyKeys) {
+        try {
+            if (-not (Test-Path -LiteralPath $key)) {
+                New-Item -Path $key -Force | Out-Null
+                if (-not $script:WebView2PolicyCreated.Contains($key)) { $script:WebView2PolicyCreated.Add($key) }
+            }
+            New-ItemProperty -LiteralPath $key -Name $script:WebView2PolicyValue -Value $arguments -PropertyType String -Force | Out-Null
+            if (-not $script:WebView2PolicySet.Contains($key)) { $script:WebView2PolicySet.Add($key) }
+            & $Log "WebView2 override set: $key\$($script:WebView2PolicyValue) = $arguments"
+        } catch { & $Log "WebView2 override not set in ${key}: $($_.Exception.Message)" }
+    }
+    @{ WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$Port" }
+}
+
+# Takes the overrides away again: the value, and the key when this run made it.
+function Clear-DevToolsOverride {
+    foreach ($key in @($script:WebView2PolicySet)) {
+        Remove-ItemProperty -LiteralPath $key -Name $script:WebView2PolicyValue -Force -ErrorAction SilentlyContinue
+    }
+    foreach ($key in @($script:WebView2PolicyCreated)) {
+        $left = Get-Item -LiteralPath $key -ErrorAction SilentlyContinue
+        if ($left -and -not $left.ValueCount -and -not $left.SubKeyCount) { Remove-Item -LiteralPath $key -Force -ErrorAction SilentlyContinue }
+    }
+    $script:WebView2PolicySet.Clear()
+    $script:WebView2PolicyCreated.Clear()
 }
 
 # --- helpers: what the app prints and writes ---------------------------------------------------------------------
@@ -1422,7 +1475,7 @@ function Invoke-BeforeConsentPhase {
     foreach ($root in $script:DataRoots) { Remove-Item -LiteralPath (Join-Path (Join-Path $root 'Agent Notch') 'run.log') -Force -ErrorAction SilentlyContinue }
     Remove-Item -LiteralPath $script:FakeClaudeLog -Force -ErrorAction SilentlyContinue
     $script:CdpPort = Get-FreeTcpPort
-    $environment = Merge-Environment @((Get-AppEnvironment), $script:ScrubSentinels, @{ WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$($script:CdpPort)" })
+    $environment = Merge-Environment @((Get-AppEnvironment), $script:ScrubSentinels, (Get-DevToolsEnvironment -Port $script:CdpPort -Log { param($line) Write-PhaseLog $line }))
     $script:LiveApp = Register-OwnProcess (Start-AppProcess -Exe $script:AppExe -Environment $environment)
     Write-PhaseLog "the real app is running as process $($script:LiveApp.Id), DevTools on port $($script:CdpPort)"
     Start-Sleep -Seconds 30
@@ -1886,7 +1939,7 @@ function Start-LiveApp {
     param([hashtable]$Extra = @{})
     Stop-LiveApp
     $script:CdpPort = Get-FreeTcpPort
-    $environment = Merge-Environment @((Get-AppEnvironment), @{ WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$($script:CdpPort)" }, $Extra)
+    $environment = Merge-Environment @((Get-AppEnvironment), (Get-DevToolsEnvironment -Port $script:CdpPort -Log { param($line) Write-PhaseLog $line }), $Extra)
     $script:LiveApp = Register-OwnProcess (Start-AppProcess -Exe $script:AppExe -Environment $environment)
     Write-PhaseLog "the real app is running as process $($script:LiveApp.Id), DevTools on port $($script:CdpPort)"
     Wait-ControlStatus -Seconds 60 -What 'the app to listen' -Expect @{ transport = 'listening' } | Out-Null
@@ -2333,6 +2386,7 @@ try {
     }
 } finally {
     Stop-OwnProcesses
+    Clear-DevToolsOverride
     Write-Results
 }
 exit ([int](-not $ok))

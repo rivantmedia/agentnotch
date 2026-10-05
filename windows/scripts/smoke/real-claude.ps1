@@ -608,11 +608,10 @@ function New-RealClaudeProfile {
 
 function Start-RealClaudeApp {
     $script:CdpPort = Get-FreeTcpPort
-    $environment = @{
-        USERPROFILE                          = $script:P
-        AGENTNOTCH_NO_NOTIFICATIONS          = '1'
-        WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$($script:CdpPort)"
-    }
+    $environment = Merge-Environment @(@{
+        USERPROFILE                 = $script:P
+        AGENTNOTCH_NO_NOTIFICATIONS = '1'
+    }, (Get-DevToolsEnvironment -Port $script:CdpPort -Log { param($line) Write-RcLog $line }))
     $script:LiveApp = Register-OwnProcess (Start-AppProcess -Exe $script:AppExe -Environment $environment)
     Write-RcLog "the app is running as process $($script:LiveApp.Id), DevTools on port $($script:CdpPort)"
     $expect = [ordered]@{ transport = 'listening'; accounts = '1'; hook_consent = 'unasked' }
@@ -1000,6 +999,7 @@ try {
     Write-Host "::error::real-claude: $($_.Exception.Message)"
 } finally {
     Stop-OwnProcesses
+    if ($IsWindows) { Clear-DevToolsOverride }
     if ($IsWindows -and $script:Log) {
         Remove-ClaudeFirewallRules
         Save-LiveRunLog
