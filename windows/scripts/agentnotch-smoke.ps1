@@ -115,15 +115,18 @@ function Get-FileSha256 {
 }
 
 # Every file under Root: relative path (forward slashes) -> SHA-256. A missing Root is empty.
-# Empty folders are not recorded: what the smoke test compares is bytes.
+# Empty folders are not recorded: what the smoke test compares is bytes. Paths matching a -Skip
+# pattern (relative, before the prefix) are never opened: P's AppData holds the running app's
+# WebView2 profile, whose databases are locked while it runs.
 function Get-TreeHash {
-    param([Parameter(Mandatory)][string]$Root, [string]$Prefix = '')
+    param([Parameter(Mandatory)][string]$Root, [string]$Prefix = '', [string[]]$Skip = @())
     $hashes = [ordered]@{}
     if (-not (Test-Path -LiteralPath $Root -PathType Container)) { return $hashes }
     $full = (Resolve-Path -LiteralPath $Root).ProviderPath
     $files = Get-ChildItem -LiteralPath $full -Recurse -File -Force | Sort-Object FullName
     foreach ($file in $files) {
         $relative = [IO.Path]::GetRelativePath($full, $file.FullName).Replace('\', '/')
+        if (@($Skip | Where-Object { $relative -like $_ }).Count) { continue }
         $hashes[$Prefix + $relative] = Get-FileSha256 -Path $file.FullName
     }
     $hashes
@@ -643,7 +646,7 @@ function Invoke-SealedLaunchPhase {
     if ($runLog -notmatch 'an: hub started \(sealed\)') { throw "the sealed hub did not start: $runLog" }
     $changed = @(Compare-Hashes -Before $dataBefore -After (Get-AppDataTrees))
     if ($changed) { throw "a sealed run wrote to the app's own data folder: $($changed -join ', ')" }
-    $changedP = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P) -Exclude 'AppData/*')
+    $changedP = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P -Skip 'AppData/*') -Exclude 'AppData/*')
     if ($changedP) { throw "a sealed run changed P: $($changedP -join ', ')" }
     Remove-SealedData
 }
@@ -867,7 +870,7 @@ function Invoke-SelfTestPhase {
 
     $changed = @(Compare-Hashes -Before $dataBefore -After (Get-AppDataTrees))
     if ($changed) { $problems.Add("a sealed run wrote to the app's own data folder: $($changed -join ', ')") }
-    $changedP = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P) -Exclude 'AppData/*')
+    $changedP = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P -Skip 'AppData/*') -Exclude 'AppData/*')
     if ($changedP) { $problems.Add("a sealed run changed P: $($changedP -join ', ')") }
     foreach ($root in $script:DataRoots) {
         if (Test-Path -LiteralPath (Join-Path $root 'Agent Notch Sealed')) { $problems.Add("Agent Notch Sealed is still there under $root") }
@@ -1407,7 +1410,7 @@ function Invoke-BeforeConsentPhase {
         $status = Wait-ControlStatus -Seconds 60 -What 'control status before consent' -Expect $expect
         Write-PhaseLog ("control status: " + (($status.GetEnumerator() | ForEach-Object { "$($_.Key): $($_.Value)" }) -join ', '))
 
-        $changed = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P) -Exclude 'AppData/*')
+        $changed = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P -Skip 'AppData/*') -Exclude 'AppData/*')
         if ($changed) { throw "the app wrote to P before any consent: $($changed -join ', ')" }
 
         $lines = if (Test-Path -LiteralPath $script:FakeClaudeLog) { @(Get-Content -LiteralPath $script:FakeClaudeLog) } else { @() }
@@ -1730,7 +1733,7 @@ function Invoke-TurnOffPhase {
             $left = @(Get-ChildItem -LiteralPath $hooks -Force -Filter 'agentnotch*' -ErrorAction SilentlyContinue)
             if ($left) { $problems.Add("$name\hooks still holds $($left.Name -join ', ')") }
         }
-        $differences = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P) -Exclude 'AppData/*')
+        $differences = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P -Skip 'AppData/*') -Exclude 'AppData/*')
         foreach ($line in (Test-OnlyBackupsAdded -Differences $differences)) { $problems.Add($line) }
         foreach ($line in $differences) { Write-PhaseLog "  P: $line" }
         if ($problems.Count) { throw ("after Turn off:`n  " + ($problems -join "`n  ")) }
@@ -1976,7 +1979,7 @@ function Invoke-CloudPhase {
 
 # The files of P the update must leave alone: every settings.json and every hook copy.
 function Get-HookFilesHash {
-    $hashes = Get-TreeHash -Root $script:P
+    $hashes = Get-TreeHash -Root $script:P -Skip 'AppData/*'
     $kept = [ordered]@{}
     foreach ($key in $hashes.Keys) {
         if ($key -like '.claude*/settings.json' -or $key -like '.claude*/hooks/*') { $kept[$key] = $hashes[$key] }
@@ -2226,7 +2229,7 @@ function Invoke-UninstallPhase {
     Wait-Until { -not (Test-Path $script:AppExe) -and -not (Test-Path $script:UninstallKey) } 60 'the uninstall'
     if ($null -ne (Get-RunValue)) { throw 'the Run value is still there' }
     if (Test-Path 'HKCU:\Software\Classes\agentnotch') { throw 'the agentnotch: scheme is still registered' }
-    $changed = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P) -Filter '.claude*/settings.json')
+    $changed = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P -Skip 'AppData/*') -Filter '.claude*/settings.json')
     if ($changed) { throw "uninstall changed what it must leave: $($changed -join ', ')" }
     $copies = @(Get-ChildItem -LiteralPath $script:P -Recurse -Force -Filter 'agentnotch-hook*' -ErrorAction SilentlyContinue)
     if ($copies) { throw "hook copies are left in P: $($copies.FullName -join ', ')" }

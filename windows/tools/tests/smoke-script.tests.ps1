@@ -173,6 +173,8 @@ Test-Case 'a tree hash lists every file with forward slashes, and a missing fold
     Assert-Equal $hashes['top.txt'] $hashes['top.txt'].ToLowerInvariant() 'lower case'
     Assert-Equal (Get-TreeHash -Root (Join-Path $root 'absent')).Count 0 'a missing folder'
     Assert-Equal ((Get-TreeHash -Root $root -Prefix 'p/').Keys -join ',') 'p/a/b/deep.txt,p/top.txt' 'prefix'
+    # A skipped path is never opened: one the running app holds locked would fail the hash.
+    Assert-Equal ((Get-TreeHash -Root $root -Skip 'a/*').Keys -join ',') 'top.txt' 'skipped'
 }
 
 Test-Case 'the hash comparison reports changed, added and removed files, and nothing when equal' {
