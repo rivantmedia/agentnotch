@@ -1674,7 +1674,17 @@ suites listed there into Rust tests under the owning package.
     string form;
   - neither possible → the folder is not hooked and shows "Can't be hooked here: its path needs
     Claude Code <EXEC_FORM_MIN> or later everywhere on this PC" (or "…has characters a hook
-    command can't carry" when exec form is not established at all);
+    command can't carry" when exec form is not established at all). Exec-form entries an
+    earlier pass wrote there are **taken out** (ours only; the status line, the hook copy and
+    everything else stay; refused like any write when settings.json is unreadable): a Claude
+    Code older than `EXEC_FORM_MIN` does not skip them but ignores `args` and runs `command`
+    through Git Bash, where an unquoted path with `(`, `)`, `'`, `"` or a backtick is a syntax
+    error that exits 2, which blocks every tool call, prompt and Stop. Such a plan runs after
+    the pass's other installs, so a settings.json it shares with a hookable folder (a link)
+    keeps that folder's entries;
+  - a settings.json another program holds without read sharing (a backup or sync tool) is read
+    again on the rename's retry schedule; one still held is reported as "in use by another
+    program" (`FolderHookStatus.settings_in_use`), never as invalid JSON;
   - PermissionRequest adds `"timeout":86400`; events per version exactly as HS§3.5;
   - status line (a string, always): the same unquoted / 8.3 rule with `statusline`; when neither
     works the status line is not taken over ("Live status line isn't available for this folder";

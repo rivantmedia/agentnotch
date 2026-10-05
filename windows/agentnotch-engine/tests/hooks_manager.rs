@@ -1080,13 +1080,36 @@ fn the_exec_form_is_planned_only_when_every_version_allows_it() {
     let plans = home.plan(&accounts, &folders);
     assert_eq!(plans[0].form, CommandForm::Text(hook_command(&main)));
     assert!(matches!(plans[1].form, CommandForm::NotPossible(_)));
+    let reason =
+        "Can't be hooked here: its path needs Claude Code 2.1.150 or later everywhere on this PC";
+    assert_eq!(plans[1].form, CommandForm::NotPossible(reason.to_owned()));
+
+    // The exec-form entries already there come out of the folder no string
+    // can name: the older copy would hand the bare path to Git Bash. The
+    // folder still reads as not hookable, and the notice names it.
+    let outcomes = apply_installs_with(&plans, &StdSecureFiles, &home.clock, &SETUP);
+    home.manager.absorb_outcomes(&plans, &outcomes);
+    assert_eq!(outcomes[0].result, Ok(InstallChange::Written));
+    assert_eq!(outcomes[1].result, Err(reason.to_owned()));
+    let backup = outcomes[1]
+        .backup
+        .clone()
+        .expect("ours came out with a backup");
     assert_eq!(
-        plans[1].form,
-        CommandForm::NotPossible(
-            "Can't be hooked here: its path needs Claude Code 2.1.150 or later everywhere on this PC"
-                .to_owned()
-        )
+        changed_folders(&outcomes),
+        vec![main.id.clone(), spaced.id.clone()]
     );
+    let known = home.manager.folder_status(&spaced.id);
+    assert_eq!(known.not_hookable.as_deref(), Some(reason));
+    assert_eq!(known.last_error, None);
+    assert!(!known.hooks_registered && !known.hooks_installed);
+    assert_eq!(known.form, None);
+    assert_eq!(known.hook_command, None);
+    assert_eq!(known.newest_backup, Some(backup));
+    assert!(!status(&spaced).hooks_registered);
+    // The record keeps the folder, so turning hooks off still takes the
+    // copy away.
+    assert!(home.manager.record().entry_for(&spaced.id).is_some());
 }
 
 // ---- When passes run ----

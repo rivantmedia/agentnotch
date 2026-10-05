@@ -198,6 +198,36 @@ pub fn plan_uninstall(
     finish(document, &original, existing, change, decided)
 }
 
+/// The settings.json without our hook entries, everything else as it is (the
+/// status line included), for a folder no hook command can name any more.
+/// An exec-form entry left there would be run by an older Claude Code as a
+/// bare string, which Git Bash can fail to parse with exit 2: a block. With
+/// none of ours there, nothing is written, not even to tidy up.
+pub fn plan_hook_removal(existing: Option<&[u8]>, recogniser: &Recogniser) -> SettingsPlan {
+    if existing.is_none() {
+        return SettingsPlan::nothing();
+    }
+    let Some(mut document) = SettingsDocument::new(existing) else {
+        return SettingsPlan::refuse(Refusal::Unreadable);
+    };
+    let original = document.value().clone();
+    let Some(before) = hooks_object(&document) else {
+        return SettingsPlan::refuse(Refusal::HooksNotAnObject);
+    };
+    let (hooks, removed) = removing_hooks(&before, &|entry| recogniser.is_our_hook(entry));
+    if removed == 0 {
+        return SettingsPlan::nothing();
+    }
+    replace_hooks(&before, hooks, &mut document);
+    finish(
+        document,
+        &original,
+        existing,
+        None,
+        StatusLineIntent::Nothing,
+    )
+}
+
 /// The settings.json without the official Codenotch's hook entries, and how
 /// many went. Its status line is never its own, so nothing else changes.
 pub fn plan_upstream_removal(existing: Option<&[u8]>) -> (SettingsPlan, u32) {

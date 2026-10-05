@@ -45,6 +45,44 @@ pub fn is_transient(code: u32) -> bool {
     matches!(code, 5 | 32 | 33)
 }
 
+/// Someone else holds the file open in a way that keeps us out (ERROR_SHARING_VIOLATION,
+/// ERROR_LOCK_VIOLATION): the file is busy, not broken. ERROR_ACCESS_DENIED is retried too, but
+/// once the retries are spent it is as likely the file's ACL, so it stays what it is.
+pub fn is_in_use(code: u32) -> bool {
+    matches!(code, 32 | 33)
+}
+
+/// A read that another program's hold may refuse for a moment (a backup or sync tool opening
+/// settings.json without read sharing): tried again on the rename's schedule. A read still
+/// refused because the file is held fails with `io::ErrorKind::ResourceBusy`, so the installer
+/// says it is in use instead of calling it broken. `read` and `sleep` are the OS's in `WinFiles`.
+pub fn read_retrying(
+    mut read: impl FnMut() -> std::io::Result<Vec<u8>>,
+    mut sleep: impl FnMut(Duration),
+) -> std::io::Result<Vec<u8>> {
+    let mut delays = retry_delays().into_iter();
+    loop {
+        let error = match read() {
+            Ok(bytes) => return Ok(bytes),
+            Err(error) => error,
+        };
+        let Some(code) = error
+            .raw_os_error()
+            .and_then(|code| u32::try_from(code).ok())
+            .filter(|&code| is_transient(code))
+        else {
+            return Err(error);
+        };
+        match delays.next() {
+            Some(delay) => sleep(delay),
+            None if is_in_use(code) => {
+                return Err(std::io::Error::new(std::io::ErrorKind::ResourceBusy, error))
+            }
+            None => return Err(error),
+        }
+    }
+}
+
 /// The file system doesn't know `FileRenameInfoEx` (ERROR_INVALID_FUNCTION, ERROR_NOT_SUPPORTED,
 /// ERROR_INVALID_PARAMETER: FAT, some network shares, Windows before 10 1607).
 pub fn rename_class_unsupported(code: u32) -> bool {
@@ -151,8 +189,8 @@ mod imp {
 
     use super::{
         already_exists, filetime_to_unix_ns, is_sid, is_transient, kept_attributes, no_acl_support,
-        only_user_and_system, private_sddl, rename_class_unsupported, retry_delays, strip_verbatim,
-        win32_code,
+        only_user_and_system, private_sddl, read_retrying, rename_class_unsupported, retry_delays,
+        strip_verbatim, win32_code,
     };
 
     // The two flags of FILE_RENAME_INFO.Flags this file needs (winbase.h; the crate keeps them in
@@ -915,6 +953,10 @@ mod imp {
             ))
         }
 
+        fn read_file(&self, path: &Path) -> io::Result<Vec<u8>> {
+            read_retrying(|| std::fs::read(path), std::thread::sleep)
+        }
+
         fn short_path(&self, path: &Path) -> Option<PathBuf> {
             let long = wide(path).ok()?;
             path_from(|buffer| {
@@ -996,6 +1038,52 @@ mod tests {
         for code in [0, 2, 3, 80, 183, 112, 87, 50, 1] {
             assert!(!is_transient(code), "{code}");
         }
+    }
+
+    #[test]
+    fn a_held_read_is_retried_and_then_said_to_be_in_use() {
+        use std::io;
+        let held = |code: i32| move || Err::<Vec<u8>, _>(io::Error::from_raw_os_error(code));
+
+        // Held throughout: the five retries, then "busy", never a broken file.
+        let mut waited = Vec::new();
+        let error = read_retrying(held(32), |delay| waited.push(delay)).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::ResourceBusy);
+        assert_eq!(waited, retry_delays());
+        let error = read_retrying(held(33), |_| {}).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::ResourceBusy);
+        // Access denied may be the ACL: retried, but it stays what it was.
+        let error = read_retrying(held(5), |_| {}).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(5));
+
+        // Let go during the retries: the read goes through.
+        let mut tries = 0;
+        let read = read_retrying(
+            || {
+                tries += 1;
+                if tries < 3 {
+                    Err(io::Error::from_raw_os_error(32))
+                } else {
+                    Ok(b"{}".to_vec())
+                }
+            },
+            |_| {},
+        );
+        assert_eq!(read.unwrap(), b"{}");
+        assert_eq!(tries, 3);
+
+        // Anything else is not tried again.
+        let mut tries = 0;
+        let error = read_retrying(
+            || {
+                tries += 1;
+                Err(io::Error::from_raw_os_error(2))
+            },
+            |_| panic!("not retried"),
+        )
+        .unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(2));
+        assert_eq!(tries, 1);
     }
 
     #[test]
