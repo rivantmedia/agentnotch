@@ -577,12 +577,21 @@ fn the_console_target_names_claude_its_window_and_its_shells() {
     let made = console_target(&session, &windowless, &shell_chain()).unwrap();
     assert_eq!(made.expected_window, None);
 
-    // The start time comes from the session, else from the table.
+    // The start time comes from the session only. The table knows when the
+    // process under that pid now started, but that is no proof it is the
+    // session's: a reused pid would be checked against itself and the reply
+    // typed into another program, maybe another Claude at its prompt.
     let mut unstarted = view("s1");
     unstarted.pid_started = None;
-    let made = console_target(&unstarted, &info, &shell_chain()).unwrap();
-    assert_eq!(made.claude_started, t0());
-    // Neither knows it: the process can't be told from a reused pid.
+    assert_eq!(
+        console_target(&unstarted, &info, &shell_chain()),
+        Err(NOT_CONFIRMED.into())
+    );
+    assert_eq!(
+        console_target_with(&unstarted, &info, &shell_chain(), info.window),
+        Err(NOT_CONFIRMED.into())
+    );
+    // Nobody knows it: refused all the more.
     assert_eq!(
         console_target(&unstarted, &info, &ProcessTable::default()),
         Err(NOT_CONFIRMED.into())

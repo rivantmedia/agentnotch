@@ -334,10 +334,10 @@ pub fn console_target_with(
         return Err(NOT_CONFIRMED.into());
     }
     // The start time pairs with the pid everywhere: Windows reuses pids.
-    let claude_started = view
-        .pid_started
-        .or_else(|| table.get(pid).and_then(|entry| entry.started))
-        .ok_or(NOT_CONFIRMED)?;
+    // Only the session's own record counts. The table's start time is that
+    // of whatever holds the pid now, so taking it would let a reused pid
+    // pass the check below against itself.
+    let claude_started = view.pid_started.ok_or(NOT_CONFIRMED)?;
     // The table's process under that pid must be the session's own, or its
     // parents and children are some other program's.
     let reused = table
