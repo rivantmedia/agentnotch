@@ -1401,37 +1401,42 @@ function Invoke-BeforeConsentPhase {
     Write-PhaseLog "the real app is running as process $($script:LiveApp.Id), DevTools on port $($script:CdpPort)"
     Start-Sleep -Seconds 30
     if ($script:LiveApp.HasExited) { throw "the app exited with $($script:LiveApp.ExitCode) within 30 s" }
+    # run.log and the fake claude's log go into the artifacts whatever happens: a red phase is read from them.
+    try {
+        $expect = [ordered]@{ transport = 'listening'; accounts = '2'; hook_consent = 'unasked'; readings = '2' }
+        $status = Wait-ControlStatus -Seconds 60 -What 'control status before consent' -Expect $expect
+        Write-PhaseLog ("control status: " + (($status.GetEnumerator() | ForEach-Object { "$($_.Key): $($_.Value)" }) -join ', '))
 
-    $expect = [ordered]@{ transport = 'listening'; accounts = '2'; hook_consent = 'unasked'; readings = '2' }
-    $status = Wait-ControlStatus -Seconds 60 -What 'control status before consent' -Expect $expect
-    Write-PhaseLog ("control status: " + (($status.GetEnumerator() | ForEach-Object { "$($_.Key): $($_.Value)" }) -join ', '))
+        $changed = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P) -Exclude 'AppData/*')
+        if ($changed) { throw "the app wrote to P before any consent: $($changed -join ', ')" }
 
-    $changed = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P) -Exclude 'AppData/*')
-    if ($changed) { throw "the app wrote to P before any consent: $($changed -join ', ')" }
+        $lines = if (Test-Path -LiteralPath $script:FakeClaudeLog) { @(Get-Content -LiteralPath $script:FakeClaudeLog) } else { @() }
+        $support = Find-SupportDir -Profile $script:P
+        if (-not $support) { throw "no support folder (com.rivantmedia.agentnotch\Claude) under the local app data or P's" }
+        Write-PhaseLog "support folder: $support; fake claude was run $($lines.Count) time(s)"
+        $probes = @($lines | Where-Object { $_ -match '--input-format' })
+        if (-not $probes.Count) { throw 'the fake claude log shows no usage probe' }
+        $logProblems = @(Test-FakeClaudeLog -Lines $lines -ProbeDir (Join-Path $support 'usage-probe'))
+        if ($logProblems) { throw "the fake claude log: $($logProblems -join '; ')" }
 
-    $lines = if (Test-Path -LiteralPath $script:FakeClaudeLog) { @(Get-Content -LiteralPath $script:FakeClaudeLog) } else { @() }
-    $support = Find-SupportDir -Profile $script:P
-    if (-not $support) { throw "no support folder (com.rivantmedia.agentnotch\Claude) under the local app data or P's" }
-    Write-PhaseLog "support folder: $support; fake claude was run $($lines.Count) time(s)"
-    $probes = @($lines | Where-Object { $_ -match '--input-format' })
-    if (-not $probes.Count) { throw 'the fake claude log shows no usage probe' }
-    $logProblems = @(Test-FakeClaudeLog -Lines $lines -ProbeDir (Join-Path $support 'usage-probe'))
-    if ($logProblems) { throw "the fake claude log: $($logProblems -join '; ')" }
+        $aclProblems = @(Get-AclProblems -Path $support)
+        if ($aclProblems) { throw "the support folder: $($aclProblems -join '; ')" }
+        # cloud-folder-logins.json is the one exception: since when each folder has been signed in as
+        # its account, local only and kept whether or not sync is on (the Mac's CloudSync.tick), so a
+        # later backfill knows it. Nothing in it is ever sent.
+        $cloud = @(Get-ChildItem -LiteralPath $support -Force -Filter 'cloud-*' -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -ne 'cloud-folder-logins.json' })
+        if ($cloud) { throw "the support folder holds $($cloud.Name -join ', ') before sign-in" }
+        if ($null -ne (Get-RunValue)) { throw 'a Run value exists although autostart was never turned on' }
 
-    $aclProblems = @(Get-AclProblems -Path $support)
-    if ($aclProblems) { throw "the support folder: $($aclProblems -join '; ')" }
-    # cloud-folder-logins.json is the one exception: since when each folder has been signed in as
-    # its account, local only and kept whether or not sync is on (the Mac's CloudSync.tick), so a
-    # later backfill knows it. Nothing in it is ever sent.
-    $cloud = @(Get-ChildItem -LiteralPath $support -Force -Filter 'cloud-*' -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -ne 'cloud-folder-logins.json' })
-    if ($cloud) { throw "the support folder holds $($cloud.Name -join ', ') before sign-in" }
-    if ($null -ne (Get-RunValue)) { throw 'a Run value exists although autostart was never turned on' }
-
-    $runLog = Get-LiveRunLogText
-    Save-LiveRunLog
-    if ($runLog -notmatch '(?m)an: hub started(?! \(sealed\))') { throw 'run.log has no "an: hub started"' }
-    if ($runLog -notmatch '(?m)an: pipe listening') { throw 'run.log has no "an: pipe listening"' }
+        $runLog = Get-LiveRunLogText
+        Save-LiveRunLog
+        if ($runLog -notmatch '(?m)an: hub started(?! \(sealed\))') { throw 'run.log has no "an: hub started"' }
+        if ($runLog -notmatch '(?m)an: pipe listening') { throw 'run.log has no "an: pipe listening"' }
+    } finally {
+        Save-LiveRunLog
+        if (Test-Path -LiteralPath $script:FakeClaudeLog) { Copy-Item -LiteralPath $script:FakeClaudeLog -Destination (Join-Path $script:ArtifactsDir 'fake-claude.log') -Force -ErrorAction SilentlyContinue }
+    }
 }
 
 # --- phase 6: the deep link with nothing pending ------------------------------------------------------------

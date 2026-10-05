@@ -328,3 +328,31 @@ fn launch_rings_read_only_and_readings_survive_a_restart() {
     }
     assert!(again.handles.runner.spawned().is_empty());
 }
+
+/// Smoke phase 5 counts two readings, one per account, from the fake
+/// `claude`, which answers `get_usage` with the smoke profile's
+/// `usage.json`: that file is a reading the probe keeps (a `limits` list,
+/// so never Claude Code's seeded fallback, which a profile with no cached
+/// usage couldn't date).
+#[test]
+fn the_smoke_usage_fixture_is_a_probe_reading() {
+    use agentnotch_engine::usage::parser::{parse_get_usage_response, GetUsageResult};
+    use agentnotch_engine::usage::probe::interpret_probe_answer;
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../scripts/smoke/profile/usage.json"
+    );
+    let fixture: Value = serde_json::from_slice(&std::fs::read(path).expect("usage.json"))
+        .expect("usage.json is JSON");
+    let GetUsageResult::Usage(parsed) =
+        parse_get_usage_response(fixture.as_object().expect("an object"))
+    else {
+        panic!("not a usage answer: {fixture}");
+    };
+    assert!(!parsed.is_possibly_seeded);
+    let now = UNIX_EPOCH + Duration::from_millis(TEST_START_MS);
+    let id = agentnotch_engine::model::IdentityId::from("uuid:smoke");
+    let (reading, rate_limited) = interpret_probe_answer(&parsed, &id, now, None, Some(now));
+    assert!(!rate_limited);
+    assert!(reading.is_some(), "the probe keeps a reading");
+}

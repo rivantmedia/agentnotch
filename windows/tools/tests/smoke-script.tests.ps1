@@ -292,10 +292,15 @@ Test-Case 'the profile is built exactly as the design says' {
     Assert-Equal @(Compare-Hashes -Before $hashes -After (New-SmokeProfile -Root $root -Fixtures $fixtures -FakeClaude $fake)).Count 0 'rebuild'
 }
 
-Test-Case 'the usage fixture is JSON the probe parser can read (five-hour and weekly windows)' {
+Test-Case 'the usage fixture is a get_usage answer the probe parser takes as a reading (five-hour and weekly windows)' {
+    # fake-claude answers get_usage with this object as the control response's `response`.
     $usage = Get-Content (Join-Path $fixtures 'usage.json') -Raw | ConvertFrom-Json
-    Assert-Equal $usage.five_hour.utilization 12 'five hour'
-    Assert-Equal $usage.seven_day.utilization 34 'weekly'
+    Assert-True $usage.rate_limits_available 'rate limits available'
+    Assert-Equal $usage.rate_limits.five_hour.utilization 12 'five hour'
+    Assert-Equal $usage.rate_limits.seven_day.utilization 34 'weekly'
+    # Without `limits` the parser takes the answer for Claude Code's seeded fallback, which the
+    # probe can only date from .claude.json's cache (the fixtures have none): no reading.
+    Assert-Equal (@($usage.rate_limits.limits | ForEach-Object { $_.kind }) -join ',') 'session,weekly_all' 'the limits list'
 }
 
 # --- the doctor -----------------------------------------------------------------------------------
