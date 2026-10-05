@@ -40,7 +40,9 @@ use crate::control::{hosts, looking, messaging, reactions};
 use crate::model::{
     AttentionTransition, HubSnapshot, RingId, SessionId, SessionState, SessionView,
 };
-use crate::platform::{ConsoleInfo, FocusOutcome, Foreground, HostApp, HostKind, TypeOutcome};
+use crate::platform::{
+    ConsoleInfo, FocusOutcome, Foreground, HostApp, HostKind, Liveness, Processes, TypeOutcome,
+};
 use crate::runtime_types::{
     Input, Job, JobId, PanelState, ReactionContext, ReviewAction, RingReading, SessionInput,
     ToastContext,
@@ -51,6 +53,10 @@ use std::time::{Duration, SystemTime};
 
 /// A process as the lookups know it: its pid and start time.
 type ProcKey = (u32, SystemTime);
+
+/// A process at the session's pid that started this much later than the
+/// session's own is another process (the session store's tolerance).
+const PID_REUSE_TOLERANCE: Duration = Duration::from_secs(1);
 
 /// A host that wasn't found is looked for again after this long (the Mac's
 /// `HostAppCache`): the terminal may have been reattached.
@@ -153,6 +159,22 @@ fn is_fresh(at: SystemTime, now: SystemTime, lifetime: Duration) -> bool {
 
 fn proc_key(view: &SessionView) -> Option<ProcKey> {
     Some((view.pid?, view.pid_started?))
+}
+
+/// The process at `pid` runs now and is the one started at `started`: a
+/// start time read now, within the tolerance. Unknown is not confirmed.
+fn process_confirmed(processes: &dyn Processes, (pid, started): ProcKey) -> bool {
+    if processes.liveness(pid) == Liveness::Gone {
+        return false;
+    }
+    let Some(current) = processes.start_time(pid) else {
+        return false;
+    };
+    let apart = match current.duration_since(started) {
+        Ok(apart) => apart,
+        Err(earlier) => earlier.duration(),
+    };
+    apart < PID_REUSE_TOLERANCE
 }
 
 fn unknown_host() -> HostApp {
@@ -616,6 +638,12 @@ impl Core {
         let Some(key) = proc_key(view) else {
             return false;
         };
+        // Return goes only to the process the session recorded. The store
+        // keeps a session whose pid it can't date as running; for typing, a
+        // start time that can't be read now confirms nothing.
+        if !process_confirmed(self.platform.processes.as_ref(), key) {
+            return false;
+        }
         let Some((info, _)) = self.control_w.consoles.get(&key) else {
             return false;
         };

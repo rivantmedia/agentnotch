@@ -273,6 +273,8 @@ enum HookState {
     /// Hooks are switched off, the account isn't tracked, or nothing runs it.
     Off,
     Unreadable,
+    /// Another program holds settings.json right now: busy, not broken.
+    InUse,
     MissingFolder,
 }
 
@@ -288,6 +290,7 @@ fn aggregate(statuses: &[Option<FolderHookStatus>]) -> Option<FolderHookStatus> 
     if known.len() > 1 {
         status.config_dir_exists = known.iter().any(|s| s.config_dir_exists);
         status.settings_readable = known.iter().all(|s| s.settings_readable);
+        status.settings_in_use = known.iter().any(|s| s.settings_in_use);
         status.hooks_registered = known.iter().any(|s| s.hooks_registered);
         status.hooks_installed = known.iter().all(|s| s.hooks_installed);
         status.status_line_installed = known.iter().all(|s| s.status_line_installed);
@@ -318,6 +321,14 @@ fn hook_summary(
         return (
             HookKind::MissingFolder,
             Some("The folder doesn't exist any more.".to_owned()),
+        );
+    }
+    // A file another program holds isn't broken, only busy: say so before
+    // the "isn't valid JSON" reading, which would send the user to fix it.
+    if status.settings_in_use {
+        return (
+            HookKind::InUse,
+            Some(crate::hooks::apply::IN_USE.to_owned()),
         );
     }
     if !status.settings_readable {
@@ -353,6 +364,8 @@ enum HookKind {
     Installed,
     NotInstalled,
     Unreadable,
+    /// Another program holds settings.json: busy, not broken.
+    InUse,
     MissingFolder,
     /// Not tracked, and none of our hooks left behind.
     Hidden,
@@ -364,6 +377,7 @@ fn hook_state(kind: HookKind, hooks_enabled: bool, installs_disabled: bool) -> H
     match kind {
         HookKind::Installed => HookState::Installed,
         HookKind::Unreadable => HookState::Unreadable,
+        HookKind::InUse => HookState::InUse,
         HookKind::MissingFolder => HookState::MissingFolder,
         HookKind::Hidden => HookState::Off,
         HookKind::NotInstalled | HookKind::Unknown => {
@@ -394,6 +408,7 @@ fn hook_title(
         HookState::NotInstalled => "Hooks not installed",
         HookState::Off => "Hooks off",
         HookState::Unreadable => "settings.json unreadable",
+        HookState::InUse => "settings.json in use",
         HookState::MissingFolder => "Folder missing",
     }
     .to_owned()
@@ -402,7 +417,7 @@ fn hook_title(
 fn hook_tone(state: HookState) -> &'static str {
     match state {
         HookState::Installed => "ok",
-        HookState::NotInstalled => "warning",
+        HookState::NotInstalled | HookState::InUse => "warning",
         HookState::Unreadable => "critical",
         HookState::Off | HookState::MissingFolder => "neutral",
     }
@@ -640,6 +655,8 @@ fn folder_rows(
                 "Checking…"
             } else if !status.config_dir_exists {
                 "Folder missing"
+            } else if status.settings_in_use {
+                "settings.json in use"
             } else if !status.settings_readable {
                 "settings.json unreadable"
             } else if status.hooks_installed {

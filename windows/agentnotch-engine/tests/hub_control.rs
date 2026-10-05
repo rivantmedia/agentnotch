@@ -19,15 +19,15 @@ use agentnotch_engine::hub::{Call, HubEvent};
 use agentnotch_engine::model::{HubSnapshot, SessionRow};
 use agentnotch_engine::platform::{
     Chime, Clock, ConnId, ConsoleInfo, ConsoleInput, ConsoleTarget, FocusOutcome, FocusStep,
-    Foreground, HostApp, HostKind, Platform, ToastKind, TypeOutcome,
+    Foreground, HostApp, HostKind, Liveness, Platform, ToastKind, TypeOutcome,
 };
 use agentnotch_engine::runtime_types::{Input, PanelState};
-use agentnotch_engine::testkit::FakeConsole;
+use agentnotch_engine::testkit::{FakeConsole, FakeProcesses};
 use hub_support::live::{eventually, TestHub};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 /// Claude Code's pid in every frame (the hook's own is another).
 const PID: u32 = 4242;
@@ -382,6 +382,41 @@ fn a_request_raised_between_typed_and_submit_keeps_return_unpressed() {
     // The request is still the user's to answer.
     assert!(w.row("s1").unwrap().pending.is_some());
     assert!(w.hub.handles.transport.responses().is_empty());
+}
+
+/// Return goes only to the process the session recorded: when, between the
+/// text and Return, the pid belongs to a process started later, or to one
+/// whose start time can't be read (which the session store still counts as
+/// running), Return is never pressed.
+#[test]
+fn return_is_never_pressed_into_a_process_not_confirmed_as_claude() {
+    type Change = fn(&FakeProcesses, SystemTime);
+    let cases: [(&str, Change); 2] = [
+        ("an unreadable start time", |processes, _| {
+            processes.remove(PID);
+            processes.set_liveness(PID, Liveness::Alive);
+        }),
+        ("a reused pid", |processes, now| {
+            processes.add(PID, 1, "pwsh.exe", now);
+        }),
+    ];
+    for (case, change) in cases {
+        let gap: Gap = Arc::default();
+        let recorder = Arc::new(FakeConsole::default());
+        let (inner, slot) = (recorder.clone(), gap.clone());
+        let w = world_with(move |platform| {
+            platform.console = Arc::new(GapConsole { inner, gap: slot });
+        });
+        w.set("typeReplies", json!(true));
+        w.finished("s1");
+        let (processes, clock) = (w.hub.handles.processes.clone(), w.hub.handles.clock.clone());
+        *gap.lock().unwrap() = Some(Box::new(move || change(&processes, clock.now())));
+        let sent = w.send_message("s1", "go on");
+        assert_eq!(sent["outcome"], "typed_not_submitted", "{case}: {sent}");
+        let typed = recorder.typed();
+        assert_eq!(typed.len(), 1, "{case}: {typed:?}");
+        assert!(!typed[0].2, "{case}: Return was pressed");
+    }
 }
 
 /// A reply sent while Claude works is held, checked again every 250 ms, and

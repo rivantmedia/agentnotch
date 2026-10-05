@@ -675,6 +675,27 @@ fn the_hook_chip_says_what_is_true() {
     assert!(row.hook_problem_critical);
     assert_eq!(row.folders[0].state, "settings.json unreadable");
 
+    // One another program holds is busy, not broken: it says so instead of
+    // "isn't valid JSON", and installing stays offered for a retry.
+    let held = FolderHookStatus {
+        config_dir_exists: true,
+        settings_readable: false,
+        settings_in_use: true,
+        ..FolderHookStatus::default()
+    };
+    read(&mut world, MAIN, held);
+    let snapshot = world.snapshot();
+    let row = account(&snapshot, "me@personal.example");
+    assert_eq!(row.hook_state, "settings.json in use");
+    assert_eq!(row.hook_state_tone, "warning");
+    assert!(!row.hook_problem_critical);
+    assert_eq!(
+        row.hook_problem.as_deref(),
+        Some(agentnotch_engine::hooks::apply::IN_USE)
+    );
+    assert!(row.can_install);
+    assert_eq!(row.folders[0].state, "settings.json in use");
+
     read(&mut world, MAIN, FolderHookStatus::default());
     let snapshot = world.snapshot();
     let row = account(&snapshot, "me@personal.example");
