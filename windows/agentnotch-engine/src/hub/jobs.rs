@@ -167,6 +167,31 @@ pub fn run(job: &Job, ctx: &JobContext, checkpoint: &mut dyn FnMut() -> bool) ->
             any_terminal: p.terminals.any_terminal_visible(),
             full_screen: p.terminals.foreground().is_some_and(|f| f.fullscreen),
         },
+        Job::ReadHookStatus { folders } => {
+            let setup = crate::hooks::apply::Setup::detect();
+            JobResult::HookStatus(
+                folders
+                    .iter()
+                    .map(|(folder, dir)| {
+                        (
+                            folder.clone(),
+                            crate::hooks::apply::read_status(dir, p.files.as_ref(), &setup),
+                        )
+                    })
+                    .collect(),
+            )
+        }
+        Job::RemoveCodenotchHooks {
+            folder,
+            settings_path,
+        } => JobResult::CodenotchRemoved {
+            folder: folder.clone(),
+            result: crate::hooks::apply::remove_codenotch_hooks(
+                settings_path,
+                p.files.as_ref(),
+                p.clock.as_ref(),
+            ),
+        },
     }
 }
 
@@ -288,6 +313,12 @@ pub fn failure_result(job: &Job, why: &str, platform: &Platform) -> JobResult {
         Job::Visibility => JobResult::Visible {
             any_terminal: true,
             full_screen: false,
+        },
+        // Nothing read: what is known of the folders stays.
+        Job::ReadHookStatus { .. } => JobResult::HookStatus(Vec::new()),
+        Job::RemoveCodenotchHooks { folder, .. } => JobResult::CodenotchRemoved {
+            folder: folder.clone(),
+            result: Err(why),
         },
     }
 }

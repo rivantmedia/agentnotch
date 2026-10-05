@@ -2,7 +2,8 @@
 //! `api` fixes its surface; `project` and `project_settings` make what the
 //! pages draw; `sealed_fixture` is the sealed hub, serving `sealed_demo` (the
 //! fixture stores through those projections). `runtime` is the live hub:
-//! `an-core` over `core_state::Core`, the worker lanes of `jobs`.
+//! `an-core` over `core_state::Core`, the worker lanes of `jobs`; the
+//! `wire_*` files wire each package's store into the core.
 
 pub mod api;
 mod core_state;
@@ -12,5 +13,8 @@ pub mod project_settings;
 pub mod runtime;
 pub mod sealed_demo;
 pub mod sealed_fixture;
+mod wire_accounts;
+mod wire_hooks;
+mod wire_usage;
 
 pub use api::*;

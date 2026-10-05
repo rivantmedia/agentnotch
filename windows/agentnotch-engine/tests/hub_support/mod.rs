@@ -428,7 +428,7 @@ pub mod live {
         pub files: Arc<RecordingFiles>,
         pub events: Arc<Mutex<Vec<(Instant, HubEvent)>>>,
         pub roots: Roots,
-        _dir: tempfile::TempDir,
+        _dir: Option<tempfile::TempDir>,
     }
 
     pub fn config(roots: &Roots) -> HubConfig {
@@ -463,7 +463,20 @@ pub mod live {
             customise: impl FnOnce(&mut Platform),
         ) -> TestHub {
             let dir = tempfile::tempdir().expect("a temporary root");
-            let (mut platform, handles) = testkit::platform(dir.path());
+            let mut hub = TestHub::over(dir.path(), options, configure, customise);
+            hub._dir = Some(dir);
+            hub
+        }
+
+        /// A hub over a root the test made (and keeps): its home is
+        /// `<base>\home`, as `Roots::under` lays it out.
+        pub fn over(
+            base: &Path,
+            options: RuntimeOptions,
+            configure: impl FnOnce(&mut HubConfig),
+            customise: impl FnOnce(&mut Platform),
+        ) -> TestHub {
+            let (mut platform, handles) = testkit::platform(base);
             let files = Arc::new(RecordingFiles::default());
             platform.files = files.clone();
             customise(&mut platform);
@@ -484,7 +497,7 @@ pub mod live {
                 files,
                 events,
                 roots,
-                _dir: dir,
+                _dir: None,
             }
         }
 

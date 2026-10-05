@@ -611,9 +611,21 @@ impl Hub {
     }
 
     /// Removes this app's hooks from every folder it wrote (the
-    /// `hook-install.json` record plus discovery).
+    /// `hook-install.json` record plus discovery), restoring the status
+    /// lines. Refused while installs are off for the run (`--no-install`,
+    /// read from this process's environment and arguments).
     pub fn uninstall_hooks(roots: &Roots, platform: &Platform) -> Result<String, String> {
-        let _ = (roots, platform);
-        Err("Removing hooks isn't in this build yet.".to_owned())
+        let args: Vec<String> = std::env::args().collect();
+        let flags = DevFlags::from_env(|name| std::env::var(name).ok(), &args, &roots.paths());
+        Self::uninstall_hooks_with(roots, platform, &flags)
+    }
+
+    /// [`Hub::uninstall_hooks`] with the run's switches given.
+    pub fn uninstall_hooks_with(
+        roots: &Roots,
+        platform: &Platform,
+        flags: &DevFlags,
+    ) -> Result<String, String> {
+        super::wire_hooks::uninstall_everywhere(roots, platform, flags)
     }
 }

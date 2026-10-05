@@ -248,6 +248,9 @@ impl HubBackend for Runtime {
         let mut idle = lock(&inner.idle);
         let mut core = idle.take().unwrap_or_else(|| inner.load_core());
         inner.runner.resume();
+        // The launch discovery and each store's schedule, before the first
+        // projection.
+        core.on_start();
         let (quit, quit_rx) = crossbeam_channel::bounded::<()>(0);
         let workers = match inner.lanes.spawn_workers(&inner.ctx, &inner.tx, &quit_rx) {
             Ok(workers) => workers,
@@ -348,8 +351,16 @@ impl HubBackend for Runtime {
     }
 
     fn launch_rings(&self) -> Vec<RingSummary> {
-        // wp7-7: a synchronous read-only discovery.
-        self.snapshot().rings
+        // Before a start: a synchronous discovery that reads only (the
+        // rings exist from the first frame); a running hub has its rings.
+        let now = self.inner.platform.clock.now();
+        self.inner
+            .with_idle_core(|core, _| {
+                core.ensure_discovered(now);
+                let readings = core.readings(now);
+                project::launch_rings(&core.registry.accounts(), &readings, now)
+            })
+            .unwrap_or_else(|| self.snapshot().rings)
     }
 
     fn upstream_usage(&self) -> UpstreamUsage {

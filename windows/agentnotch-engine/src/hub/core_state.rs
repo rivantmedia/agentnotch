@@ -5,29 +5,38 @@
 //! blocks on IO: blocking work leaves as a [`Job`] through the outbox and
 //! comes back through [`Core::job_done`].
 //!
-//! The packages are wired in by the next sub-tasks, each at the seam named
-//! for it below: accounts, usage and hooks (wp7-7), ingress, sessions,
-//! review and chat (wp7-8), control (wp7-9), cloud (wp7-10).
+//! The packages are wired in their own files: accounts, usage and hooks
+//! (`wire_accounts`, `wire_usage`, `wire_hooks`); the next sub-tasks wire
+//! ingress, sessions, review and chat (wp7-8), control (wp7-9) and cloud
+//! (wp7-10) at the seams named for them below.
 //!
 //! Owner: WP7.
 
 use super::api::{Call, CallError, HubConfig, HubEvent};
 use super::project::{self, Directory, ProjectionInput, RowExtras};
 use super::project_settings::{settings_snapshot, setup_state, SettingsInput, SetupInput};
-use crate::accounts::AccountRegistry;
+use super::wire_accounts::AccountsWiring;
+use super::wire_hooks::HooksWiring;
+use super::wire_usage::UsageWiring;
+use crate::accounts::{AccountRegistry, DiskProbe};
 use crate::attention::rows::ResetClock;
 use crate::core::settings::ControlSettings;
 use crate::hooks::HookManager;
 use crate::model::*;
+use crate::persist::hook_install::HookInstallFile;
 use crate::persist::settings::SettingsFile;
+use crate::persist::usage::UsageStateFile;
 use crate::platform::{Expect, NotifyPermission, Platform, WriteMode};
 use crate::runtime_types::*;
 use crate::sessions::SessionStore;
-use crate::usage::store::UsageStore;
+use crate::usage::store::{UsageStore, UsageStoreConfig};
+use crate::usage::ProbeEnvironment;
 use agentnotch_proto::ControlStatus;
 use crossbeam_channel::Sender;
 use serde_json::{json, Value};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::path::Path;
+use std::sync::Arc;
 use std::time::SystemTime;
 
 /// Where a call's answer goes.
@@ -86,6 +95,25 @@ pub(crate) struct Core {
     /// Events that aren't projections (log lines, notices, panel requests),
     /// in order.
     events: Vec<HubEvent>,
+    /// Between a start and a stop: the stores' own schedules run (a stopped
+    /// hub only does what a call asks).
+    pub(crate) live: bool,
+    /// The engine's files in `<support>`: one write per file in flight.
+    persists: Persisting,
+    pub(crate) accounts_w: AccountsWiring,
+    pub(crate) usage_w: UsageWiring,
+    pub(crate) hooks_w: HooksWiring,
+}
+
+/// The writes of `accounts.json`, `usage-state.json` and
+/// `hook-install.json`: never two of one file at once (an older write
+/// landing last would undo the newer), and what was last written, so a
+/// stop writes only what is newer.
+#[derive(Default)]
+struct Persisting {
+    in_flight: HashMap<PersistFile, (JobId, Vec<u8>)>,
+    next: HashMap<PersistFile, Vec<u8>>,
+    saved: HashMap<PersistFile, Vec<u8>>,
 }
 
 impl Core {
@@ -114,8 +142,55 @@ impl Core {
             }
         };
         let settings = settings_file.settings();
-        let hooks = HookManager::configured(cfg.hook_exe.clone(), &cfg.flags);
-        let registry = AccountRegistry::new(cfg.roots.paths());
+        let mut persists = Persisting::default();
+        let mut hooks = HookManager::configured(cfg.hook_exe.clone(), &cfg.flags);
+        if let Some(file) = read_support(&cfg.roots.support, PersistFile::HookInstall, &mut events)
+            .and_then(|bytes| HookInstallFile::parse(&bytes))
+        {
+            hooks.set_record(file.to_model());
+        }
+        persists.saved.insert(
+            PersistFile::HookInstall,
+            HookInstallFile::from_model(hooks.record()).encode(),
+        );
+        let paths = cfg.roots.paths();
+        let mut registry = AccountRegistry::new(paths.clone())
+            .with_extra_config_dirs(&cfg.flags.extra_config_dirs)
+            .with_probe(Arc::new(DiskProbe::new(
+                paths,
+                platform.files.clone(),
+                platform.processes.clone(),
+            )));
+        if let Some(bytes) = read_support(&cfg.roots.support, PersistFile::Accounts, &mut events) {
+            if !registry.load(&bytes) {
+                events.push(HubEvent::Log(format!(
+                    "{} didn't parse; the accounts are found again",
+                    PersistFile::Accounts.file_name()
+                )));
+            }
+        }
+        if let Some(bytes) = registry.file_bytes() {
+            persists.saved.insert(PersistFile::Accounts, bytes);
+        }
+        let mut usage = UsageStore::with_config(UsageStoreConfig::for_run(
+            cfg.roots.home.clone(),
+            &cfg.flags,
+            &settings,
+        ));
+        let base_env: Vec<(std::ffi::OsString, std::ffi::OsString)> = std::env::vars_os().collect();
+        let env_path = base_env
+            .iter()
+            .find(|(name, _)| name.to_string_lossy().eq_ignore_ascii_case("PATH"))
+            .map(|(_, value)| value.clone())
+            .unwrap_or_default();
+        usage.set_probe_environment(ProbeEnvironment {
+            roots: cfg.roots.clone(),
+            base_env,
+            env_path,
+            claude_binary_path: settings.claude_binary_path.as_ref().map(Into::into),
+        });
+        let saved_usage = read_support(&cfg.roots.support, PersistFile::Usage, &mut events)
+            .and_then(|bytes| UsageStateFile::parse(&bytes));
         let cloud = CloudState {
             website_url: cfg.website.clone(),
             ..CloudState::default()
@@ -134,7 +209,7 @@ impl Core {
             settings_write: None,
             registry,
             hooks,
-            usage: UsageStore::new(),
+            usage,
             sessions: SessionStore::new(),
             cloud,
             panel: PanelState::default(),
@@ -151,7 +226,23 @@ impl Core {
             outbox: Vec::new(),
             backlog: VecDeque::new(),
             events,
+            live: false,
+            persists,
+            accounts_w: AccountsWiring::default(),
+            usage_w: UsageWiring::new(saved_usage),
+            hooks_w: HooksWiring::default(),
         }
+    }
+
+    /// The hub starts: the launch discovery (when no call made it yet),
+    /// then each store's schedule from now.
+    pub(crate) fn on_start(&mut self) {
+        let now = self.platform.clock.now();
+        self.live = true;
+        self.accounts_on_start(now);
+        self.usage_on_start(now);
+        self.hooks_on_start(now);
+        self.after_input();
     }
 
     // ---- inputs ----
@@ -210,6 +301,28 @@ impl Core {
                 self.hotkey_message = if ok { None } else { message };
                 Ok(json!({}))
             }
+            // Calls whose answer may wait for a job keep their reply.
+            Call::RefreshUsage { ring_id, reason } => {
+                return self.refresh_usage_call(ring_id, reason, reply)
+            }
+            Call::HooksReinstall { account_id } => {
+                return self.hooks_reinstall_call(account_id.as_deref(), reply)
+            }
+            Call::RemoveCodenotchHooks { folder } => {
+                return self.remove_codenotch_call(&folder, reply)
+            }
+            Call::ChooseClaudeBinary { path } => {
+                return self.choose_claude_binary_call(path.as_deref(), reply)
+            }
+            Call::HookConsent { grant } => self.hook_consent_call(grant),
+            Call::HooksEnabled { on } => self.hooks_enabled_call(on),
+            Call::StatusLineEnabled { on } => self.status_line_call(on),
+            Call::AcknowledgeScope => self.acknowledge_scope_call(),
+            Call::Account { action } => self.account_call(action),
+            Call::LaunchCommand { account_id } => self.launch_command_call(&account_id),
+            Call::RevealTarget { kind, id } if kind != super::api::RevealKind::SessionCwd => {
+                self.reveal_target_call(kind, &id)
+            }
             // Wired by the next sub-tasks (see the module doc).
             other => Err(CallError::failed(format!(
                 "{} isn't available in this build yet.",
@@ -252,9 +365,10 @@ impl Core {
         if next == self.settings {
             return;
         }
-        self.settings = next;
+        let old = std::mem::replace(&mut self.settings, next);
         self.settings_file.apply(&self.settings);
         self.settings_dirty = true;
+        self.usage_settings_changed(&old);
     }
 
     /// Hands the settings write out when one is due and none is in flight.
@@ -302,6 +416,8 @@ impl Core {
         let Some(pending) = self.jobs.remove(&id) else {
             return;
         };
+        let mut reply = pending.reply;
+        let now = self.platform.clock.now();
         match result {
             JobResult::Persisted(outcome) if self.settings_write == Some(id) => {
                 self.settings_write = None;
@@ -310,14 +426,83 @@ impl Core {
                     self.log(format!("settings not saved: {why}"));
                 }
             }
-            JobResult::Persisted(Err(why)) => self.log(format!("not saved: {why}")),
-            // wp7-7..10 take their results here.
+            JobResult::Persisted(outcome) => self.persisted(id, outcome),
+            JobResult::Folders(snapshot) => self.folders_read(id, snapshot, now),
+            JobResult::ClaudeJson(read) => self.claude_json_read(id, read, now),
+            JobResult::Desktop(reading) => self.desktop_read(id, reading, now),
+            JobResult::Probe(result) => self.probe_done(id, result, now),
+            JobResult::Installed(outcomes) => self.installed(id, outcomes, &mut reply),
+            JobResult::HookStatus(statuses) => self.hook_statuses_read(id, statuses),
+            JobResult::Versions(sightings) => self.versions_read(id, sightings, now, &mut reply),
+            JobResult::CodenotchRemoved { folder, result } => {
+                self.codenotch_removed(id, &folder, result, &mut reply)
+            }
+            // wp7-8..10 take their results here.
             _ => {}
         }
-        if let Some(reply) = pending.reply {
+        if let Some(reply) = reply {
             let _ = reply.send(Err(CallError::failed(
                 "That isn't available in this build yet.",
             )));
+        }
+    }
+
+    // ---- the engine's files ----
+
+    /// Writes one of the engine's files (not the settings, which have their
+    /// own writer): now, or after the write of it in flight.
+    pub(crate) fn persist(&mut self, file: PersistFile, bytes: Vec<u8>) {
+        let newest = self
+            .persists
+            .next
+            .get(&file)
+            .or_else(|| self.persists.in_flight.get(&file).map(|(_, bytes)| bytes))
+            .or_else(|| self.persists.saved.get(&file));
+        if newest == Some(&bytes) {
+            return;
+        }
+        if self.persists.in_flight.contains_key(&file) {
+            self.persists.next.insert(file, bytes);
+            return;
+        }
+        let id = self.schedule(
+            Job::Persist {
+                file,
+                bytes: bytes.clone(),
+            },
+            None,
+        );
+        self.persists.in_flight.insert(file, (id, bytes));
+    }
+
+    fn persisted(&mut self, id: JobId, outcome: Result<(), String>) {
+        let Some(file) = self
+            .persists
+            .in_flight
+            .iter()
+            .find(|(_, (job, _))| *job == id)
+            .map(|(file, _)| *file)
+        else {
+            if let Err(why) = outcome {
+                self.log(format!("not saved: {why}"));
+            }
+            return;
+        };
+        let bytes = self
+            .persists
+            .in_flight
+            .remove(&file)
+            .map(|(_, bytes)| bytes);
+        match outcome {
+            Ok(()) => {
+                if let Some(bytes) = bytes {
+                    self.persists.saved.insert(file, bytes);
+                }
+            }
+            Err(why) => self.log(format!("not saved: {why}")),
+        }
+        if let Some(next) = self.persists.next.remove(&file) {
+            self.persist(file, next);
         }
     }
 
@@ -326,9 +511,18 @@ impl Core {
         self.jobs.values().filter(|job| job.lane == lane).count()
     }
 
-    /// After every input: writes that became due.
+    /// After every input: writes that became due, and while the hub runs,
+    /// the stores' own work that became due.
     pub(crate) fn after_input(&mut self) {
         self.schedule_settings_write();
+        if self.live {
+            let now = self.platform.clock.now();
+            self.drive_accounts(now);
+            self.drive_usage(now);
+        }
+        // Hook writes asked for by a call run on a stopped hub too.
+        let now = self.platform.clock.now();
+        self.drive_hooks(now);
     }
 
     pub(crate) fn take_outbox(&mut self) -> Vec<(JobId, Job)> {
@@ -346,10 +540,19 @@ impl Core {
     /// When the stores next need `an-core` without an input (their own
     /// deadlines; the projection's label boundaries are the runtime's).
     pub(crate) fn next_deadline(&self) -> Option<SystemTime> {
-        // wp7-7 (probe and discovery schedule, hook passes), wp7-8
-        // (`SessionStore::next_deadline`, the interrupt watcher), wp7-9
-        // (auto-close, typing checks).
-        None
+        if !self.live {
+            return None;
+        }
+        // wp7-8 (`SessionStore::next_deadline`, the interrupt watcher),
+        // wp7-9 (auto-close, typing checks) add theirs.
+        [
+            self.accounts_deadline(),
+            self.usage_deadline(),
+            self.hooks_deadline(),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     // ---- stop ----
@@ -362,7 +565,12 @@ impl Core {
                 let _ = reply.send(Err(CallError::failed(STOPPING)));
             }
         }
+        self.usage_w.answer_waiting(STOPPING);
+        self.hooks_w.answer_waiting(STOPPING);
         self.save_now();
+        self.live = false;
+        self.hooks.stop();
+        self.usage.stop();
     }
 
     /// Writes what is unsaved now, synchronously (a stop; the process may
@@ -375,7 +583,35 @@ impl Core {
                 Err(why) => self.log(format!("settings not saved: {why}")),
             }
         }
-        // wp7-7 (accounts, usage `save_now`, hook record), wp7-8 (review).
+        if self.live {
+            if let Some(bytes) = self.registry.file_bytes() {
+                self.save_if_newer(PersistFile::Accounts, bytes);
+                self.registry.mark_saved();
+            }
+            if self.usage_w.restored {
+                let bytes = self.usage.save_now().encode();
+                self.save_if_newer(PersistFile::Usage, bytes);
+            }
+        }
+        let record = HookInstallFile::from_model(self.hooks.record()).encode();
+        self.save_if_newer(PersistFile::HookInstall, record);
+        // wp7-8 (review).
+    }
+
+    /// Writes `bytes` now unless they are what the file was last written
+    /// with (a write still in flight is overtaken: it carries older bytes
+    /// or the same).
+    fn save_if_newer(&mut self, file: PersistFile, bytes: Vec<u8>) {
+        if self.persists.saved.get(&file) == Some(&bytes) {
+            return;
+        }
+        match self.write_support_file(file, &bytes) {
+            Ok(()) => {
+                self.persists.next.remove(&file);
+                self.persists.saved.insert(file, bytes);
+            }
+            Err(why) => self.log(format!("not saved: {why}")),
+        }
     }
 
     fn write_support_file(&self, file: PersistFile, bytes: &[u8]) -> Result<(), String> {
@@ -398,7 +634,7 @@ impl Core {
     // ---- projections ----
 
     /// Each identity's ring reading now.
-    fn readings(&self, now: SystemTime) -> BTreeMap<IdentityId, RingReading> {
+    pub(crate) fn readings(&self, now: SystemTime) -> BTreeMap<IdentityId, RingReading> {
         self.registry
             .accounts()
             .iter()
@@ -494,9 +730,9 @@ impl Core {
         })
     }
 
-    /// An install or removal pass is running (wp7-7 marks those jobs).
+    /// An install or removal is running or waiting to.
     fn jobs_in_flight_of_install(&self) -> bool {
-        false
+        self.hooks_w.busy()
     }
 
     /// `control status` (§4.14), from what the pages are shown.
@@ -601,6 +837,23 @@ fn phase_word(phase: &Phase) -> &'static str {
     }
 }
 
+/// One of the engine's files in `<support>`, as read at load: `None` when
+/// it isn't there (or can't be read, which is logged).
+fn read_support(support: &Path, file: PersistFile, events: &mut Vec<HubEvent>) -> Option<Vec<u8>> {
+    match std::fs::read(support.join(file.file_name())) {
+        Ok(bytes) => Some(bytes),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => {
+            events.push(HubEvent::Log(format!(
+                "{} unreadable ({:?})",
+                file.file_name(),
+                e.kind()
+            )));
+            None
+        }
+    }
+}
+
 pub(crate) fn consent_word(consent: Option<bool>) -> &'static str {
     match consent {
         Some(true) => "granted",
@@ -609,7 +862,7 @@ pub(crate) fn consent_word(consent: Option<bool>) -> &'static str {
     }
 }
 
-fn to_value<T: serde::Serialize>(value: &T) -> Result<Value, CallError> {
+pub(crate) fn to_value<T: serde::Serialize>(value: &T) -> Result<Value, CallError> {
     serde_json::to_value(value).map_err(|e| CallError::failed(e.to_string()))
 }
 

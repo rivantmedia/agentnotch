@@ -122,7 +122,8 @@ pub fn setup_state(input: &SetupInput<'_>) -> SetupState {
     }
     let registry = input.registry;
     let paths = registry.paths();
-    let accounts = registry.accounts();
+    // As the passes see them (a mirrored `~\.claude` is everyone's).
+    let accounts = super::wire_hooks::hook_accounts(registry);
     let folders = registry.folders();
     SetupState {
         hook_consent: settings.hook_consent,
