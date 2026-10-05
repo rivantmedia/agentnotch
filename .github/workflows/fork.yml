@@ -239,8 +239,8 @@ jobs:
           python3 windows/tools/release-harness/identical.py
 
       # The Windows build, smoke and facts scripts' own tests (their pure parts
-      # run anywhere; PowerShell 7 is on Ubuntu runners) and bump-version.sh's,
-      # in a temporary copy. Globs, quoted: Node takes them as test file
+      # run anywhere; PowerShell 7 is on Ubuntu runners), and bump-version.sh's
+      # and verify-token-free.sh's Windows rules', each in a temporary copy. Globs, quoted: Node takes them as test file
       # patterns, not folders.
       - name: Tool tests
         working-directory: .
@@ -250,6 +250,7 @@ jobs:
           pwsh -NoProfile -File windows/tools/tests/check-powershell.ps1
           pwsh -NoProfile -File windows/tools/tests/run.ps1
           bash windows/tools/tests/bump-version.test.sh
+          bash windows/tools/tests/verify-token-free.test.sh
 
       # The Rust app's sync request through the website's real route into
       # Postgres, and the answer back (Docker). Gated until the Rust side of
