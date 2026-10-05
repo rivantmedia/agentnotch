@@ -12,6 +12,11 @@
 //!   first with an Everyone DACL. The hook connects, finds that the owner is not its user, and
 //!   leaves without writing (the squatter records zero bytes, the hook's trace says `pipe is not
 //!   ours`); the app's server, started on that name, reports it in use.
+//! - **Low-integrity squatter.** A process of this same user at Low integrity (a sandboxed
+//!   helper; here `pipe-squatter.exe` started with `integrity::spawn_low`) creates the name first
+//!   with exactly the app's owner and DACL (`--descriptor app`): only the Low label Windows gives
+//!   its pipe tells it apart. The hook, at high and at medium, and the app's own client leave
+//!   without writing; the app's server reports the name in use.
 //!
 //! These tests create a Windows account and change who a process runs as, so they run only with
 //! `AGENTNOTCH_CI_ADMIN=1` (the Windows workflow sets it on its throwaway runner). Without it a
@@ -665,6 +670,156 @@ fn a_pipe_another_user_made_first_gets_nothing_and_is_reported_in_use() {
     let text = std::fs::read_to_string(&record).unwrap_or_default();
     assert_eq!(squatter::read_record(&text), vec![Entry::Connection(0)]);
     assert_eq!(squatter.exit_code(), None, "the squatter ended early");
+}
+
+#[test]
+fn a_pipe_a_low_integrity_process_of_this_user_made_first_gets_nothing() {
+    let name = "a_pipe_a_low_integrity_process_of_this_user_made_first_gets_nothing";
+    let _guard = begin(name);
+    if !admin_run(name) {
+        return;
+    }
+    // A Low process may write only to what is labelled Low: its record and ready files go here.
+    let folder = tempfile::tempdir().expect("a temp folder");
+    label_low(folder.path());
+    let record = folder.path().join("record.txt");
+    let ready = folder.path().join("ready.txt");
+    let pipe = unique_pipe("low-squatter");
+    let mut squatter = integrity::spawn_low(
+        Path::new(SQUATTER),
+        &[
+            "--pipe".to_owned(),
+            pipe.clone(),
+            "--record".to_owned(),
+            record.to_str().expect("Unicode").to_owned(),
+            "--ready".to_owned(),
+            ready.to_str().expect("Unicode").to_owned(),
+            "--max-seconds".to_owned(),
+            "90".to_owned(),
+            "--descriptor".to_owned(),
+            "app".to_owned(),
+        ],
+        None,
+        Piped {
+            stderr: true,
+            ..Piped::default()
+        },
+    )
+    .expect("pipe-squatter starts at low integrity");
+    assert_eq!(
+        squatter.integrity_level(),
+        Some(Level::Low),
+        "the squatter's level"
+    );
+    let stderr = reader(squatter.stderr.take().expect("piped stderr"));
+    wait_for_file(
+        &ready,
+        "the low squatter",
+        || squatter.wait(Duration::ZERO),
+        || {
+            let complaints = stderr
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap_or_default();
+            format!(
+                "; its record: {:?}; its stderr: {:?}",
+                std::fs::read_to_string(&record).unwrap_or_default(),
+                String::from_utf8_lossy(&complaints)
+            )
+        },
+    );
+
+    // The hook at high integrity (an elevated terminal), with a trace, then at medium (a normal
+    // one): each connects, finds the pipe labelled Low, and leaves.
+    let trace = folder.path().join("hook.trace");
+    let request = fixture("stdin/permission_request_bash.json");
+    let done = run_high_hook(&pipe, &request, Some(&trace));
+    assert_eq!(done.code, Some(0), "the high hook's exit code ({done:?})");
+    assert!(done.stdout.is_empty(), "the high hook printed {done:?}");
+    assert!(
+        done.stderr.is_empty(),
+        "the high hook wrote to stderr: {done:?}"
+    );
+    let traced = std::fs::read_to_string(&trace).unwrap_or_default();
+    assert!(
+        traced
+            .lines()
+            .any(|line| line.ends_with(" pipe is not ours")),
+        "the hook's trace: {traced:?}"
+    );
+    wait_for_entries(&record, 1);
+    let done = run_medium_hook(&pipe, &request);
+    assert_eq!(done.code, Some(0), "the medium hook's exit code ({done:?})");
+    assert!(done.stdout.is_empty(), "the medium hook printed {done:?}");
+    assert!(
+        done.stderr.is_empty(),
+        "the medium hook wrote to stderr: {done:?}"
+    );
+    wait_for_entries(&record, 2);
+
+    // The app's own client (`control status`, the doctor) refuses it the same way.
+    match client::control(&pipe, ControlOp::Status, WAIT) {
+        Err(client::ClientError::NotOurs) => {}
+        other => panic!("the app's client should refuse the pipe, it got {other:?}"),
+    }
+    let entries = wait_for_entries(&record, 3);
+    assert_eq!(
+        entries,
+        vec![Entry::Connection(0); 3],
+        "the squatter's record"
+    );
+
+    // The app's server on the same name: the name is somebody else's.
+    let server = PipeServer::new();
+    let (sink, events) = crossbeam_channel::unbounded();
+    server
+        .start(&pipe, sink)
+        .expect("the server's thread starts");
+    let event = events.recv_timeout(WAIT);
+    server.stop();
+    match event {
+        Ok(TransportEvent::Error(why)) => assert_eq!(why, PIPE_IN_USE),
+        other => panic!("the server should report the name in use, it reported {other:?}"),
+    }
+
+    let text = std::fs::read_to_string(&record).unwrap_or_default();
+    assert_eq!(squatter::read_record(&text), vec![Entry::Connection(0); 3]);
+    assert_eq!(
+        squatter.wait(Duration::ZERO),
+        None,
+        "the squatter ended early"
+    );
+}
+
+/// Labels `folder` Low, for itself and everything made in it, so a Low process may write there.
+fn label_low(folder: &Path) {
+    let output = Command::new("icacls")
+        .arg(folder)
+        .args(["/setintegritylevel", "(OI)(CI)low"])
+        .output()
+        .expect("icacls runs");
+    assert!(
+        output.status.success(),
+        "icacls /setintegritylevel: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// The squatter's record once it holds at least `count` lines.
+fn wait_for_entries(record: &Path, count: usize) -> Vec<Entry> {
+    let until = Instant::now() + WAIT;
+    loop {
+        let text = std::fs::read_to_string(record).unwrap_or_default();
+        let entries = squatter::read_record(&text);
+        if entries.len() >= count {
+            return entries;
+        }
+        assert!(
+            Instant::now() < until,
+            "the squatter recorded {entries:?}, not {count} connections"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 // ---- the second user ----

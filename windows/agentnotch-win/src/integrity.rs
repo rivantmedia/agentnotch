@@ -3,9 +3,10 @@
 //! The pipe's checks are built to work across integrity levels: the server identifies its peer
 //! by impersonation, and the client checks the pipe's own descriptor, so neither opens the other
 //! process's token (which fails from medium towards high). This module reads a token's level and
-//! elevation (the doctor's `elevated:` line; the admin tests' preconditions) and, for
-//! `tests/win_admin.rs` only, starts a child at medium integrity from an elevated process, so one
-//! test run can put the hook and the server on either side of the boundary.
+//! elevation (the doctor's `elevated:` line; the admin tests' preconditions), the label of the
+//! client the pipe server impersonates (its peer check), and, for `tests/win_admin.rs` only,
+//! starts a child at medium or low integrity from an elevated process, so one test run can put
+//! the hook, the server and a squatter of the same user on either side of each boundary.
 //!
 //! The level mapping, the command line and the environment block are plain functions tested on
 //! every system; the rest exists on Windows only.
@@ -129,8 +130,8 @@ pub struct Piped {
 
 #[cfg(windows)]
 pub use win::{
-    integrity_level, is_elevated, process_integrity_level, spawn_medium, token_integrity_level,
-    MediumChild,
+    integrity_level, is_elevated, process_integrity_level, spawn_low, spawn_medium,
+    thread_token_integrity_rid, token_integrity_level, token_integrity_rid, MediumChild,
 };
 
 #[cfg(windows)]
@@ -155,14 +156,14 @@ mod win {
     use windows::Win32::Security::{
         CreateWellKnownSid, GetLengthSid, GetSidSubAuthority, GetSidSubAuthorityCount,
         GetTokenInformation, SetTokenInformation, TokenElevation, TokenIntegrityLevel,
-        WinMediumLabelSid, PSID, SAFER_LEVEL_HANDLE, SID_AND_ATTRIBUTES, TOKEN_ELEVATION,
-        TOKEN_MANDATORY_LABEL, TOKEN_QUERY,
+        WinLowLabelSid, WinMediumLabelSid, PSID, SAFER_LEVEL_HANDLE, SID_AND_ATTRIBUTES,
+        TOKEN_ELEVATION, TOKEN_MANDATORY_LABEL, TOKEN_QUERY, WELL_KNOWN_SID_TYPE,
     };
     use windows::Win32::System::Pipes::CreatePipe;
     use windows::Win32::System::Threading::{
-        CreateProcessAsUserW, DeleteProcThreadAttributeList, GetCurrentProcess, GetExitCodeProcess,
-        InitializeProcThreadAttributeList, OpenProcessToken, TerminateProcess,
-        UpdateProcThreadAttribute, WaitForSingleObject, CREATE_NO_WINDOW,
+        CreateProcessAsUserW, DeleteProcThreadAttributeList, GetCurrentProcess, GetCurrentThread,
+        GetExitCodeProcess, InitializeProcThreadAttributeList, OpenProcessToken, OpenThreadToken,
+        TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject, CREATE_NO_WINDOW,
         CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT, LPPROC_THREAD_ATTRIBUTE_LIST,
         PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, STARTF_USESTDHANDLES,
         STARTUPINFOEXW,
@@ -204,6 +205,11 @@ mod win {
 
     /// The integrity level of `token` (open with `TOKEN_QUERY`; neither closed nor kept).
     pub fn token_integrity_level(token: HANDLE) -> Option<Level> {
+        token_integrity_rid(token).map(level_of_rid)
+    }
+
+    /// The RID of `token`'s integrity label (open with `TOKEN_QUERY`; neither closed nor kept).
+    pub fn token_integrity_rid(token: HANDLE) -> Option<u32> {
         let mut needed = 0u32;
         // SAFETY: a size query (no buffer, a valid out pointer); it fails by design.
         let _ = unsafe { GetTokenInformation(token, TokenIntegrityLevel, None, 0, &mut needed) };
@@ -234,8 +240,21 @@ mod win {
             return None;
         }
         // SAFETY: as above; the index is below the SID's sub-authority count.
-        let rid = unsafe { *GetSidSubAuthority(sid, u32::from(count) - 1) };
-        Some(level_of_rid(rid))
+        Some(unsafe { *GetSidSubAuthority(sid, u32::from(count) - 1) })
+    }
+
+    /// The integrity RID of the client the calling thread impersonates (the pipe server's peer
+    /// check); `None` when it impersonates nobody or the token can't be read.
+    ///
+    /// Opened as the process, like `sid::thread_token_sid`: at identification level the client
+    /// may not open its own token.
+    pub fn thread_token_integrity_rid() -> Option<u32> {
+        let mut token = HANDLE::default();
+        // SAFETY: the pseudo-handle of the current thread needs no closing; `token` is a valid
+        // out pointer, closed by `Owned`.
+        unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, true, &mut token) }.ok()?;
+        let token = Owned(token);
+        token_integrity_rid(token.0)
     }
 
     /// The integrity level of the process behind `process` (a handle with
@@ -278,8 +297,8 @@ mod win {
         read.is_ok() && elevation.TokenIsElevated != 0
     }
 
-    /// A child started by [`spawn_medium`]. Dropping it ends the process if it still runs (it
-    /// is a test's helper; nothing may outlive the test).
+    /// A child started by [`spawn_medium`] or [`spawn_low`]. Dropping it ends the process if it
+    /// still runs (it is a test's helper; nothing may outlive the test).
     #[derive(Debug)]
     pub struct MediumChild {
         process: OwnedHandle,
@@ -349,6 +368,28 @@ mod win {
         environment: Option<&[(String, String)]>,
         piped: Piped,
     ) -> io::Result<MediumChild> {
+        spawn_labelled(program, arguments, environment, piped, WinMediumLabelSid)
+    }
+
+    /// [`spawn_medium`], labelled **Low** instead: the same user, as a sandboxed helper of theirs
+    /// runs. Such a child may not write to anything labelled Medium, which is every folder of the
+    /// user's but `LocalLow`: give it a folder labelled Low for its files.
+    pub fn spawn_low(
+        program: &Path,
+        arguments: &[String],
+        environment: Option<&[(String, String)]>,
+        piped: Piped,
+    ) -> io::Result<MediumChild> {
+        spawn_labelled(program, arguments, environment, piped, WinLowLabelSid)
+    }
+
+    fn spawn_labelled(
+        program: &Path,
+        arguments: &[String],
+        environment: Option<&[(String, String)]>,
+        piped: Piped,
+        label_sid: WELL_KNOWN_SID_TYPE,
+    ) -> io::Result<MediumChild> {
         let program = program.to_str().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -360,7 +401,7 @@ mod win {
             .chain(std::iter::once(0))
             .collect();
         let block = environment.map(environment_block);
-        let token = medium_token()?;
+        let token = lowered_token(label_sid)?;
         // The child's ends live until this function returns: the child holds its own copies by
         // then, and the caller's reads see a stream end once the child closes them.
         let (stdin_child, stdin) = stream(piped.stdin, true)?;
@@ -445,8 +486,9 @@ mod win {
         })
     }
 
-    /// The token [`spawn_medium`] starts its child with.
-    fn medium_token() -> io::Result<Owned> {
+    /// The token [`spawn_medium`] and [`spawn_low`] start their child with, labelled with the
+    /// well-known label SID `label_sid`.
+    fn lowered_token(label_sid: WELL_KNOWN_SID_TYPE) -> io::Result<Owned> {
         let mut level = SAFER_LEVEL_HANDLE::default();
         // SAFETY: `level` is a valid out pointer; the level is closed below.
         unsafe {
@@ -479,7 +521,7 @@ mod win {
         let sid = PSID(sid_buffer.as_mut_ptr().cast());
         let mut sid_size = (SID_BUFFER_WORDS * size_of::<u64>()) as u32;
         // SAFETY: `sid` points at `sid_size` writable bytes, aligned, alive until the end.
-        unsafe { CreateWellKnownSid(WinMediumLabelSid, None, Some(sid), &mut sid_size) }
+        unsafe { CreateWellKnownSid(label_sid, None, Some(sid), &mut sid_size) }
             .map_err(failed("CreateWellKnownSid"))?;
         let label = TOKEN_MANDATORY_LABEL {
             Label: SID_AND_ATTRIBUTES {
