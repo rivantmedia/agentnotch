@@ -2625,7 +2625,9 @@ script's output.
 - Windows pattern set (added to the Mac set): `claudeAiOauth`, `api/oauth/usage`,
   `oauth-2025-04-20`, `CredReadW`, `CredEnumerateW`, `read_credentials(`, `probe_credentials(`,
   `run_renewal(`, `maybe_renew(`, `start_login(`, `auth login`, `setup-token`, `sessions\\*.key`,
-  `usage::start(`, `claude_auth::`, plus the Mac's `.credentials.json` and `sessions/*.key`.
+  `usage::start(`, `claude_auth::`, `doctor::run(`, `watcher::start(`, `usage::profile_dirs`,
+  `usage::request_refresh`, `usage::find_cli`, plus the Mac's `.credentials.json` and
+  `sessions/*.key`.
 - Fork-owned Windows dirs: none of the patterns anywhere (excluding `target`, `gen`,
   `node_modules`), except `ALLOWED_LINES` (e.g. the smoke script's assertion that the doctor
   output never contains `.credentials.json`, listed verbatim).
@@ -2640,6 +2642,12 @@ script's output.
   `usage::probe_credentials(` or anything in `claude_auth::`); `start_login` only in
   `claude_auth.rs`, and main.rs's WU1c-replaced line must be gone; seams WU1a–e, WD1, WCLI
   present; `usage::start(` absent from main.rs code lines.
+- By name, over upstream's files and the fork's glue (`src/agentnotch/`) alike, comment lines
+  aside: `usage::` only for the reviewed names (`USAGE_REVIEWED`: the snapshot types and
+  `load_persisted`), `doctor::` only in main's `"doctor"` arm (`doctor::run()`, which WCLI
+  claims first), `watcher::` only in `watcher.rs` and `doctor.rs`. The glue is where a new call
+  into the dormant path would be written, so it is not exempt
+  (`windows/tools/tests/verify-token-free.test.sh`).
 - GLM's read of `env.ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY` (§4.16) is pinned: those two names
   appear in `windows/codenotch/src/` only in `glm.rs`, and the SHA-256 of `glm.rs`'s
   `claude_code_key` function (its text from `fn claude_code_key` to the next top-level `fn`)
