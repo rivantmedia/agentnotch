@@ -1032,15 +1032,20 @@ function Get-ControlStatus {
 }
 
 # Polls `control status` until it passes the check or the time is up; throws what it last saw.
+# -Expect compares lines with Test-ControlStatus; -Check is a script block for anything else. A
+# check made with GetNewClosure runs in a module of its own that sees none of this script's
+# functions, so it may use only its captured variables: a comparison goes through -Expect.
 function Wait-ControlStatus {
-    param([Parameter(Mandatory)][scriptblock]$Check, [Parameter(Mandatory)][int]$Seconds, [Parameter(Mandatory)][string]$What)
+    param([scriptblock]$Check = $null, [System.Collections.IDictionary]$Expect = $null, [Parameter(Mandatory)][int]$Seconds, [Parameter(Mandatory)][string]$What)
+    if (-not $Check -and -not $Expect) { throw 'Wait-ControlStatus needs -Check or -Expect' }
     $deadline = (Get-Date).AddSeconds($Seconds)
     $last = $null
     while ($true) {
         $last = $null
         try { $last = Get-ControlStatus } catch { $last = "no status: $($_.Exception.Message)" }
         if ($last -isnot [string]) {
-            $problems = @(& $Check $last)
+            $problems = if ($Expect) { @(Test-ControlStatus -Status $last -Expect $Expect) } else { @() }
+            if ($Check) { $problems += @(& $Check $last) }
             if (-not $problems.Count) { return $last }
             $seen = ($problems -join '; ')
         } else { $seen = $last }
@@ -1397,7 +1402,7 @@ function Invoke-BeforeConsentPhase {
     if ($script:LiveApp.HasExited) { throw "the app exited with $($script:LiveApp.ExitCode) within 30 s" }
 
     $expect = [ordered]@{ transport = 'listening'; accounts = '2'; hook_consent = 'unasked'; readings = '2' }
-    $status = Wait-ControlStatus -Seconds 60 -What 'control status before consent' -Check ({ param($s) Test-ControlStatus -Status $s -Expect $expect }.GetNewClosure())
+    $status = Wait-ControlStatus -Seconds 60 -What 'control status before consent' -Expect $expect
     Write-PhaseLog ("control status: " + (($status.GetEnumerator() | ForEach-Object { "$($_.Key): $($_.Value)" }) -join ', '))
 
     $changed = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P) -Exclude 'AppData/*')
@@ -1852,7 +1857,7 @@ function Start-LiveApp {
     $environment = Merge-Environment @((Get-AppEnvironment), @{ WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$($script:CdpPort)" }, $Extra)
     $script:LiveApp = Register-OwnProcess (Start-AppProcess -Exe $script:AppExe -Environment $environment)
     Write-PhaseLog "the real app is running as process $($script:LiveApp.Id), DevTools on port $($script:CdpPort)"
-    Wait-ControlStatus -Seconds 60 -What 'the app to listen' -Check ({ param($s) Test-ControlStatus -Status $s -Expect @{ transport = 'listening' } }.GetNewClosure()) | Out-Null
+    Wait-ControlStatus -Seconds 60 -What 'the app to listen' -Expect @{ transport = 'listening' } | Out-Null
     if ($script:LiveApp.HasExited) { throw "the app exited with $($script:LiveApp.ExitCode)" }
 }
 
@@ -1907,7 +1912,7 @@ function Invoke-CloudPhase {
 
         # 2. The browser's answer: the registered scheme hands the callback to the running app.
         Start-Process 'agentnotch://auth-callback?code=smoke'
-        Wait-ControlStatus -Seconds 10 -What 'control status to say cloud: signed_in' -Check ({ param($s) Test-ControlStatus -Status $s -Expect @{ cloud = 'signed_in' } }.GetNewClosure()) | Out-Null
+        Wait-ControlStatus -Seconds 10 -What 'control status to say cloud: signed_in' -Expect @{ cloud = 'signed_in' } | Out-Null
         $support = Find-SupportDir -Profile $script:P
         if (-not $support) { throw 'no support folder' }
         $session = Join-Path $support 'cloud-session.json'
@@ -2067,7 +2072,7 @@ function Invoke-UpdatePhase {
         # /R: the updated app is running again.
         Wait-Until { [bool](Find-RunningApp) } 60 'the app to run again after the update'
         Use-RunningApp -Process (Find-RunningApp)
-        $status = Wait-ControlStatus -Seconds 60 -What 'the updated app to listen' -Check ({ param($s) Test-ControlStatus -Status $s -Expect @{ transport = 'listening' } }.GetNewClosure())
+        $status = Wait-ControlStatus -Seconds 60 -What 'the updated app to listen' -Expect @{ transport = 'listening' }
         if ($status['accounts'] -ne '2') { Write-Host "::warning::the app started by the installer sees $($status['accounts']) account(s), not 2: it may not run with the temporary profile as its home" }
         Write-PhaseLog ("the updated app runs as process {0}; control status: {1}" -f $script:LiveApp.Id, (($status.GetEnumerator() | ForEach-Object { "$($_.Key): $($_.Value)" }) -join ', '))
 
@@ -2112,7 +2117,7 @@ function Invoke-ReinstallPhase {
     # The first launch after it: consent was kept (it lives with the app's data, which an uninstall keeps).
     $running = Find-RunningApp
     if ($running) { Use-RunningApp -Process $running } else { Start-LiveApp }
-    $status = Wait-ControlStatus -Seconds 60 -What 'control status to say hook_consent: granted' -Check ({ param($s) Test-ControlStatus -Status $s -Expect @{ hook_consent = 'granted' } }.GetNewClosure())
+    $status = Wait-ControlStatus -Seconds 60 -What 'control status to say hook_consent: granted' -Expect @{ hook_consent = 'granted' }
     Write-PhaseLog ("after the first launch control status: " + (($status.GetEnumerator() | ForEach-Object { "$($_.Key): $($_.Value)" }) -join ', '))
     Start-Sleep -Seconds 3
     $changed = @(Compare-Hashes -Before $settingsOnly -After (Get-HookFilesHash) -Filter '.claude*/settings.json')

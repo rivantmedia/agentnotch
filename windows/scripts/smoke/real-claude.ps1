@@ -616,7 +616,7 @@ function Start-RealClaudeApp {
     $script:LiveApp = Register-OwnProcess (Start-AppProcess -Exe $script:AppExe -Environment $environment)
     Write-RcLog "the app is running as process $($script:LiveApp.Id), DevTools on port $($script:CdpPort)"
     $expect = [ordered]@{ transport = 'listening'; accounts = '1'; hook_consent = 'unasked' }
-    $status = Wait-ControlStatus -Seconds 90 -What 'the app to list the temporary account' -Check ({ param($s) Test-ControlStatus -Status $s -Expect $expect }.GetNewClosure())
+    $status = Wait-ControlStatus -Seconds 90 -What 'the app to list the temporary account' -Expect $expect
     Write-RcLog ('control status: ' + (($status.GetEnumerator() | ForEach-Object { "$($_.Key): $($_.Value)" }) -join ', '))
 }
 
@@ -629,7 +629,7 @@ function Grant-HookConsent {
     Invoke-CdpClick -Page $script:Ui.SettingsPage -Selector $script:Ui.ConsentTurnOn
     Wait-Until { (Get-FileSha256 $settingsPath) -ne $before -and (Test-Path -LiteralPath $hookCopy) } 20 "the app's entries in $settingsPath"
     Start-Sleep -Milliseconds 700   # a pass writes its files one after the other; let it finish
-    Wait-ControlStatus -Seconds 15 -What 'hook consent' -Check ({ param($s) Test-ControlStatus -Status $s -Expect @{ hook_consent = 'granted' } }) | Out-Null
+    Wait-ControlStatus -Seconds 15 -What 'hook consent' -Expect @{ hook_consent = 'granted' } | Out-Null
     $settings = Read-Settings $settingsPath
     $own = @(Get-HookEntries -Settings $settings | Where-Object { $_.Event -eq 'PermissionRequest' } |
         Where-Object { Get-OwnForm -Entry $_ -ExpectedExe $hookCopy -Resolve { param($p) Resolve-LongPath -Path $p } })

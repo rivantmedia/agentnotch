@@ -4,7 +4,7 @@
   "cloud": true,
   "glue": true,
   "realClaude": true,
-  "rustContract": true,
+  "rustContract": false,
   "_why": {
     "engine": "WP7 (consent and hook install) + WP1/2/4/5/6 (the engine) + WP9 (the glue) + WP10 (the pages)",
     "selftest": "WP9 + WP10 (milestone M1: the sealed self-test and the snapshots)",
