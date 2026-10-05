@@ -15,6 +15,11 @@
 //! - A hub that was never started (the command line's doctor and
 //!   `install-hooks`) answers calls on the caller's thread, running their
 //!   jobs there too: nothing listens and no thread is started.
+//! - `agentnotch://` links are taken on the caller's thread (the glue's own
+//!   thread: a sign-in callback trades its code with the website, up to
+//!   30 s): the callback goes to the cloud; a banner's open and review
+//!   links, at most ten a minute, open the panel or review the completion
+//!   for sessions and rings the pages are shown, never answering anything.
 //!
 //! Owner: WP7.
 
@@ -24,7 +29,11 @@ use super::api::{
 use super::core_state::{Core, Projection};
 use super::jobs::{self, JobContext, Lanes, TrackingRunner};
 use super::project;
-use crate::model::{HubSnapshot, RingSummary, SettingsSnapshot, UpstreamUsage};
+use crate::cloud::service::{is_sign_in_callback, NO_SIGN_IN_PENDING};
+use crate::cloud::CloudHandle;
+use crate::control::notifications::{parse_deep_link, DeepLinkAction, DeepLinkGate};
+use crate::control::panel::{lands_on_list, REASON_NOTIFICATION, ROUTE_SESSIONS};
+use crate::model::{HubSnapshot, PanelRequest, RingSummary, SettingsSnapshot, UpstreamUsage};
 use crate::platform::Platform;
 use crate::runtime_types::{Input, JobId};
 use agentnotch_proto::ControlStatus;
@@ -47,6 +56,9 @@ const WORKER_JOIN_WAIT: Duration = Duration::from_secs(3);
 /// How long a stop waits for a settings write in flight, so the last write
 /// is the newest.
 const SETTINGS_WRITE_WAIT: Duration = Duration::from_secs(2);
+/// How long a stop waits for the cloud thread to finish what it has out
+/// and save; past that it ends with the process.
+const CLOUD_STOP_WAIT: Duration = Duration::from_secs(3);
 
 /// The runtime's timings; tests shorten them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,6 +123,10 @@ struct Inner {
     running: AtomicBool,
     /// The threads of one run; also serialises start and stop.
     run: Mutex<Option<Running>>,
+    /// The cloud service of this run (`an-core` holds it too).
+    cloud: Mutex<Option<Arc<CloudHandle>>>,
+    /// Banner links acted on in the last minute.
+    links: Mutex<DeepLinkGate>,
 }
 
 struct Running {
@@ -146,6 +162,8 @@ impl Runtime {
                 idle: Mutex::new(None),
                 running: AtomicBool::new(false),
                 run: Mutex::new(None),
+                cloud: Mutex::new(None),
+                links: Mutex::new(DeepLinkGate::default()),
             }),
         }
     }
@@ -247,16 +265,20 @@ impl HubBackend for Runtime {
         }
         let mut idle = lock(&inner.idle);
         let mut core = idle.take().unwrap_or_else(|| inner.load_core());
-        // The hook pipe's events come back through the queue.
+        // The hook pipe's and the cloud's events come back through the queue.
         core.ingress_w.inputs = Some(inner.tx.clone());
+        core.cloud_w.inputs = Some(inner.tx.clone());
         inner.runner.resume();
         // The launch discovery and each store's schedule, before the first
         // projection.
         core.on_start();
+        *lock(&inner.cloud) = core.cloud_w.handle.clone();
         let (quit, quit_rx) = crossbeam_channel::bounded::<()>(0);
         let workers = match inner.lanes.spawn_workers(&inner.ctx, &inner.tx, &quit_rx) {
             Ok(workers) => workers,
             Err(e) => {
+                core.cloud_on_stop();
+                inner.stop_cloud();
                 *idle = Some(core);
                 return Err(format!("the engine's workers didn't start: {e}"));
             }
@@ -274,6 +296,7 @@ impl HubBackend for Runtime {
             Ok(handle) => handle,
             Err(e) => {
                 drop(quit);
+                inner.stop_cloud();
                 return Err(format!("the engine didn't start: {e}"));
             }
         };
@@ -316,6 +339,9 @@ impl HubBackend for Runtime {
                 "the engine didn't stop in time; it is left behind".into(),
             )]);
         }
+        // After the core: held requests are released before anything the
+        // cloud has out is waited for.
+        inner.stop_cloud();
     }
 
     fn on_event(&self, sink: EventSink) {
@@ -369,9 +395,23 @@ impl HubBackend for Runtime {
         project::upstream_usage(&self.snapshot().rings)
     }
 
-    fn handle_deep_link(&self, _url: &str) -> DeepLinkOutcome {
-        // wp7-10: sign-in callbacks, open and review links.
-        DeepLinkOutcome::Ignored("links aren't followed in this build yet".into())
+    fn handle_deep_link(&self, url: &str) -> DeepLinkOutcome {
+        let inner = &self.inner;
+        if inner.cfg.flags.sealed {
+            return DeepLinkOutcome::Ignored("Sealed: deep links are ignored.".into());
+        }
+        if let Some(action) = parse_deep_link(url) {
+            return self.banner_link(action);
+        }
+        let cloud = lock(&inner.cloud).clone();
+        match cloud {
+            Some(cloud) => cloud.deep_link(url),
+            // No cloud running: nothing can be waiting for a callback.
+            None if is_sign_in_callback(url) => {
+                DeepLinkOutcome::SignInIgnored(NO_SIGN_IN_PENDING.into())
+            }
+            None => DeepLinkOutcome::Ignored("not a link this app follows".into()),
+        }
     }
 
     fn control_status(&self) -> ControlStatus {
@@ -385,6 +425,81 @@ impl HubBackend for Runtime {
             self.inner.cfg.app_version,
             crate::core::roots::IDENTIFIER
         )
+    }
+}
+
+impl Runtime {
+    /// A banner's link: the panel at a session or ring the pages are shown,
+    /// or that session's completion reviewed. Never an answer to anything.
+    fn banner_link(&self, action: DeepLinkAction) -> DeepLinkOutcome {
+        let inner = &self.inner;
+        let now = inner.platform.clock.now();
+        if !lock(&inner.links).allow(now) {
+            return DeepLinkOutcome::Ignored("too many links in a minute".into());
+        }
+        let shown = self.snapshot();
+        let knows_session = |id: &str| shown.sessions.iter().any(|row| row.session_id == id);
+        match action {
+            DeepLinkAction::OpenSession(session) => {
+                if !knows_session(session.as_str()) {
+                    return DeepLinkOutcome::Ignored("no such session".into());
+                }
+                let request = lands_on_list(&session, REASON_NOTIFICATION);
+                inner.emit(&[HubEvent::Panel(request)]);
+                DeepLinkOutcome::Opened
+            }
+            DeepLinkAction::OpenRing(ring) => {
+                if !shown.rings.iter().any(|r| r.ring_id == ring.as_str()) {
+                    return DeepLinkOutcome::Ignored("no such ring".into());
+                }
+                inner.emit(&[HubEvent::Panel(PanelRequest {
+                    route: ROUTE_SESSIONS.to_owned(),
+                    ring_id: Some(ring.as_str().to_owned()),
+                    highlight: None,
+                    reason: REASON_NOTIFICATION.to_owned(),
+                })]);
+                DeepLinkOutcome::Opened
+            }
+            DeepLinkAction::MarkReviewed {
+                session,
+                completed_at,
+            } => {
+                if !knows_session(session.as_str()) {
+                    return DeepLinkOutcome::Ignored("no such session".into());
+                }
+                // The completion the banner announced, never a later one.
+                let call = match completed_at {
+                    Some(at) => Call::MarkViewed {
+                        session_id: session,
+                        completed_at_ms: crate::core::time::to_ms(at),
+                    },
+                    None => Call::MarkReviewed {
+                        session_id: session,
+                        at_ms: crate::core::time::to_ms(now),
+                    },
+                };
+                match self.call(call) {
+                    Ok(_) => DeepLinkOutcome::Reviewed,
+                    Err(e) => DeepLinkOutcome::Ignored(e.message),
+                }
+            }
+        }
+    }
+}
+
+impl Inner {
+    /// Stops this run's cloud service, waiting a little for what it has out
+    /// (its stores are saved as its thread ends).
+    fn stop_cloud(&self) {
+        let Some(cloud) = lock(&self.cloud).take() else {
+            return;
+        };
+        let stopper = std::thread::Builder::new()
+            .name("an-cloud-stop".into())
+            .spawn(move || cloud.stop());
+        if let Ok(stopper) = stopper {
+            join_within(vec![stopper], CLOUD_STOP_WAIT);
+        }
     }
 }
 

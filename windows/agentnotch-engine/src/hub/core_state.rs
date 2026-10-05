@@ -8,8 +8,8 @@
 //! The packages are wired in their own files: accounts, usage and hooks
 //! (`wire_accounts`, `wire_usage`, `wire_hooks`), the hook pipe and held
 //! requests (`wire_ingress`), sessions, review and chat (`wire_sessions`),
-//! the jump, typed replies and the attention reactions (`wire_control`);
-//! the next sub-task wires cloud (wp7-10) at the seams named for it below.
+//! the jump, typed replies and the attention reactions (`wire_control`),
+//! cloud sync (`wire_cloud`, over the view of `cloud_view`).
 //!
 //! Owner: WP7.
 
@@ -17,6 +17,7 @@ use super::api::{Call, CallError, HubConfig, HubEvent};
 use super::project::{self, Directory, ProjectionInput};
 use super::project_settings::{settings_snapshot, setup_state, SettingsInput, SetupInput};
 use super::wire_accounts::AccountsWiring;
+use super::wire_cloud::CloudWiring;
 use super::wire_control::{row_extras, ControlWiring};
 use super::wire_hooks::HooksWiring;
 use super::wire_ingress::IngressWiring;
@@ -109,6 +110,7 @@ pub(crate) struct Core {
     pub(crate) ingress_w: IngressWiring,
     pub(crate) sessions_w: SessionsWiring,
     pub(crate) control_w: ControlWiring,
+    pub(crate) cloud_w: CloudWiring,
 }
 
 /// The writes of `accounts.json`, `usage-state.json` and
@@ -248,6 +250,7 @@ impl Core {
             ingress_w,
             sessions_w: SessionsWiring::new(saved_review),
             control_w: ControlWiring::default(),
+            cloud_w: CloudWiring::default(),
         }
     }
 
@@ -262,6 +265,7 @@ impl Core {
         self.sessions_on_start(now);
         self.ingress_on_start();
         self.control_on_start();
+        self.cloud_on_start(now);
         self.after_input();
     }
 
@@ -285,8 +289,7 @@ impl Core {
                 let now = self.platform.clock.now();
                 self.foreground_changed(fg, now);
             }
-            // wp7-10: the cloud's published state.
-            Input::CloudState(state) => self.cloud = state,
+            Input::CloudState(state) => self.cloud_state_changed(state),
             // Deadlines are checked after every input.
             Input::Tick => {}
             Input::Stop { done } => {
@@ -372,6 +375,8 @@ impl Core {
                 session_id,
                 image_id,
             } => self.chat_image_call(&session_id, &image_id),
+            Call::Cloud { action, on } => self.cloud_call(action, on),
+            Call::CloudUrl { target } => self.cloud_url_call(target),
             // Wired by the next sub-tasks (see the module doc).
             other => Err(CallError::failed(format!(
                 "{} isn't available in this build yet.",
@@ -404,6 +409,13 @@ impl Core {
         };
         self.replace_settings(next);
         Ok(())
+    }
+
+    /// Settings `an-core` made up itself (the cloud's device id): kept, and
+    /// in the file the next write makes, but no write of their own.
+    pub(crate) fn adopt_settings_quietly(&mut self, next: ControlSettings) {
+        self.settings = next;
+        self.settings_file.apply(&self.settings);
     }
 
     /// The settings after a change any package made: saved (through
@@ -578,6 +590,7 @@ impl Core {
             self.drive_usage(now);
             self.drive_sessions(now);
             self.drive_control(now);
+            self.drive_cloud(now);
         }
         // Calls waiting on lookups are answered on a stopped hub too.
         let now = self.platform.clock.now();
@@ -616,6 +629,7 @@ impl Core {
             self.hooks_deadline(),
             self.sessions_deadline(),
             self.control_deadline(),
+            self.cloud_deadline(),
         ]
         .into_iter()
         .flatten()
@@ -641,6 +655,7 @@ impl Core {
         self.live = false;
         self.hooks.stop();
         self.usage.stop();
+        self.cloud_on_stop();
     }
 
     /// Writes what is unsaved now, synchronously (a stop; the process may
@@ -744,6 +759,7 @@ impl Core {
         let snapshot = self.project_snapshot(now);
         let settings = self.project_settings(now);
         let status = self.status(&snapshot, &settings);
+        self.cloud_projected(now);
         Projection {
             snapshot,
             settings,

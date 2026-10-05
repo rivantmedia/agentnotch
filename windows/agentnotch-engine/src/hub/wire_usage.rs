@@ -292,12 +292,13 @@ impl Core {
         }
     }
 
-    /// Readings for the usage history. The cloud records them (wp7-10);
-    /// until it runs, nothing keeps them.
+    /// Readings for the usage history: the cloud records them (and keeps
+    /// them only while it syncs).
     pub(crate) fn usage_observed(
         &mut self,
-        _observations: impl IntoIterator<Item = UsageObservation>,
+        observations: impl IntoIterator<Item = UsageObservation>,
     ) {
+        self.cloud_record_usage(observations);
     }
 
     // ---- calls ----

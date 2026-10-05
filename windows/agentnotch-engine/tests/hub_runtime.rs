@@ -333,12 +333,13 @@ fn calls_not_wired_yet_fail_honestly() {
     let hub = TestHub::started();
     let error = hub
         .hub
-        .call(Call::CloudUrl {
-            target: agentnotch_engine::hub::CloudUrlTarget::Dashboard,
+        .call(Call::RevealTarget {
+            kind: agentnotch_engine::hub::RevealKind::SessionCwd,
+            id: "s-1".into(),
         })
         .unwrap_err();
     assert_eq!(error.code, "failed");
-    assert!(error.message.contains("cloud_url"), "{}", error.message);
+    assert!(error.message.contains("reveal_target"), "{}", error.message);
 }
 
 /// The glue's own calls are taken (the hot key's report shows in Settings).
