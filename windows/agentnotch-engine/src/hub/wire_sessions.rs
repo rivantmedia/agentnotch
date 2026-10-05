@@ -170,8 +170,8 @@ impl Core {
             let changed = self.registry.record(sighting, now);
             self.accounts_changed(&changed, now);
         }
-        // `effects.transitions` (the attention news) are the reactions'
-        // (chime, peek, toasts), which aren't wired in this build.
+        // The attention news: banners, chime, peek, auto-open.
+        self.attention_transitions(effects.transitions, now);
     }
 
     fn session_job(&mut self, job: Job) {

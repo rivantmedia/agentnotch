@@ -14,6 +14,7 @@ pub mod runtime;
 pub mod sealed_demo;
 pub mod sealed_fixture;
 mod wire_accounts;
+mod wire_control;
 mod wire_hooks;
 mod wire_ingress;
 mod wire_sessions;

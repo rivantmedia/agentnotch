@@ -7,16 +7,17 @@
 //!
 //! The packages are wired in their own files: accounts, usage and hooks
 //! (`wire_accounts`, `wire_usage`, `wire_hooks`), the hook pipe and held
-//! requests (`wire_ingress`), sessions, review and chat (`wire_sessions`);
-//! the next sub-tasks wire control (wp7-9) and cloud (wp7-10) at the seams
-//! named for them below.
+//! requests (`wire_ingress`), sessions, review and chat (`wire_sessions`),
+//! the jump, typed replies and the attention reactions (`wire_control`);
+//! the next sub-task wires cloud (wp7-10) at the seams named for it below.
 //!
 //! Owner: WP7.
 
 use super::api::{Call, CallError, HubConfig, HubEvent};
-use super::project::{self, Directory, ProjectionInput, RowExtras};
+use super::project::{self, Directory, ProjectionInput};
 use super::project_settings::{settings_snapshot, setup_state, SettingsInput, SetupInput};
 use super::wire_accounts::AccountsWiring;
+use super::wire_control::{row_extras, ControlWiring};
 use super::wire_hooks::HooksWiring;
 use super::wire_ingress::IngressWiring;
 use super::wire_sessions::{session_store, SessionsWiring};
@@ -107,6 +108,7 @@ pub(crate) struct Core {
     pub(crate) hooks_w: HooksWiring,
     pub(crate) ingress_w: IngressWiring,
     pub(crate) sessions_w: SessionsWiring,
+    pub(crate) control_w: ControlWiring,
 }
 
 /// The writes of `accounts.json`, `usage-state.json` and
@@ -245,6 +247,7 @@ impl Core {
             hooks_w: HooksWiring::default(),
             ingress_w,
             sessions_w: SessionsWiring::new(saved_review),
+            control_w: ControlWiring::default(),
         }
     }
 
@@ -258,6 +261,7 @@ impl Core {
         self.hooks_on_start(now);
         self.sessions_on_start(now);
         self.ingress_on_start();
+        self.control_on_start();
         self.after_input();
     }
 
@@ -277,8 +281,10 @@ impl Core {
                 }
             }
             Input::Transport(event) => self.transport_event(event),
-            // wp7-9: "is the user looking at it" (mark viewed after 1.5 s).
-            Input::Foreground(_) => {}
+            Input::Foreground(fg) => {
+                let now = self.platform.clock.now();
+                self.foreground_changed(fg, now);
+            }
             // wp7-10: the cloud's published state.
             Input::CloudState(state) => self.cloud = state,
             // Deadlines are checked after every input.
@@ -307,8 +313,7 @@ impl Core {
                 self.set_setting(&key, &value, true).map(|()| json!({}))
             }
             Call::PanelState(state) => {
-                // wp7-9 reads it for reactions and the auto-close tick.
-                self.panel = state;
+                self.panel_reported(state);
                 Ok(json!({}))
             }
             Call::HotkeyStatus { ok, message } => {
@@ -317,6 +322,11 @@ impl Core {
                 Ok(json!({}))
             }
             // Calls whose answer may wait for a job keep their reply.
+            Call::Focus { session_id } => return self.focus_call(session_id, reply),
+            Call::SendMessage { session_id, text } => {
+                return self.send_message_call(session_id, &text, reply)
+            }
+            Call::MessageRoute { session_id } => return self.message_route_call(session_id, reply),
             Call::RefreshUsage { ring_id, reason } => {
                 return self.refresh_usage_call(ring_id, reason, reply)
             }
@@ -371,11 +381,9 @@ impl Core {
         let _ = reply.send(answer);
     }
 
-    /// `an-core`'s fresh check before a typed reply is sent (§4.8). Until
-    /// typing is wired (wp7-9) nothing is ever submitted.
+    /// `an-core`'s fresh check before a typed reply is sent (§4.8).
     fn type_checkpoint(&mut self, job: JobId) -> bool {
-        let _ = job;
-        false
+        self.control_checkpoint(job)
     }
 
     // ---- settings ----
@@ -480,8 +488,14 @@ impl Core {
             JobResult::Transcript(delta) => self.transcript_synced(delta, now),
             JobResult::Chat(page) => self.chat_page_read(page, now),
             JobResult::Hosted(identity) => self.hosted_read(id, identity, now),
-            // wp7-9 and wp7-10 take their results here.
-            _ => {}
+            JobResult::Host(host) => self.host_read(id, host, now),
+            JobResult::Console(info) => self.console_read(id, info, now),
+            JobResult::Focus(outcome) => self.focus_done(id, outcome, &mut reply, now),
+            JobResult::Typed(outcome) => self.typed(id, outcome, &mut reply),
+            JobResult::Visible {
+                any_terminal,
+                full_screen,
+            } => self.visible_read(id, any_terminal, full_screen, now),
         }
         if let Some(reply) = reply {
             let _ = reply.send(Err(CallError::failed(
@@ -563,7 +577,11 @@ impl Core {
             self.drive_accounts(now);
             self.drive_usage(now);
             self.drive_sessions(now);
+            self.drive_control(now);
         }
+        // Calls waiting on lookups are answered on a stopped hub too.
+        let now = self.platform.clock.now();
+        self.resolve_waiters(now);
         self.publish_chats();
         // Hook writes asked for by a call run on a stopped hub too.
         let now = self.platform.clock.now();
@@ -592,12 +610,12 @@ impl Core {
         if !self.live {
             return None;
         }
-        // wp7-9 (auto-close, typing checks) adds its own.
         [
             self.accounts_deadline(),
             self.usage_deadline(),
             self.hooks_deadline(),
             self.sessions_deadline(),
+            self.control_deadline(),
         ]
         .into_iter()
         .flatten()
@@ -616,6 +634,7 @@ impl Core {
                 let _ = reply.send(Err(CallError::failed(STOPPING)));
             }
         }
+        self.control_on_stop(STOPPING);
         self.usage_w.answer_waiting(STOPPING);
         self.hooks_w.answer_waiting(STOPPING);
         self.save_now();
@@ -733,15 +752,21 @@ impl Core {
     }
 
     fn project_snapshot(&mut self, now: SystemTime) -> HubSnapshot {
+        let generated = self.snapshot_clock.next(crate::core::time::to_ms(now));
+        self.snapshot_at(now, generated)
+    }
+
+    /// The snapshot at `now`, dated `generated_at_ms` (the reactions place
+    /// sessions through it too, outside the snapshot clock).
+    pub(crate) fn snapshot_at(&self, now: SystemTime, generated: u64) -> HubSnapshot {
         let accounts = self.registry.accounts();
         let readings = self.readings(now);
         let views = self.session_views();
         let ui = self.ui();
         let setup = setup_state(&self.setup_input());
         let directory: &dyn Directory = &self.registry;
-        // wp7-9 fills the host app, the jump and the typing availability.
-        let extras = |_: &SessionView| RowExtras::default();
-        let generated = self.snapshot_clock.next(crate::core::time::to_ms(now));
+        let (control, type_replies) = (&self.control_w, self.settings.type_replies);
+        let extras = |view: &SessionView| row_extras(control, view, type_replies);
         project::project(
             &ProjectionInput {
                 now,
