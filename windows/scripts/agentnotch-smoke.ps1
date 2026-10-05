@@ -1945,7 +1945,9 @@ function ConvertFrom-RequestLog {
 }
 
 function Get-RequestCount {
-    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Requests, [Parameter(Mandatory)][string]$Method, [Parameter(Mandatory)][string]$Path)
+    # AllowNull: Get-FakeWebsiteRequests' empty answer reaches here as $null.
+    param([Parameter(Mandatory)][AllowNull()][AllowEmptyCollection()][object[]]$Requests, [Parameter(Mandatory)][string]$Method, [Parameter(Mandatory)][string]$Path)
+    if ($null -eq $Requests) { return 0 }   # piped on, $null would be one item
     @($Requests | Where-Object { $_['method'] -ceq $Method -and $_['path'] -ceq $Path }).Count
 }
 
@@ -2053,8 +2055,10 @@ function Invoke-CloudPhase {
 
         # 1. Sign in: the URL the app would have opened.
         Invoke-SettingsClick -Selector $script:Ui.CloudSignIn
-        Wait-Until { (Get-AuthorizeUrls -Text ([string](Get-Content -LiteralPath $browserLog -Raw -ErrorAction SilentlyContinue))).Count -gt 0 } 15 'the authorize URL in the dev browser log'
-        $url = (Get-AuthorizeUrls -Text (Get-Content -LiteralPath $browserLog -Raw))[0]
+        # @(...): a function's empty or one-item array comes back as $null or the item itself, and
+        # strict mode has no .Count on those (run 37311858421); [0] of a lone string is its first letter.
+        Wait-Until { @(Get-AuthorizeUrls -Text ([string](Get-Content -LiteralPath $browserLog -Raw -ErrorAction SilentlyContinue))).Count -gt 0 } 15 'the authorize URL in the dev browser log'
+        $url = @(Get-AuthorizeUrls -Text ([string](Get-Content -LiteralPath $browserLog -Raw)))[0]
         Write-PhaseLog "authorize URL: $url"
         $problems = @(Test-AuthorizeUrl -Url $url -Website $site.Url)
         if ($problems) { throw "the authorize URL: $($problems -join '; ')" }

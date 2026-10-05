@@ -1105,6 +1105,7 @@ Test-Case 'the fake website log is read line by line; a torn or foreign line is 
     Assert-Equal (Get-RequestCount -Requests $entries -Method 'POST' -Path '/api/app/v1/sync') 1 'one sync'
     Assert-Equal (Get-RequestCount -Requests $entries -Method 'GET' -Path '/api/app/v1/sync') 0 'method counts'
     Assert-Equal (Get-RequestCount -Requests @() -Method 'POST' -Path '/auth/v1/logout') 0 'no requests'
+    Assert-Equal (Get-RequestCount -Requests (Get-FakeWebsiteRequests -LogFile (Join-Path $scratch 'no-such-log.jsonl')) -Method 'POST' -Path '/auth/v1/logout') 0 'no log yet'
     Assert-Equal @(ConvertFrom-RequestLog -Text '').Count 0 'empty'
 }
 
