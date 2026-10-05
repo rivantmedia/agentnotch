@@ -1,0 +1,22 @@
+Agent Notch doctor v1.1.0 (com.rivantmedia.agentnotch)
+exe: C:\Users\me\AppData\Local\Agent Notch\agentnotch.exe
+sealed: no
+elevated: app=no running=none sessions-elevated=0
+smart-app-control: off
+data: C:\Users\me\AppData\Roaming\Agent Notch
+support: C:\Users\me\AppData\Local\com.rivantmedia.agentnotch\Claude (private: yes)
+updates: off (built from source)
+pipe: \\.\pipe\agentnotch-hook-S-1-5-21-1 no instance running
+hook exe: C:\Users\me\AppData\Local\Agent Notch\agentnotch-hook.exe (present)
+accounts: 2
+account: claude-acct-1a2b3c4d5e6f "Claude Work" signed-in=yes folders=~\.claude
+account: claude-acct-6f5e4d3c2b1a "Personal" signed-in=no folders=none
+hooks: consent=unasked installed=1/2 form=exec exec-form-min=2.1.101
+claude-versions: 2.1.282 (binary), 2.1.270 (vscode extension), unknown (desktop)
+status-line: wrapped=1 left-alone=1 (reason: Status line left alone: its command uses Windows paths)
+claude: C:\Users\me\.local\bin\claude.exe (not run by the doctor)
+desktop-cache: simple
+deep-link: registered -> "C:\Users\me\AppData\Local\Agent Notch\agentnotch.exe" "%1"
+autostart: off
+notifications: shortcut present (AUMID com.rivantmedia.agentnotch)
+providers: codex: ok; cursor: no data

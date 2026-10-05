@@ -91,6 +91,11 @@ impl Default for HooksWiring {
 }
 
 impl HooksWiring {
+    /// What this build knows of Claude Code's hook formats (the doctor's).
+    pub(crate) fn facts(&self) -> &ClaudeCodeFacts {
+        &self.facts
+    }
+
     /// A write is running or waiting.
     pub(crate) fn busy(&self) -> bool {
         self.running.is_some() || !self.queue.is_empty()

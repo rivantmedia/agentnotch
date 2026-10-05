@@ -27,6 +27,7 @@ use super::api::{
     Call, CallError, DeepLinkOutcome, DoctorExtras, EventSink, Hub, HubBackend, HubConfig, HubEvent,
 };
 use super::core_state::{Core, Projection};
+use super::doctor;
 use super::jobs::{self, JobContext, Lanes, TrackingRunner};
 use super::project;
 use crate::cloud::service::{is_sign_in_callback, NO_SIGN_IN_PENDING};
@@ -418,13 +419,22 @@ impl HubBackend for Runtime {
         self.inner.projection().status
     }
 
-    fn doctor_report(&self, _extra: &DoctorExtras) -> String {
-        // wp7-11: the §4.14 report.
-        format!(
-            "Agent Notch doctor v{} ({})\nThe full report isn't in this build yet.\n",
-            self.inner.cfg.app_version,
-            crate::core::roots::IDENTIFIER
-        )
+    fn doctor_report(&self, extra: &DoctorExtras) -> String {
+        let inner = &self.inner;
+        let now = inner.platform.clock.now();
+        // A hub that isn't running reads the engine itself; a running one
+        // answers from what its pages were last shown.
+        let facts = inner
+            .with_idle_core(|core, _| core.doctor_facts(now, extra))
+            .unwrap_or_else(|| {
+                doctor::facts_from_projection(
+                    &inner.cfg,
+                    &inner.platform,
+                    extra,
+                    &inner.projection(),
+                )
+            });
+        doctor::render(&facts)
     }
 }
 

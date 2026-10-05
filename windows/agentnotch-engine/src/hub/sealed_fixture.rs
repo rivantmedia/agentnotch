@@ -13,6 +13,7 @@
 //! fixtures are this demo made at their `generated_at_ms`.
 
 use super::api::*;
+use super::doctor;
 use super::project;
 use super::sealed_demo::{self, SealedDemo};
 use crate::core::time;
@@ -449,66 +450,24 @@ impl HubBackend for SealedFixture {
     }
 
     fn doctor_report(&self, extra: &DoctorExtras) -> String {
+        // The same report as the live hub's, over the demo's accounts and
+        // nothing read from the PC: a sealed run reaches nothing real.
         let status = self.control_status();
         let state = self.lock();
-        let roots = &self.cfg.roots;
-        let mut lines = vec![
-            format!(
-                "Agent Notch doctor v{} ({})",
-                self.cfg.app_version,
-                crate::core::roots::IDENTIFIER
-            ),
-            format!("exe: {}", extra.exe.display()),
-            "sealed: yes".to_owned(),
-            "elevated: app=no running=no sessions-elevated=0".to_owned(),
-            "smart-app-control: unknown".to_owned(),
-            format!(
-                "data: {}   support: {} (private: sealed, not used)",
-                roots.data.display(),
-                roots.support.display()
-            ),
-            extra.updates.clone(),
-            format!("pipe: {} sealed (no server)", self.cfg.pipe_name),
-            format!("hook exe: {}", self.cfg.hook_exe.display()),
-            format!("accounts: {}", status.accounts),
-        ];
-        for account in &state.settings.accounts {
-            lines.push(format!(
-                "account: {} \"{}\" signed-in={} folders={}",
-                account.ring_id,
-                account.label,
-                if account.is_signed_in { "yes" } else { "no" },
-                account
-                    .folders
-                    .iter()
-                    .map(|f| f.title.as_str())
-                    .collect::<Vec<_>>()
-                    .join(",")
-            ));
-        }
-        lines.push(format!(
-            "hooks: consent={} installed=0/0 form=none exec-form-min=unset",
-            status.hook_consent
-        ));
-        lines.push("claude-versions: none (sealed)".into());
-        lines.push("status-line: wrapped=0 left-alone=0".into());
-        lines.push("claude: not looked for (sealed)".into());
-        lines.push("desktop-cache: absent".into());
-        lines.push(format!("deep-link: {}", extra.deep_link));
-        lines.push(format!(
-            "autostart: {}",
-            if extra.autostart { "on" } else { "off" }
-        ));
-        lines.push(format!(
-            "notifications: {}",
-            if extra.shortcut_present {
-                "shortcut present (AUMID com.rivantmedia.agentnotch)"
-            } else {
-                "shortcut missing"
-            }
-        ));
-        lines.push(format!("providers: {}", extra.providers.join("; ")));
-        lines.join("\n") + "\n"
+        let mut facts = doctor::sealed_facts(&self.cfg, extra);
+        facts.consent = status.hook_consent;
+        facts.accounts = state
+            .settings
+            .accounts
+            .iter()
+            .map(|account| doctor::AccountFact {
+                ring_id: account.ring_id.clone(),
+                label: account.label.clone(),
+                signed_in: account.is_signed_in,
+                folders: account.folders.iter().map(|f| f.title.clone()).collect(),
+            })
+            .collect();
+        doctor::render(&facts)
     }
 }
 
