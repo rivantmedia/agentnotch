@@ -2077,8 +2077,7 @@ function Invoke-CloudPhase {
     Remove-Item -LiteralPath $syncDir -Recurse -Force -ErrorAction SilentlyContinue
     $site = Start-FakeWebsite -LogFile $log -SyncDir $syncDir
     Write-PhaseLog "fake website on $($site.Url)"
-    $claudeJson = $null
-    $claudeJsonBefore = $null
+    $claudeJsonBefore = [ordered]@{}
     try {
         # A fresh start of the app, pointed at the fake website: only this run, only 127.0.0.1.
         Stop-LiveAppGracefully
@@ -2116,16 +2115,37 @@ function Invoke-CloudPhase {
 
         # 4. Sync on: one upload, in the contract's shape, with nothing of this machine's folders.
         Invoke-SettingsClick -Selector $script:Ui.CloudSyncOff
+        Wait-ControlStatus -Seconds 10 -What 'control status to say sync: true' -Expect @{ sync = 'true' } | Out-Null
         # Something to send: readings are recorded only while sync is on, and this profile's only
         # source so far was the probe, which ran before the sign-in and is 5 minutes apart. So
         # Claude Code "answers" now: it leaves its usage cache in .claude.json, which the app reads
         # every 20 s (run 37320814137 waited for a /sync that had nothing to carry).
-        $claudeJson = Join-Path $script:P '.claude.json'
-        $claudeJsonBefore = [IO.File]::ReadAllBytes($claudeJson)
-        $withUsage = ConvertTo-ClaudeJsonWithCachedUsage -Text ([Text.Encoding]::UTF8.GetString($claudeJsonBefore)) -FetchedAtMs ([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())
-        [IO.File]::WriteAllText($claudeJson, $withUsage, [Text.UTF8Encoding]::new($false))
+        # Both accounts' Claude Code do (the default folder's login lives in P\.claude.json, the
+        # other's in its own folder), so each account has a reading: two are recorded.
+        $fetchedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        foreach ($file in (Join-Path $script:P '.claude.json'), (Join-Path $script:P '.claude-work\.claude.json')) {
+            $bytes = [IO.File]::ReadAllBytes($file)
+            $claudeJsonBefore[$file] = $bytes
+            $withUsage = ConvertTo-ClaudeJsonWithCachedUsage -Text ([Text.Encoding]::UTF8.GetString($bytes)) -FetchedAtMs $fetchedAt
+            [IO.File]::WriteAllText($file, $withUsage, [Text.UTF8Encoding]::new($false))
+        }
         $syncCount = { Get-RequestCount -Requests (Get-FakeWebsiteRequests -LogFile $log) -Method 'POST' -Path '/api/app/v1/sync' }
-        Wait-Until { (& $syncCount) -ge 1 -or (Get-CloudPendingUsage -Settings (Get-SettingsSnapshot)) -ge 1 } 45 'the cached reading to be recorded for the website'
+        try {
+            Wait-Until { (& $syncCount) -ge 1 -or (Get-CloudPendingUsage -Settings (Get-SettingsSnapshot)) -ge 2 } 45 'a cached reading of each account to be recorded for the website'
+            Write-PhaseLog "readings waiting for the website: $(Get-CloudPendingUsage -Settings (Get-SettingsSnapshot)); /sync requests so far: $(& $syncCount)"
+        } catch {
+            # What the cloud, the app's support folder and the file say, for the next round.
+            try { Write-PhaseLog "settings cloud: $((Get-SettingsSnapshot)['cloud'] | ConvertTo-Json -Compress -Depth 6)" } catch { Write-PhaseLog "settings: $($_.Exception.Message)" }
+            try { Write-PhaseLog "control status: $((Get-ControlStatus).GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" })" } catch { Write-PhaseLog "control status: $($_.Exception.Message)" }
+            $supportNow = Find-SupportDir -Profile $script:P
+            if ($supportNow) { Write-PhaseLog "support files: $(@(Get-ChildItem -LiteralPath $supportNow -Force | ForEach-Object { "$($_.Name)($($_.Length))" }) -join ' ')" }
+            foreach ($file in $claudeJsonBefore.Keys) { Write-PhaseLog "$file now: $([IO.File]::ReadAllText($file) -replace '\s+', ' ')" }
+            try {
+                $shown = (Invoke-CdpCall -Page $script:Ui.NotchPage -Method 'snapshot') | ConvertTo-Json -Compress -Depth 8
+                Write-PhaseLog "snapshot: $($shown.Substring(0, [Math]::Min(4000, $shown.Length)))"
+            } catch { Write-PhaseLog "snapshot: $($_.Exception.Message)" }
+            throw
+        }
         # The first pass after sync on runs at the next 20 s tick. When it came before the reading
         # it had nothing to send, and the next is 5 minutes away (as on the Mac: setSyncEnabled,
         # syncInterval); "Sync now" is what a user has for that.
@@ -2166,7 +2186,7 @@ function Invoke-CloudPhase {
         Save-LiveRunLog
         Stop-OwnProcess -Process $site.Process
         # The later phases compare P with what phase 2 built.
-        if ($claudeJsonBefore) { [IO.File]::WriteAllBytes($claudeJson, $claudeJsonBefore) }
+        foreach ($file in $claudeJsonBefore.Keys) { [IO.File]::WriteAllBytes($file, $claudeJsonBefore[$file]) }
     }
     # The phases after this one run the app as a user has it: no fake website, no dev switches.
     Stop-LiveAppGracefully
