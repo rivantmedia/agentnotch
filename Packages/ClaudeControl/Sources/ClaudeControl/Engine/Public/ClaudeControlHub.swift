@@ -366,7 +366,9 @@ public final class ClaudeControlHub: ObservableObject {
                                          defaultRingID: defaultRing)
             snapshots.append(AttentionSnapshot(attention: state.attention, summary: summary,
                                                completedAt: state.completedAt,
-                                               isQuietCompletion: state.completionIsQuiet))
+                                               isQuietCompletion: state.completionIsQuiet,
+                                               failureIsRestored: state.stopErrorIsRestored,
+                                               limitHit: identity.flatMap { usage($0.id)?.announcedLimitHit(now: now) }))
         }
         let sessions = snapshots.map(\.summary)
         if !isSealed {
@@ -381,7 +383,7 @@ public final class ClaudeControlHub: ObservableObject {
         var readings: [String: ClaudeRingReading] = [:]
         let staleThreshold = isSealed ? ClaudeRingReading.staleAfter : usageStore.staleThreshold
         for identity in registry.identities where !identity.isHidden {
-            readings[identity.ringID] = ClaudeHostProjections.ringReading(
+            let reading = ClaudeHostProjections.ringReading(
                 usage: usage(identity.id),
                 fetchState: isSealed ? nil : usageStore.fetchState[identity.id],
                 plan: identity.planName,
@@ -389,6 +391,15 @@ public final class ClaudeControlHub: ObservableObject {
                 staleThreshold: staleThreshold,
                 now: now
             )
+            // One reset time per window: the first a source reported (they
+            // differ only by rounding within a window).
+            let kept = UsageRingWindows.keepingResetTimes(reading, previous: ringReadings[identity.ringID])
+            readings[identity.ringID] = kept
+            // A window back under its limit before its reset (an early reset,
+            // a reset credit): using it up again is a new limit.
+            for window in Self.liftedLimitWindows(kept, now: now) {
+                LimitAnnouncementStore.shared.end(ring: identity.ringID, window: window)
+            }
         }
         let retired = Self.retiredRingIDs(current: Set(accounts.map(\.ringID)), registry: registry, home: home)
         let unsigned = registry.unsignedFolders.map(\.configDir)
@@ -549,6 +560,16 @@ public final class ClaudeControlHub: ObservableObject {
         /// the review queue, never announced. (A turn waiting on background
         /// agents is still working.)
         var isQuietCompletion = false
+        /// Its failed turn was read back from disk, not seen happen: not news.
+        var failureIsRestored = false
+        /// The used-up window its limit is announced under, when the readings
+        /// show one (`AccountUsage.announcedLimitHit`).
+        var limitHit: UsageLimitHit? = nil
+
+        /// Stopped by a usage limit.
+        var isRateLimited: Bool {
+            attention.needsInputReason.map(ClaudeHostProjections.isRateLimit) == true
+        }
     }
 
     private func emitTransitions(_ snapshots: [AttentionSnapshot]) {
@@ -559,7 +580,18 @@ public final class ClaudeControlHub: ObservableObject {
         let previous = inBaseline ? nil : previousAttention
         defer { previousAttention = current }
         let launchedAt = isSealed ? startedAt : AttentionTracker.shared.launchedAt
-        for transition in Self.transitions(previous: previous, current: snapshots, launchedAt: launchedAt) {
+        // A limit announced before the readings named its window learns it now.
+        for snapshot in snapshots where snapshot.isRateLimited {
+            guard let hit = snapshot.limitHit else { continue }
+            LimitAnnouncementStore.shared.learn(ring: snapshot.summary.ringID, window: hit.window, resetsAt: hit.resetsAt)
+        }
+        let transitions = Self.withoutRepeatedLimitReactions(
+            Self.transitions(previous: previous, current: snapshots, launchedAt: launchedAt),
+            snapshots: current
+        ) { ring, hit in
+            LimitAnnouncementStore.shared.claim(.reaction, ring: ring, window: hit?.window, resetsAt: hit?.resetsAt)
+        }
+        for transition in transitions {
             transitionSubject.send(transition)
         }
         // A turn that finished while its own tab was in front was watched:
@@ -646,7 +678,8 @@ public final class ClaudeControlHub: ObservableObject {
             seen.insert(id)
             append(AttentionNews.kinds(from: previous[id]?.attention, to: snapshot.attention,
                                        isQuietCompletion: snapshot.isQuietCompletion,
-                                       completedAt: snapshot.completedAt, launchedAt: launchedAt),
+                                       completedAt: snapshot.completedAt, launchedAt: launchedAt,
+                                       failureIsRestored: snapshot.failureIsRestored),
                    snapshot.summary)
         }
         for (id, gone) in previous.sorted(by: { $0.key < $1.key }) where !seen.contains(id) {
@@ -656,6 +689,60 @@ public final class ClaudeControlHub: ObservableObject {
         }
         return result
     }
+
+    /// `transitions` without the chime and peek for a turn stopped by a
+    /// usage limit that was already announced: once per account and limit
+    /// (`LimitAnnouncements`), not on every retry, wake-up or /loop tick that
+    /// fails again. `claim(ring, limitHit)` says whether a limit's reaction
+    /// is still to come, and records it. Pure but for `claim`.
+    nonisolated static func withoutRepeatedLimitReactions(
+        _ transitions: [ClaudeAttentionTransition],
+        snapshots: [String: AttentionSnapshot],
+        claim: (String, UsageLimitHit?) -> Bool
+    ) -> [ClaudeAttentionTransition] {
+        transitions.filter { transition in
+            guard transition.kind == .needsInput,
+                  let snapshot = snapshots[transition.session.id], snapshot.isRateLimited else { return true }
+            return claim(transition.session.ringID, snapshot.limitHit)
+        }
+    }
+
+    /// Whether Codenotch's own "limit reached" alert for a Claude ring is
+    /// still to be shown: the first announcement of the account's limit on
+    /// that window until it resets (the account's limit banner, or this
+    /// alert, whichever comes first). Records it; with `bringsSound`, the
+    /// notch's chime and peek too, since the alert plays its own.
+    public func claimLimitAlert(ringID: String, weekly: Bool, resetsAt: Date?, bringsSound: Bool = true,
+                                now: Date = Date()) -> Bool {
+        LimitAnnouncementStore.shared.claim(.notification, ring: ringID, window: weekly ? .weekly : .session,
+                                            resetsAt: resetsAt, now: now, alsoMarking: bringsSound ? [.reaction] : [])
+    }
+
+    /// Where a session's limit is announced: the ring the hub shows it on
+    /// (its account by attribution: when it started in a mirrored folder, or
+    /// Claude Desktop's), and that account's used-up window. Nil before the
+    /// hub has placed it.
+    func limitPlacement(sessionId: String) -> (ringID: String, limitHit: UsageLimitHit?)? {
+        previousAttention?[sessionId].map { ($0.summary.ringID, $0.limitHit) }
+    }
+
+    /// The 5-hour and weekly windows of a fresh reading that are back under
+    /// the level Codenotch's limit watcher re-arms at (95%). A stale reading
+    /// proves nothing. Pure.
+    nonisolated static func liftedLimitWindows(_ reading: ClaudeRingReading, now: Date) -> [UsageLimitHit.Window] {
+        guard reading.updatedAt != nil, !reading.isStale(now: now) else { return [] }
+        return reading.windows.compactMap { window in
+            guard window.usedFraction < liftedBelow else { return nil }
+            switch window.id {
+            case UsageRingWindows.sessionID: return .session
+            case UsageRingWindows.weeklyID: return .weekly
+            default: return nil
+            }
+        }
+    }
+
+    /// Codenotch's `UsageLimitWatcher` takes a window under this as no longer used up.
+    nonisolated static let liftedBelow = 0.95
 
     // MARK: - Queries
 

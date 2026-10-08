@@ -58,6 +58,35 @@ nonisolated enum UsageRingWindows {
         )
     }
 
+    /// `next` with each window's reset time as `previous` had it, when the
+    /// two are the same window. Usage sources disagree on a reset time by
+    /// rounding (the status line's whole epoch seconds against the usage
+    /// endpoint's fractional ISO dates), and whichever reading wins decides
+    /// the time; a reset time that moved later by a fraction of a second
+    /// reads to Codenotch's limit watcher as a new window, and it announced
+    /// "limit reached" again each time. A real new window resets at least a
+    /// quarter of its length later (`UsageStore.isSameWindow`). Pure.
+    static func keepingResetTimes(_ next: ClaudeRingReading, previous: ClaudeRingReading?) -> ClaudeRingReading {
+        guard let previous else { return next }
+        var reading = next
+        for index in reading.windows.indices {
+            let window = reading.windows[index]
+            guard let resetsAt = window.resetsAt,
+                  let before = previous.windows.first(where: { $0.id == window.id }),
+                  let kept = before.resetsAt, kept != resetsAt else { continue }
+            let lengths = [window.duration, before.duration].compactMap { $0 }.filter { $0 > 0 }
+            let tolerance = lengths.min().map { $0 / 4 } ?? sameWindowFallbackTolerance
+            if abs(resetsAt.timeIntervalSince(kept)) < tolerance {
+                reading.windows[index].resetsAt = kept
+            }
+        }
+        return reading
+    }
+
+    /// For a window of unknown length: far more than rounding, far less than
+    /// any window.
+    static let sameWindowFallbackTolerance: TimeInterval = 60
+
     /// Extra usage when it is switched on and has a limit or spend to show.
     /// Claude Code reports credits in minor units (cents for USD).
     static func extraUsageWindow(_ extra: ExtraUsage?) -> ClaudeRingReading.Window? {

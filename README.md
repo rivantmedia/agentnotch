@@ -252,6 +252,12 @@ Agent Notch is the same app under a new name, with a new bundle id
 - **Usage** is checked every 5 minutes, and only when nothing fresher has arrived. In
   Settings › *Usage* you can choose Off, 5, 10, 15 or 30 minutes, use **Refresh now**, and
   see each account's last reading.
+- **Usage limits are announced once per account.** When an account's 5-hour or weekly limit
+  runs out you get one alert, saying when it resets: the account's banner ("Work: 2 sessions
+  hit the limit") or Codenotch's "limit reached" card, whichever comes first, with one chime.
+  Until that window resets nothing repeats it: not a retry, wake-up or `/loop` tick that fails
+  on the limit, another session stopped by it, a session reopened with its old failure, or a
+  relaunch. The 80% warning still comes once per window.
 
 ## Cloud sync (optional)
 

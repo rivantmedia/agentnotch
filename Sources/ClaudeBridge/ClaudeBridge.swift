@@ -43,6 +43,27 @@ final class ClaudeBridge {
         ClaudeProfile.isClaude(providerID: id)
     }
 
+    /// Codenotch's threshold banners for a Claude ring, except at 100%:
+    /// "limit reached" is the limit watcher's to give, through
+    /// `claimsLimitAlert` (LIM2), so an account's limit is told once. That
+    /// includes the 80% banner of a reading that jumped straight past 80% to
+    /// 100% ("… is at 100%"). Seam LIM1.
+    nonisolated static func forwardsThresholdAlert(providerID: String, threshold: Int, usedPercent: Int) -> Bool {
+        !(ownsProvider(providerID) && (threshold >= 100 || usedPercent >= 100))
+    }
+
+    /// Whether Codenotch's "limit reached" card or banner shows for this
+    /// event: always for other providers; for a Claude ring, only when it is
+    /// the first announcement of that account's limit on that window (the
+    /// engine's `claimLimitAlert`, shared with the account's limit banner and
+    /// the notch's chime and peek, which it takes when it plays its own
+    /// sound). Seam LIM2.
+    func claimsLimitAlert(_ event: UsageAlertEvent, bringsSound: Bool) -> Bool {
+        guard Self.ownsProvider(event.providerID), event.kind != .reset, let hub else { return true }
+        return hub.claimLimitAlert(ringID: event.providerID, weekly: event.kind == .weeklyLimitReached,
+                                   resetsAt: event.resetsAt, bringsSound: bringsSound)
+    }
+
     /// The menu bar summary's label for an account ring when several rings
     /// share Claude's mark (MBL): its nickname, else its short name
     /// ("Rivant" for "Claude Rivant"). Nil for any other ring, which keeps

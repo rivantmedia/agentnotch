@@ -495,6 +495,7 @@ actor SessionStore {
             session.stopError = message
             session.stopErrorCode = event.stopError
             session.stopErrorAt = now
+            session.stopErrorIsRestored = false
             // last_assistant_message of a StopFailure is the API error text;
             // the preview keeps the last real reply.
             session.backgroundTaskCount = 0
@@ -526,6 +527,7 @@ actor SessionStore {
         session.stopError = nil
         session.stopErrorCode = nil
         session.stopErrorAt = nil
+        session.stopErrorIsRestored = false
     }
 
     /// Sets or clears `needsInputReason` for this event.
@@ -608,6 +610,7 @@ actor SessionStore {
                 session.stopError = error
                 session.stopErrorCode = record.stopErrorCode
                 session.stopErrorAt = record.failedAt
+                session.stopErrorIsRestored = true
                 session.setNeedsInput(.error(error), at: record.failedAt ?? now)
             }
         }

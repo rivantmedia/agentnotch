@@ -80,6 +80,10 @@ nonisolated struct SessionState: Equatable, Identifiable, Sendable {
     var stopErrorCode: String?
     /// When the last turn failed (StopFailure).
     var stopErrorAt: Date?
+    /// The failure was read back from review-state.json when the session was
+    /// seen again (a relaunch, a resumed or reopened session), not seen
+    /// happen in this sighting: shown, but not news (`AttentionNews`).
+    var stopErrorIsRestored = false
     /// Explicit reason the session is blocked on the user, beyond a pending approval.
     var needsInputReason: NeedsInputReason? {
         didSet {

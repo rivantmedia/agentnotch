@@ -11,7 +11,12 @@
 //    input, is reviewed, or goes away.
 //  - Sessions stopped by a usage limit share one banner per account,
 //    `agentnotch.limit.<ring id>`: "Work: 3 sessions hit the limit · resets 14:05",
-//    naming the window that ran out.
+//    naming the window that ran out. It is posted once per limit
+//    (`LimitAnnouncements`: until the window resets, across relaunches, and
+//    not at all when Codenotch's own "limit reached" came first): a retry,
+//    wake-up or /loop tick that fails again, another session stopped by the
+//    same limit, or a session reopened with its old failure post nothing.
+//    Withdrawn while no session is stopped by it.
 //  - Any other failed turn (overloaded, sign-in, billing, …) gets its own
 //    kind of banner, `agentnotch.failed.<session id>`: "<title> stopped", with
 //    what to do, never "needs you" (there is nothing to answer).
@@ -441,6 +446,8 @@ final class NotificationService: NSObject, ObservableObject {
             }
 
             if transition.becameNeedsInput, ClaudeControlSettings.notifyNeedsInput, let reason = transition.to.needsInputReason {
+                // A failure read back from disk was announced when it happened.
+                if reason.isError, session.stopErrorIsRestored { continue }
                 if ClaudeHostProjections.isRateLimit(reason) {
                     // One banner per account, below.
                     limitRings.insert(ringID(for: session))
@@ -471,8 +478,14 @@ final class NotificationService: NSObject, ObservableObject {
         }
     }
 
+    /// The ring the hub shows the session on: its account by attribution (a
+    /// session that started while a mirrored folder named another account,
+    /// one Claude Desktop runs as its own), as the notch's chime and
+    /// Codenotch's limit card key it; the folder's account until the hub has
+    /// placed it.
     private func ringID(for session: SessionState) -> String {
-        ClaudeHostProjections.ringID(for: session, home: AppIdentity.homeDirectory)
+        ClaudeControlHub.shared?.limitPlacement(sessionId: session.sessionId)?.ringID
+            ?? ClaudeHostProjections.ringID(for: session, home: AppIdentity.homeDirectory)
     }
 
     /// The account's name, only when several accounts are in use; with the
@@ -482,8 +495,12 @@ final class NotificationService: NSObject, ObservableObject {
     private func accountLabel(for session: SessionState) -> String? {
         let registry = AccountRegistry.shared
         let folderId = session.accountId ?? AccountPaths.defaultConfigDir
-        // One account per signed-in identity, whatever folder the session runs in.
-        if let identity = registry.identity(forFolderId: folderId) {
+        // One account per signed-in identity, whatever folder the session runs
+        // in: the one the hub shows it under (by attribution), else the
+        // folder's current one.
+        let placed = ClaudeControlHub.shared?.limitPlacement(sessionId: session.sessionId)
+            .flatMap { placement in registry.identities.first { $0.ringID == placement.ringID } }
+        if let identity = placed ?? registry.identity(forFolderId: folderId) {
             let visible = registry.visibleIdentities
             let labels = Dictionary(visible.map { ($0.id, displayLabel($0.id, fallback: $0.label)) },
                                     uniquingKeysWith: { first, _ in first })
@@ -528,14 +545,14 @@ final class NotificationService: NSObject, ObservableObject {
         return "\(label) · \(AccountPaths.shortName(forConfigDir: account.configDir))"
     }
 
-    /// Post, replace or withdraw one account's limit banner so it counts the
-    /// sessions stopped by its limit now. A shrinking count isn't re-posted
-    /// (that would show the banner again); zero withdraws it.
+    /// Post or withdraw one account's limit banner. It is posted when a
+    /// session is newly stopped by the limit (not one restored with an old
+    /// failure) and the limit hasn't been announced yet; it is never re-added
+    /// for a changed count (macOS would show it again); zero withdraws it.
     private func updateLimitNotification(ringID: String) async {
-        let home = AppIdentity.homeDirectory
         let registry = AccountRegistry.shared
         let limited = ClaudeSessionMonitor.shared.instances.filter { session in
-            ClaudeHostProjections.ringID(for: session, home: home) == ringID
+            self.ringID(for: session) == ringID
                 && session.attention.needsInputReason.map(ClaudeHostProjections.isRateLimit) == true
                 && session.accountId.flatMap(registry.account(id:))?.isHidden != true
                 && !(session.accountId.map(registry.isForgotten) ?? false)
@@ -548,10 +565,23 @@ final class NotificationService: NSObject, ObservableObject {
             removeDelivered([identifier])
             return
         }
-        guard !ids.subtracting(before).isEmpty, ClaudeControlSettings.notifyNeedsInput else { return }
+        let restored = Set(limited.filter(\.stopErrorIsRestored).map(\.sessionId))
+        guard !ids.subtracting(before).subtracting(restored).isEmpty,
+              ClaudeControlSettings.notifyNeedsInput else { return }
 
-        let accountId = limited.first?.accountId.map { registry.identityId(for: $0) ?? $0 }
-        let hit = accountId.flatMap { UsageStore.shared.usage[$0]?.limitHit() }
+        // The used-up window of the account the hub placed the sessions with;
+        // the folder's account's until it has.
+        let placed = limited.lazy.compactMap { ClaudeControlHub.shared?.limitPlacement(sessionId: $0.sessionId) }.first
+        let hit = placed.map(\.limitHit) ?? limited.first?.accountId
+            .map { registry.identityId(for: $0) ?? $0 }
+            .flatMap { UsageStore.shared.usage[$0]?.announcedLimitHit() }
+        // Claimed only for a banner macOS will show: otherwise the limit is
+        // left to Codenotch's card in the notch, which needs no permission.
+        guard await ensureAuthorized(),
+              await UNUserNotificationCenter.current().notificationSettings().alertStyle != .none else { return }
+        // Once per limit, whichever announcement came first.
+        guard LimitAnnouncementStore.shared.claim(.notification, ring: ringID, window: hit?.window,
+                                                  resetsAt: hit?.resetsAt) else { return }
         let reset = ClaudeHostProjections.resetPhrase(hit?.resetsAt, now: Date())
         let label = limited.first.flatMap(accountLabel(for:))
         let content = LimitNotificationContent.make(
@@ -632,10 +662,9 @@ final class NotificationService: NSObject, ObservableObject {
         Task {
             let center = UNUserNotificationCenter.current()
             let delivered = await center.deliveredNotifications()
-            let home = AppIdentity.homeDirectory
             let limitedRings = Set(ClaudeSessionMonitor.shared.instances
                 .filter { $0.attention.needsInputReason.map(ClaudeHostProjections.isRateLimit) == true }
-                .map { ClaudeHostProjections.ringID(for: $0, home: home) })
+                .map { self.ringID(for: $0) })
             let stale = delivered.map(\.request.identifier).filter { identifier in
                 if let ring = LimitNotificationContent.parse(identifier: identifier) {
                     return !limitedRings.contains(ring)

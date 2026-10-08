@@ -676,7 +676,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // other.
             let notifier = ThresholdNotifier(
                 isMuted: { [weak preferences] in preferences?.isMutedAlerts(for: $0) ?? false },
-                deliver: { ThresholdAlerts.deliver($0) }
+                deliver: { if ClaudeBridge.forwardsThresholdAlert(providerID: $0.providerID, threshold: $0.threshold, usedPercent: $0.usedPercent) { ThresholdAlerts.deliver($0) } } // Fork: LIM1
             )
             self.thresholdNotifier = notifier
 
@@ -1010,6 +1010,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         guard isAnnounceEnabled else { return }
+        guard ClaudeBridge.shared.claimsLimitAlert(event, bringsSound: preferences.limitReachedSound) else { return } // Fork: LIM2
 
         Log.usage.info("usage limit reached for \(event.providerName, privacy: .public) (\(event.windowLabel, privacy: .public))")
 
