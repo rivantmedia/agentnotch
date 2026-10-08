@@ -24,3 +24,8 @@ pending readings and the last per `accountKey|source`, explicit null
 `cloud-sync-state.json` (`cloud::pass::CloudSyncMemory`, v2: what the website
 has, by ledger entry key, with `ended`, the transcript's stamp and the
 payload version; absent optionals left out) is made up in the same encoding.
+
+`limit-announcements.json` (`persist::limits::LimitAnnouncementsFile`, v1: the
+announced usage limits per ring, each with its window, reset time, start and
+channels; compact, sorted keys, ISO 8601 whole seconds as Swift's `.iso8601`
+writes them) is made up in the same encoding.

@@ -10,6 +10,7 @@
 
 pub mod accounts;
 pub mod hook_install;
+pub mod limits;
 pub mod review;
 pub mod settings;
 pub mod usage;

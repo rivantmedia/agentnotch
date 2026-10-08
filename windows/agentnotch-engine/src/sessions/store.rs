@@ -667,6 +667,7 @@ impl SessionStore {
                     Some(attention::humanized_stop_error(event.stop_error.as_deref()));
                 session.stop_error_code = event.stop_error.clone();
                 session.failed_at = Some(now);
+                session.stop_error_is_restored = false;
                 // The last_assistant_message of a StopFailure is the API
                 // error text; the preview keeps the last real reply.
                 session.background_task_count = 0;
@@ -929,6 +930,7 @@ pub(super) fn clear_failure(session: &mut Session) {
     session.stop_error = None;
     session.stop_error_code = None;
     session.failed_at = None;
+    session.stop_error_is_restored = false;
 }
 
 /// Sets or clears the needs-input reason for this event.

@@ -8,7 +8,10 @@
 //! - resolved: it needed input or waited for review, and now does something
 //!   else, or it went away while it did;
 //! - needs input: it didn't need input (or wasn't known), or now needs it
-//!   for another reason;
+//!   for another reason; but not a failed turn read back from
+//!   `review-state.json` (`SessionView::stop_error_is_restored`): a session
+//!   seen again (a relaunch, `--resume`, a reopened editor chat) shows its
+//!   old failure without announcing it again;
 //! - ready for review: it wasn't ready for review, the completion isn't
 //!   quiet, and it didn't finish before this launch (restored from
 //!   `review-state.json`, or inferred from a transcript that ended while the
@@ -36,6 +39,27 @@ pub fn kinds_between(
     completed_at: Option<SystemTime>,
     launched_at: Option<SystemTime>,
 ) -> Vec<NewsKind> {
+    kinds_between_restoring(
+        from,
+        to,
+        is_quiet_completion,
+        completed_at,
+        launched_at,
+        false,
+    )
+}
+
+/// [`kinds_between`], knowing whether a failed turn `to` shows was read back
+/// from disk (`failure_is_restored`): that failure is not news, whatever else
+/// is (only failures: any other restored reason still is).
+pub fn kinds_between_restoring(
+    from: Option<&SessionState>,
+    to: Option<&SessionState>,
+    is_quiet_completion: bool,
+    completed_at: Option<SystemTime>,
+    launched_at: Option<SystemTime>,
+    failure_is_restored: bool,
+) -> Vec<NewsKind> {
     let mut kinds = Vec::new();
     if let Some(from) = from {
         let was = from.bucket();
@@ -49,8 +73,10 @@ pub fn kinds_between(
         return kinds;
     };
     if let Some(reason) = to.reason() {
+        let restored = failure_is_restored && reason.is_error();
         match from.and_then(SessionState::reason) {
             Some(was) if was == reason => {}
+            _ if restored => {}
             _ => kinds.push(NewsKind::NeedsInput),
         }
     } else if *to == SessionState::ReadyForReview && from != Some(&SessionState::ReadyForReview) {
@@ -70,18 +96,25 @@ pub fn kinds(
     launched_at: Option<SystemTime>,
     quiet: bool,
 ) -> Vec<NewsKind> {
-    kinds_between(
+    kinds_between_restoring(
         transition.from.as_ref(),
         Some(&transition.to),
         quiet,
         transition.session.completed_at,
         launched_at,
+        transition.session.stop_error_is_restored,
     )
 }
 
 /// Every change is passed on (banners are withdrawn on any of them), except
-/// a completion that isn't news: from before this launch, or quiet.
+/// a completion that isn't news (from before this launch, or quiet) and a
+/// restored failure that withdraws nothing.
 pub fn is_news(transition: &AttentionTransition, launched_at: Option<SystemTime>) -> bool {
+    if transition.session.stop_error_is_restored
+        && transition.to.reason().is_some_and(|r| r.is_error())
+    {
+        return !kinds(transition, launched_at, false).is_empty();
+    }
     if !transition.became_ready_for_review() {
         return true;
     }

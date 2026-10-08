@@ -402,6 +402,10 @@ pub struct Session {
     pub stop_error_code: Option<String>,
     /// When the last turn failed.
     pub failed_at: Option<SystemTime>,
+    /// The failure was read back from `review-state.json` when the session
+    /// was seen again (a relaunch, a resumed or reopened session), not seen
+    /// happen in this sighting: shown, but not news (`attention::news`).
+    pub stop_error_is_restored: bool,
     needs_input_reason: Option<NeedsInputReason>,
     needs_input_since: Option<SystemTime>,
     /// Background tasks still running after the turn ended.
@@ -522,6 +526,7 @@ impl Session {
             stop_error: None,
             stop_error_code: None,
             failed_at: None,
+            stop_error_is_restored: false,
             needs_input_reason: None,
             needs_input_since: None,
             background_task_count: 0,
@@ -933,6 +938,7 @@ impl Session {
             waiting_since: self.waiting_since(),
             completion_pending_since: self.completion_pending_since,
             completion_quiet: self.completion_is_quiet(),
+            stop_error_is_restored: self.stop_error_is_restored,
             background_wait_description: self.background_wait_description(),
             permission_mode: self.permission_mode.clone(),
             context_window_size: self.context_window_size,

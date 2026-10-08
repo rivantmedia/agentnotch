@@ -352,6 +352,7 @@ lives).
 | engine settings | `<support>\control-settings.json` v1 | every `claudeControl.*` switch of the Mac (§4.12) plus `cloudDeviceId`. Written only by `an-core`. |
 | accounts | `<support>\accounts.json` v2 | Mac format (AU§3.7), through the `persist::accounts` DTOs (§3, serde rules). |
 | review queue | `<support>\review-state.json` v2 | Mac format (HS§5.13), through `persist::review`. |
+| announced limits | `<support>\limit-announcements.json` v1 | Mac format (Release 1.0.2), through `persist::limits`: which usage limits were announced, per ring and window, until the window resets or the readings show it lifted early (§4.10). |
 | usage | `<support>\usage-state.json` v1 | Mac format (AU§9.10), through `persist::usage`; status-line keys `pid:<pid>@<epoch s of GetProcessTimes creation>`. |
 | hook install record | `<support>\hook-install.json` v1 | per physical settings.json: the folder, the command form written, the hook copy path. Lets `uninstall-hooks` clean up without re-discovery. |
 | cloud | `<support>\cloud-session.json`, `cloud-install-secret` (32 raw bytes), `cloud-ledger.json`, `cloud-scan-state.json`, `cloud-usage-outbox.json`, `cloud-summaries.json`, `cloud-sync-state.json`, `cloud-folder-logins.json` | Mac formats (CL§4.2). Nothing read or written when sealed or before bootstrap. |
@@ -839,7 +840,7 @@ Two exceptions, each with its own types so the rule above never leaks into them:
   `"probe" | "statusLine" | "claudeJson" | "desktop"` (`UsageSource::contract_name()`, tested
   against `web/contract/fixtures/sync-request.json`).
 - **Files in the Mac's formats** (`accounts.json`, `usage-state.json`, `review-state.json`,
-  `control-settings.json`, the `cloud-*.json` files) are read and written only through
+  `limit-announcements.json`, `control-settings.json`, the `cloud-*.json` files) are read and written only through
   per-file data-transfer types in `persist::*` (and `cloud::files`), with explicit
   `#[serde(rename = …)]` for every field (camelCase as the Mac writes them) and date adapters
   matching each file's Mac encoding (ISO-8601 whole seconds `Z`, or epoch seconds as `f64`,
@@ -1199,7 +1200,7 @@ pub enum JobResult { Folders(FolderSnapshot), ClaudeJson(ClaudeJsonRead), Regist
     Installed(Vec<InstallOutcome>), Persisted(Result<(), String>), Probe(ProbeResult),
     Versions(Vec<VersionSighting>), Console(ConsoleInfo), Host(HostApp), Focus(FocusOutcome),
     Typed(TypeOutcome), Visible { any_terminal: bool, full_screen: bool } }
-pub enum PersistFile { Accounts, Review, Usage, Settings, HookInstall }
+pub enum PersistFile { Accounts, Review, Usage, Settings, HookInstall, Limits }
 pub enum Input {                                   // everything an-core consumes, in arrival order
     Transport(TransportEvent),
     Call { call: Call, reply: crossbeam_channel::Sender<Result<serde_json::Value, CallError>> },
@@ -1958,6 +1959,13 @@ window covering its monitor.
   `SystemAsterisk`. Settings "Play a sound" (default on) and "Open the notch when a session ends"
   (peek, default on, 3/5/10 s, default 5) live in the Claude Code pane (upstream Windows has no
   such settings).
+- A usage limit is announced once per account (Release 1.0.2; `control::limits`): the account's
+  limit banner and the chime and peek of the turn it stopped each fire once per ring and window,
+  until the window resets or a fresh reading shows it back under 95 % (an early reset), and a
+  relaunch doesn't tell it again (`limit-announcements.json`). The banner is claimed only when
+  it will show (notifications allowed, not suppressed): with none, the chime and peek are the
+  limit's only announcement (Windows has no "limit reached" card). A failed turn read back from
+  `review-state.json` is shown but is not news: no banner, chime or peek.
 - Peek: `an:peek {ring_id, seconds}` → notch.js unfolds, shows that ring's card, folds after.
 - Auto-open: **Never (default on Windows)** / needs you / needs you or done; never over a
   full-screen app, never when the session's terminal is in front, never replacing an open panel
@@ -3454,3 +3462,18 @@ logs and the two cross-cutting reviews, kept beside the checkout in `an-work/` (
   and its secrets); upstream's `report_dpr` correction loop at 125 %; paths over `MAX_PATH`
   and volumes without 8.3 names (not proven on Windows); a light-taskbar variant of the tray
   dot.
+- **Parity with 1.0.2: a usage limit is announced once per account (§4.10).** The Mac's
+  `LimitAnnouncements` (489fbef) is `control::limits`, kept in `limit-announcements.json`
+  (`PersistFile::Limits`, `persist::limits`; never written sealed, an unreadable file starts
+  afresh). The limit banner (`LimitBanners` is due for a newly stopped session, not a restored
+  one; the hub claims it only after the notifications, permission and full-screen checks, so a
+  banner that won't show claims nothing) and the chime and peek (`policy::repeats_limit_reaction`
+  where the hub queues a burst) fire once per ring and window. `drive_limits` runs after every
+  input: it ends a window the readings show back under 95 % (`lifted_limit_windows`), teaches an
+  announcement made before the readings which window ran out (`AccountUsage::announced_limit_hit`),
+  and keeps one reset time per ring window (`ring_windows::keeping_reset_times`, applied to the
+  ring readings). A failed turn restored from `review-state.json` carries
+  `stop_error_is_restored` (`SessionView`): it is shown, but `attention::news`, the tracker,
+  `policy::kind_of` (no chime or peek) and `toast_for` treat it as no news. Left out, with no counterpart on Windows: upstream's limit
+  watcher, its 100 % banner and "limit reached" card (seams LIM1/LIM2, `claimLimitAlert`), and
+  the bridge's part.

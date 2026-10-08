@@ -285,6 +285,7 @@ impl SessionStore {
             session.stop_error = Some(error.clone());
             session.stop_error_code = record.stop_error_code.clone();
             session.failed_at = record.failed_at;
+            session.stop_error_is_restored = true;
             session.set_needs_input(
                 Some(NeedsInputReason::Error {
                     text: error.clone(),

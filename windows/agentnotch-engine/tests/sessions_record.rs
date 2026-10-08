@@ -900,6 +900,7 @@ fn to_view_of_a_populated_session_fills_every_field() {
         waiting_since,
         completion_pending_since,
         completion_quiet,
+        stop_error_is_restored,
         background_wait_description,
         permission_mode,
         context_window_size,
@@ -977,6 +978,8 @@ fn to_view_of_a_populated_session_fills_every_field() {
     assert_eq!(completion_pending_since, Some(at(21)));
     // The typed turn started a workflow: quiet.
     assert!(completion_quiet);
+    // Seen happen in this sighting, not read back from disk.
+    assert!(!stop_error_is_restored);
     // Waiting on agents is shown only between turns; here a request is shown
     // (phase waiting for approval), so the wait reads.
     assert_eq!(background_wait_description.as_deref(), Some("1 workflow"));

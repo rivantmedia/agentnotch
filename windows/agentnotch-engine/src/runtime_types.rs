@@ -171,6 +171,7 @@ pub enum PersistFile {
     Usage,
     Settings,
     HookInstall,
+    Limits,
 }
 
 impl PersistFile {
@@ -181,6 +182,7 @@ impl PersistFile {
             PersistFile::Usage => crate::persist::usage::FILE_NAME,
             PersistFile::Settings => crate::persist::settings::FILE_NAME,
             PersistFile::HookInstall => crate::persist::hook_install::FILE_NAME,
+            PersistFile::Limits => crate::persist::limits::FILE_NAME,
         }
     }
 }
