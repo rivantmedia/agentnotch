@@ -39,6 +39,8 @@ use crate::sessions::registry::{
 use crate::sessions::{desktop, SessionStore};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::SystemTime;
 
 /// The session store's schedule and the jobs it waits on.
@@ -57,6 +59,9 @@ pub(crate) struct SessionsWiring {
     scans: BTreeSet<JobId>,
     /// The launch's reads not back yet; `None` once the baseline closed.
     launch_scan: Option<BTreeSet<JobId>>,
+    /// Set once the launch's reads are all back, for the runtime's other
+    /// threads: a banner link that started the app waits for it.
+    pub(crate) launch_scanned: Arc<AtomicBool>,
     /// Desktop lookups in flight, by the host session id they are for.
     hosted: BTreeMap<JobId, String>,
     interrupts: InterruptWatcher,
@@ -72,6 +77,7 @@ impl SessionsWiring {
             next_scan: None,
             scans: BTreeSet::new(),
             launch_scan: None,
+            launch_scanned: Arc::new(AtomicBool::new(false)),
             hosted: BTreeMap::new(),
             interrupts: InterruptWatcher::new(),
             next_poll: None,
@@ -110,6 +116,7 @@ impl Core {
             let reads = self.scan_registries();
             if reads.is_empty() {
                 self.sessions.initial_scan_completed(now);
+                self.sessions_w.launch_scanned.store(true, Ordering::SeqCst);
             } else {
                 self.sessions_w.launch_scan = Some(reads);
             }
@@ -292,6 +299,7 @@ impl Core {
             if waiting.is_empty() {
                 self.sessions_w.launch_scan = None;
                 self.sessions.initial_scan_completed(now);
+                self.sessions_w.launch_scanned.store(true, Ordering::SeqCst);
             }
         }
     }

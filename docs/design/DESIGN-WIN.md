@@ -1936,8 +1936,9 @@ window covering its monitor.
   `agentnotch://open?session=<sid>` and (review only) `Mark Reviewed` →
   `agentnotch://review?session=<sid>&completed=<ms>`. The URL starts `agentnotch.exe "<url>"`;
   the single-instance plugin forwards it to the running app (WSI); a cold start handles it in
-  `setup`. Deep-link actions never answer a request; unknown sessions are ignored; ≤ 10 per
-  minute.
+  `setup`. Deep-link actions never answer a request; unknown sessions are ignored (a session not
+  listed yet while the launch's registry reads are out is looked up again once they are back, at
+  most 5 s later, so a cold start's link isn't lost); ≤ 10 per minute.
 - Permission: `ToastNotifier::Setting()`; Settings row "Windows notifications: Allowed / Off in
   Windows Settings" with "Open…" → the glue method `open_notification_settings` (a fixed
   `ms-settings:notifications`; `open_url` stays `https:`-only). No shortcut (dev or portable

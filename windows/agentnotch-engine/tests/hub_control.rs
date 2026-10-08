@@ -47,6 +47,11 @@ fn world() -> World {
 }
 
 fn world_with(customise: impl FnOnce(&mut Platform)) -> World {
+    world_prepared(customise, |_| {})
+}
+
+/// `world_with`, with `prepare` run on the fakes before the hub starts.
+fn world_prepared(customise: impl FnOnce(&mut Platform), prepare: impl FnOnce(&TestHub)) -> World {
     let home = Home::new();
     home.write_json(".claude.json", &home.login(PARAS_UUID, PARAS, None));
     home.mkdir(".claude/sessions");
@@ -70,6 +75,7 @@ fn world_with(customise: impl FnOnce(&mut Platform)) -> World {
         },
     );
     hub.handles.terminals.set_console(PID, console());
+    prepare(&hub);
     hub.hub.start().expect("the hub starts");
     assert!(
         eventually(|| hub.logs().iter().any(|l| l == "pipe listening")),
@@ -879,4 +885,112 @@ fn the_hotkey_status_reaches_settings() {
         settings["attention"]["hotkey_message"],
         "Ctrl+Shift+Space is taken"
     );
+}
+
+// ---- a banner clicked while the app wasn't running ----
+
+/// The real process table, except that the launch's registry read (on an
+/// `an-io` worker) waits until the test lets it go.
+struct HeldRegistry {
+    inner: Arc<dyn agentnotch_engine::platform::Processes>,
+    open: Arc<(Mutex<bool>, std::sync::Condvar)>,
+}
+
+impl HeldRegistry {
+    fn wait(&self) {
+        let on_io = std::thread::current()
+            .name()
+            .is_some_and(|name| name.starts_with("an-io"));
+        if !on_io {
+            return;
+        }
+        let (open, turn) = &*self.open;
+        let mut open = open.lock().unwrap();
+        while !*open {
+            open = turn.wait(open).unwrap();
+        }
+    }
+}
+
+impl agentnotch_engine::platform::Processes for HeldRegistry {
+    fn liveness(&self, pid: u32) -> Liveness {
+        self.wait();
+        self.inner.liveness(pid)
+    }
+    fn start_time(&self, pid: u32) -> Option<SystemTime> {
+        self.inner.start_time(pid)
+    }
+    fn table(&self) -> ProcessTable {
+        self.inner.table()
+    }
+    fn config_dir_env(&self, pid: u32) -> agentnotch_engine::platform::EnvRead {
+        self.inner.config_dir_env(pid)
+    }
+    fn same_user(&self, pid: u32) -> Option<bool> {
+        self.inner.same_user(pid)
+    }
+    fn elevated(&self, pid: u32) -> Option<bool> {
+        self.inner.elevated(pid)
+    }
+    fn exe_path(&self, pid: u32) -> Option<PathBuf> {
+        self.inner.exe_path(pid)
+    }
+}
+
+/// DESIGN-WIN §4.10: a cold start hands its link to the hub in setup, right
+/// after the start, before the launch's registry read is back and so before
+/// any session is listed. The link waits for that read instead of being
+/// ignored as "no such session" (the Mac's `openSession` has no such check).
+#[test]
+fn a_banner_link_that_started_the_app_waits_for_the_launch_scan() {
+    let open: Arc<(Mutex<bool>, std::sync::Condvar)> = Arc::default();
+    let held = open.clone();
+    let w = world_prepared(
+        move |platform| {
+            platform.processes = Arc::new(HeldRegistry {
+                inner: platform.processes.clone(),
+                open: held,
+            });
+        },
+        |hub| {
+            let started = hub.handles.clock.now() - Duration::from_secs(60);
+            let started_ms = agentnotch_engine::core::time::to_ms(started);
+            let home = hub.roots.home.clone();
+            std::fs::write(
+                home.join(format!(".claude/sessions/{PID}.json")),
+                serde_json::to_vec(&json!({
+                    "pid": PID, "sessionId": "cold", "cwd": home.join("code/proj"),
+                    "startedAt": started_ms, "version": "2.1.282", "kind": "interactive",
+                    "entrypoint": "cli", "status": "waiting", "waitingFor": "approve Bash",
+                    "updatedAt": started_ms, "statusUpdatedAt": started_ms,
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        },
+    );
+    assert!(w.row("cold").is_none(), "the launch read is still out");
+    let hub = w.hub.hub.clone();
+    let clicked =
+        std::thread::spawn(move || hub.handle_deep_link("agentnotch://open?session=cold"));
+    std::thread::sleep(Duration::from_millis(200));
+    *open.0.lock().unwrap() = true;
+    open.1.notify_all();
+    assert_eq!(
+        clicked.join().unwrap(),
+        agentnotch_engine::hub::DeepLinkOutcome::Opened
+    );
+    assert!(w
+        .panel_requests()
+        .iter()
+        .any(|request| request.highlight.as_deref() == Some("cold")));
+    // Once the scan is back, an unknown session is ignored at once.
+    let asked = std::time::Instant::now();
+    assert!(matches!(
+        w.hub
+            .hub
+            .handle_deep_link("agentnotch://open?session=nobody"),
+        agentnotch_engine::hub::DeepLinkOutcome::Ignored(_)
+    ));
+    assert!(asked.elapsed() < Duration::from_secs(1));
 }

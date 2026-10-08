@@ -69,6 +69,10 @@ const CLOUD_STOP_WAIT: Duration = Duration::from_secs(3);
 /// Every call's answer once `an-core` has failed.
 pub const ENGINE_FAILED: &str =
     "Agent Notch's engine stopped after an internal error. Quit and reopen Agent Notch.";
+/// How long a banner link naming a session not listed yet waits for the
+/// launch's registry reads (a banner clicked while the app wasn't running
+/// starts it with the link, before the first read is back).
+const LAUNCH_SCAN_WAIT: Duration = Duration::from_secs(5);
 
 /// The runtime's timings; tests shorten them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,6 +144,8 @@ struct Inner {
     cloud: Mutex<Option<Arc<CloudHandle>>>,
     /// Banner links acted on in the last minute.
     links: Mutex<DeepLinkGate>,
+    /// Set by `an-core` once the launch's registry reads are back.
+    launch_scanned: Mutex<Option<Arc<AtomicBool>>>,
 }
 
 struct Running {
@@ -179,6 +185,7 @@ impl Runtime {
                 run: Mutex::new(None),
                 cloud: Mutex::new(None),
                 links: Mutex::new(DeepLinkGate::default()),
+                launch_scanned: Mutex::new(None),
             }),
         }
     }
@@ -314,6 +321,7 @@ impl HubBackend for Runtime {
         // projection.
         core.on_start();
         *lock(&inner.cloud) = core.cloud_w.handle.clone();
+        *lock(&inner.launch_scanned) = Some(core.sessions_w.launch_scanned.clone());
         // What the pages see from the first instant: `snapshot()` never
         // waits for `an-core`.
         let now = inner.platform.clock.now();
@@ -481,6 +489,38 @@ impl HubBackend for Runtime {
 }
 
 impl Runtime {
+    /// Whether `session` is listed once the launch's registry reads are
+    /// back, waiting for them (at most `LAUNCH_SCAN_WAIT`) while they are
+    /// out. DESIGN-WIN §4.10: a cold start handles its link in setup, and
+    /// an unknown session is ignored; right after the start no session is
+    /// known yet, so the link waits for the first reads instead of being
+    /// ignored. False at once when the reads are already back.
+    fn listed_after_launch(&self, session: &str) -> bool {
+        let inner = &self.inner;
+        let Some(scanned) = lock(&inner.launch_scanned).clone() else {
+            return false;
+        };
+        if scanned.load(Ordering::SeqCst) {
+            return false;
+        }
+        // Real time: the wait is for another thread's disk read.
+        let deadline = Instant::now() + LAUNCH_SCAN_WAIT;
+        while !scanned.load(Ordering::SeqCst) {
+            if Instant::now() >= deadline || !inner.running.load(Ordering::SeqCst) {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        // Through the queue: answered after the read that closed the scan,
+        // whatever the last published snapshot still says.
+        self.call(Call::Snapshot).is_ok_and(|snapshot| {
+            snapshot["sessions"].as_array().is_some_and(|rows| {
+                rows.iter()
+                    .any(|row| row["session_id"].as_str() == Some(session))
+            })
+        })
+    }
+
     /// A banner's link: the panel at a session or ring the pages are shown,
     /// or that session's completion reviewed. Never an answer to anything.
     fn banner_link(&self, action: DeepLinkAction) -> DeepLinkOutcome {
@@ -490,7 +530,9 @@ impl Runtime {
             return DeepLinkOutcome::Ignored("too many links in a minute".into());
         }
         let shown = self.snapshot();
-        let knows_session = |id: &str| shown.sessions.iter().any(|row| row.session_id == id);
+        let knows_session = |id: &str| {
+            shown.sessions.iter().any(|row| row.session_id == id) || self.listed_after_launch(id)
+        };
         match action {
             DeepLinkAction::OpenSession(session) => {
                 if !knows_session(session.as_str()) {
