@@ -1,6 +1,14 @@
 /**
  * Sessions the viewer can see: their own, and pool members' on shared accounts.
  *
+ * A list shows each Claude session once: when it reached the website from more than one person
+ * (one Mac signed in as each in turn), only the copy `canonicalSessionSql` (sql.ts) picks, before
+ * any filter, so filtering by owner or project never brings back another copy. Opening a row by
+ * its id (`getSession`) still shows any copy the viewer may see. Either way a session shows the
+ * summary another visible copy has when its own copy has none (`sessionSummarySql`), and search
+ * finds it by that summary. A session resumed under another account is listed once per account,
+ * each with that account's share.
+ *
  * Every time a session carries is clamped to the server's clock, in the SQL: a session dated in
  * the future (a Mac whose clock runs ahead) counts as now, never later, both where it sorts and
  * in the times it shows, its summary's time included.
@@ -16,11 +24,15 @@ import {
   ownedRowWhere,
   type AccessScope,
 } from "~/server/services/access";
+import { countedProjectRow } from "~/server/services/projects";
 import {
+  canonicalSessionSql,
   clampedTime,
   containsPattern,
   ownedRowSql,
+  sessionSummarySql,
   sqlTime,
+  type SessionSummarySql,
 } from "~/server/services/sql";
 import {
   decimalToNumber,
@@ -110,21 +122,31 @@ const sessionInclude = {
 
 type SessionRow = Prisma.SessionGetPayload<{ include: typeof sessionInclude }>;
 
-/** A session's id with its times clamped to the server's clock. */
+/**
+ * A session's id with its times clamped to the server's clock, and its summary as the viewer
+ * sees it (`sessionSummarySql`: possibly another visible copy's).
+ */
 type ClampedTimes = {
   id: string;
   startedAt: Date;
   lastActivityAt: Date;
   endedAt: Date | null;
+  summaryText: string | null;
+  summaryModel: string | null;
   summaryAt: Date | null;
 };
 
-function clampedColumns(now: Prisma.Sql): Prisma.Sql {
+function clampedColumns(
+  now: Prisma.Sql,
+  summary: SessionSummarySql,
+): Prisma.Sql {
   return Prisma.sql`s."id",
     LEAST(s."startedAt", ${now}) AS "startedAt",
     LEAST(s."lastActivityAt", ${now}) AS "lastActivityAt",
     ${clampedTime(Prisma.sql`s."endedAt"`, now)} AS "endedAt",
-    ${clampedTime(Prisma.sql`s."summaryAt"`, now)} AS "summaryAt"`;
+    ${summary.text} AS "summaryText",
+    ${summary.model} AS "summaryModel",
+    ${clampedTime(summary.at, now)} AS "summaryAt"`;
 }
 
 /**
@@ -172,10 +194,16 @@ export async function listSessions(
   const startedAt = Prisma.sql`LEAST(s."startedAt", ${at})`;
   const conditions: Prisma.Sql[] = [
     ownedRowSql(ownedRowWhere(scope, { accountKey: filter.accountKey }), "s"),
+    canonicalSessionSql(scope, "s"),
   ];
   if (filter.projectId) {
+    // A folder whose sessions are all other people's copies lists the folder those copies
+    // count in, as its pages do (projects.ts `countedProjectRow`).
+    const project = await countedProjectRow(db, scope, filter.projectId, {
+      acrossAccounts: filter.acrossAccounts === true,
+    });
     const group = projectGroupIds(
-      filter.projectId,
+      project?.id ?? filter.projectId,
       filter.acrossAccounts === true,
       ownedRowSql(ownedRowWhere(scope), "p"),
     );
@@ -193,12 +221,13 @@ export async function listSessions(
   if (filter.running === false) {
     conditions.push(Prisma.sql`s."endedAt" IS NOT NULL`);
   }
+  const summary = sessionSummarySql(scope, "s");
   const search = filter.search?.trim();
   if (search) {
     const pattern = containsPattern(search);
     conditions.push(Prisma.sql`(
       s."title" ILIKE ${pattern}
-      OR s."summaryText" ILIKE ${pattern}
+      OR ${summary.text} ILIKE ${pattern}
       OR EXISTS (
         SELECT 1 FROM "Project" sp WHERE sp."id" = s."projectId" AND sp."name" ILIKE ${pattern}))`);
   }
@@ -209,8 +238,8 @@ export async function listSessions(
   }
 
   const rows = await db.$queryRaw<ClampedTimes[]>`
-    SELECT ${clampedColumns(at)}
-    FROM "Session" s
+    SELECT ${clampedColumns(at, summary)}
+    FROM "Session" s ${summary.join}
     WHERE ${Prisma.join(conditions, " AND ")}
     ORDER BY ${startedAt} DESC, s."id" DESC
     LIMIT ${filter.limit + 1}`;
@@ -230,9 +259,10 @@ export async function getSession(
   id: string,
   now: Date = new Date(),
 ): Promise<SessionItem> {
+  const summary = sessionSummarySql(scope, "s");
   const rows = await db.$queryRaw<ClampedTimes[]>`
-    SELECT ${clampedColumns(sqlTime(now))}
-    FROM "Session" s
+    SELECT ${clampedColumns(sqlTime(now), summary)}
+    FROM "Session" s ${summary.join}
     WHERE s."id" = ${id} AND ${ownedRowSql(ownedRowWhere(scope), "s")}`;
   const [item] = await toItems(db, scope, rows);
   if (!item) throw new AccessDenied("NOT_FOUND", "No such session.");

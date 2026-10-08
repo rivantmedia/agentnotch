@@ -1,5 +1,9 @@
 /**
  * The Claude accounts a viewer can see, with their latest usage and recent totals.
+ *
+ * A Claude session that reached the website from more than one person (one Mac signed in as each
+ * in turn) counts once, from the copy `canonicalSessionSql` (sql.ts) picks. A session resumed
+ * under another account counts on each account it ran on: these totals are per account.
  */
 import { compareWindowIds, isFixedWindow } from "~/lib/format";
 import { usageSourceSchema } from "~/server/app-api/schema";
@@ -13,7 +17,11 @@ import {
   visibleOwnerIds,
   type AccessScope,
 } from "~/server/services/access";
-import { ownedRowSql, sqlTime } from "~/server/services/sql";
+import {
+  canonicalSessionSql,
+  ownedRowSql,
+  sqlTime,
+} from "~/server/services/sql";
 import { SYNC_QUOTAS } from "~/server/services/sync";
 import {
   daysBefore,
@@ -308,9 +316,10 @@ type ActivityRow = { accountKey: string; lastActivityAt: Date | null } & Record<
 
 /**
  * Per account: the 7- and 30-day totals and the latest activity of the sessions the viewer sees,
- * in one statement. Every session's times are clamped to the server's clock first, so one dated
- * in the future counts as now: it can't date an account's activity later than now, and it falls
- * in the periods exactly as a session started now would.
+ * one copy of each (`canonicalSessionSql`), in one statement. Every session's times are clamped
+ * to the server's clock first, so one dated in the future counts as now: it can't date an
+ * account's activity later than now, and it falls in the periods exactly as a session started
+ * now would.
  */
 async function sessionActivity(
   db: Db,
@@ -354,6 +363,7 @@ async function sessionActivity(
       FROM "Session" s
       WHERE s."accountKey" IN (${Prisma.join(keys)})
         AND ${ownedRowSql(ownedRowWhere(scope), "s")}
+        AND ${canonicalSessionSql(scope, "s")}
     ) t
     GROUP BY t."accountKey"`;
   return rows.map((row) => {

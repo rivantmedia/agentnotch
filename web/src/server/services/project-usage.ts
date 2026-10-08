@@ -12,6 +12,13 @@
  *
  * Usage limits are per account, and nothing reports them per project: these are shares of the
  * tokens, never of a limit.
+ *
+ * A Claude session that reached the website from more than one person counts once, from the copy
+ * `canonicalSessionSql` (sql.ts) picks, and a project whose sessions are all other people's
+ * copies is not listed: it is the same folder of the person whose copy counts. A session resumed
+ * under another account is stored once per account with that account's share: it counts in each
+ * account's part, but once in a project and once in the totals, so those sessions can be fewer
+ * than their parts' added up (tokens and cost are exactly theirs).
  */
 import { periodDays, type UsagePeriod } from "~/lib/usage-period";
 import { Prisma, type Db } from "~/server/db-types";
@@ -23,7 +30,13 @@ import {
   ownedRowWhere,
   type AccessScope,
 } from "~/server/services/access";
-import { clampedTime, ownedRowSql, sqlTime } from "~/server/services/sql";
+import { countedProjectRow } from "~/server/services/projects";
+import {
+  canonicalSessionSql,
+  clampedTime,
+  ownedRowSql,
+  sqlTime,
+} from "~/server/services/sql";
 import {
   addUp,
   daysBefore,
@@ -139,23 +152,29 @@ export async function projectUsage(
           from,
           now,
         );
-  const projects = (await toProjects(db, scope, rows))
+  const grouped = (await toProjects(db, scope, rows))
     .map((project) => ({
       ...project,
       accounts: project.accounts.filter((a) => a.sessions > 0),
     }))
     .filter((project) => project.sessions > 0)
     .sort(byUsage);
+  const projects = grouped.map(withoutSessionIds);
 
   const kept =
     filter.limit === undefined ? projects : projects.slice(0, filter.limit);
-  const left = projects.slice(kept.length);
+  const left = grouped.slice(kept.length);
   return {
     period: filter.period,
     from,
-    total: { ...addUp(projects), projects: projects.length },
+    // A session resumed under another account counts once in a total, as in a project: these
+    // sessions can be fewer than the projects' added up.
+    total: { ...addUpProjects(grouped), projects: grouped.length },
     projects: kept,
-    rest: left.length > 0 ? { ...addUp(left), projects: left.length } : null,
+    rest:
+      left.length > 0
+        ? { ...addUpProjects(left), projects: left.length }
+        : null,
     // Each row's first use is its earliest session whatever the period, clamped as the period's
     // own test is, so one before `from` is exactly a session the period leaves out.
     earlierSessions:
@@ -167,7 +186,9 @@ export async function projectUsage(
 /**
  * The project (its whole group, on every account the viewer sees it on) that the project row
  * `id` belongs to, with its usage in the period per account. Accounts it had no session on in
- * the period are listed too, last.
+ * the period are listed too, last. A group whose sessions are all other people's copies resolves
+ * to the group they count in (projects.ts `countedProjectRow`), so a visible row always shows a
+ * project.
  */
 export async function projectDetail(
   db: Db,
@@ -176,7 +197,7 @@ export async function projectDetail(
   period: UsagePeriod,
   now: Date = new Date(),
 ): Promise<ProjectDetail> {
-  const row = await visibleProjectRow(db, scope, id);
+  const row = await countedProjectRow(db, scope, id, { acrossAccounts: true });
   if (!row) throw new AccessDenied("NOT_FOUND", "No such project.");
   const from = periodStart(period, now);
   const rows = await usageRows(
@@ -187,8 +208,9 @@ export async function projectDetail(
     from,
     now,
   );
-  const [project] = await toProjects(db, scope, rows);
-  if (!project) throw new AccessDenied("NOT_FOUND", "No such project.");
+  const [grouped] = await toProjects(db, scope, rows);
+  if (!grouped) throw new AccessDenied("NOT_FOUND", "No such project.");
+  const project = withoutSessionIds(grouped);
   const firstUsedAt = rows.reduce<Date | null>(
     (first, r) =>
       r.firstUsedAt !== null && (first === null || r.firstUsedAt < first)
@@ -228,6 +250,17 @@ type UsageRow = {
   accountKey: string;
   projectIds: string[];
   sessions: number;
+  /**
+   * The period's sessions, by Claude's id, so a session on several accounts counts once. One id
+   * per session: sized for normal use, even all time.
+   */
+  sessionIds: string[];
+  /**
+   * Whatever the period: its sessions that count, and the other people's copies the viewer
+   * sees in its rows instead (`canonicalSessionSql`).
+   */
+  counted: number;
+  copies: number;
   deviceIds: string[];
   inputTokens: bigint;
   outputTokens: bigint;
@@ -240,10 +273,12 @@ type UsageRow = {
 
 /**
  * The visible project rows `where` (on `p`) selects, grouped by person, name and account, with
- * the usage of their sessions started in the period. Every session's times are clamped to the
- * server's clock first, so one dated in the future falls in the period as one started now would,
- * and dates nothing later than now. A row without sessions joins as one row of NULLs, which adds
- * nothing (and which the clamp keeps NULL).
+ * the usage of their sessions started in the period, one copy of each Claude session: a session
+ * whose copy that counts is someone else's (`canonicalSessionSql`) adds nothing here but
+ * `copies`. Every session's times are clamped to the server's clock first, so one dated in the
+ * future falls in the period as one started now would, and dates nothing later than now. A row
+ * without sessions joins as one row of NULLs, which adds nothing (and which the clamp keeps
+ * NULL).
  */
 async function usageRows(
   db: Db,
@@ -254,17 +289,23 @@ async function usageRows(
   now: Date,
 ): Promise<UsageRow[]> {
   const at = sqlTime(now);
+  const counts = Prisma.sql`s."canonical"`;
   const inPeriod =
     from === null
-      ? Prisma.sql`TRUE`
-      : Prisma.sql`LEAST(s."startedAt", ${at}) >= ${sqlTime(from)}`;
-  const visible = ownedRowSql(ownedRowWhere(scope, { accountKey }), "p");
+      ? counts
+      : Prisma.sql`${counts} AND LEAST(s."startedAt", ${at}) >= ${sqlTime(from)}`;
+  const visibleWhere = ownedRowWhere(scope, { accountKey });
   // A session belongs to its owner's project on its own account (sync joins them so); the join
-  // only restates that.
+  // only restates that. Whether a session counts is worked out once per row, in the derived
+  // table, for the aggregates to filter on.
   return db.$queryRaw<UsageRow[]>`
     SELECT p."userId", p."name", p."accountKey",
            array_agg(DISTINCT p."id" ORDER BY p."id") AS "projectIds",
            COUNT(s."id") FILTER (WHERE ${inPeriod})::int AS "sessions",
+           COALESCE(array_agg(DISTINCT s."sessionId") FILTER (WHERE ${inPeriod}), '{}')
+             AS "sessionIds",
+           COUNT(s."id") FILTER (WHERE ${counts})::int AS "counted",
+           COUNT(s."id") FILTER (WHERE NOT ${counts})::int AS "copies",
            COALESCE(
              array_agg(DISTINCT s."deviceId")
                FILTER (WHERE ${inPeriod} AND s."deviceId" IS NOT NULL),
@@ -277,32 +318,61 @@ async function usageRows(
            COALESCE(SUM(s."cacheReadTokens") FILTER (WHERE ${inPeriod}), 0)::bigint
              AS "cacheReadTokens",
            SUM(s."costUsd") FILTER (WHERE ${inPeriod}) AS "costUsd",
-           MIN(${clampedTime(Prisma.sql`s."startedAt"`, at)}) AS "firstUsedAt",
-           MAX(${clampedTime(Prisma.sql`s."lastActivityAt"`, at)}) AS "lastUsedAt"
+           MIN(${clampedTime(Prisma.sql`s."startedAt"`, at)}) FILTER (WHERE ${counts})
+             AS "firstUsedAt",
+           MAX(${clampedTime(Prisma.sql`s."lastActivityAt"`, at)}) FILTER (WHERE ${counts})
+             AS "lastUsedAt"
     FROM "Project" p
-    LEFT JOIN "Session" s
+    LEFT JOIN (
+      SELECT s."id", s."projectId", s."userId", s."accountKey", s."sessionId", s."deviceId",
+             s."startedAt", s."lastActivityAt", s."inputTokens", s."outputTokens",
+             s."cacheCreationTokens", s."cacheReadTokens", s."costUsd",
+             ${canonicalSessionSql(scope, "s")} AS "canonical"
+      FROM "Session" s
+      WHERE ${ownedRowSql(visibleWhere, "s")}
+    ) s
       ON s."projectId" = p."id" AND s."userId" = p."userId" AND s."accountKey" = p."accountKey"
-    WHERE ${visible} AND ${where}
+    WHERE ${ownedRowSql(visibleWhere, "p")} AND ${where}
     GROUP BY p."userId", p."name", p."accountKey"`;
 }
 
-/** The rows grouped into projects (person and name), each with its accounts. */
+/** A project with the ids of its sessions in the period, to count them once across projects. */
+type GroupedProject = ProjectUsage & { sessionIds: ReadonlySet<string> };
+
+/**
+ * The rows grouped into projects (person and name), each with its accounts. A project, or an
+ * account's part of one, that holds sessions but only other people's copies of them is left
+ * out: its folder is listed under the person whose copies count.
+ */
 async function toProjects(
   db: Db,
   scope: AccessScope,
   rows: readonly UsageRow[],
-): Promise<ProjectUsage[]> {
-  if (rows.length === 0) return [];
+): Promise<GroupedProject[]> {
+  const kept = rows.filter((row) => !(row.copies > 0 && row.counted === 0));
+  const copiesOnly = new Set(
+    rows
+      .filter((row) => !kept.includes(row))
+      .map((row) => `${row.userId}\u0000${row.name}`),
+  );
+  if (kept.length === 0) return [];
   const people = await peopleById(
     db,
     scope.viewerId,
-    rows.map((r) => r.userId),
+    kept.map((r) => r.userId),
   );
   const groups = new Map<string, UsageRow[]>();
-  for (const row of rows) {
+  for (const row of kept) {
     // Neither part can hold a NUL (Postgres text can't), so this key is unambiguous.
     const key = `${row.userId}\u0000${row.name}`;
     groups.set(key, [...(groups.get(key) ?? []), row]);
+  }
+  // A project whose only rows left have no sessions at all lost its sessions to other people's
+  // copies above, so it goes too.
+  for (const [key, group] of groups) {
+    if (copiesOnly.has(key) && group.every((row) => row.counted === 0)) {
+      groups.delete(key);
+    }
   }
   return [...groups.values()].map((group) => {
     const first = group[0]!;
@@ -325,17 +395,38 @@ async function toProjects(
               : 0),
       );
     const projectIds = group.flatMap((row) => row.projectIds).sort();
+    const sessionIds = new Set(group.flatMap((row) => row.sessionIds));
     return {
       id: projectIds[0]!,
       projectIds,
       name: first.name,
       owner: personOrUnknown(people, first.userId, scope.viewerId),
       ...addUp(accounts),
+      // A session resumed under another account is one session of the project, however many
+      // of its accounts it ran on: fewer than the accounts' added up then.
+      sessions: sessionIds.size,
       macCount: new Set(group.flatMap((row) => row.deviceIds)).size,
       lastUsedAt: latest(accounts.map((a) => a.lastUsedAt)),
       accounts,
+      sessionIds,
     };
   });
+}
+
+/** A project as a page gets it: the session ids only served to count them once. */
+function withoutSessionIds({
+  sessionIds: _,
+  ...project
+}: GroupedProject): ProjectUsage {
+  return project;
+}
+
+/** Projects added up, each session once however many of them (or their accounts) it ran on. */
+function addUpProjects(projects: readonly GroupedProject[]) {
+  return {
+    ...addUp(projects),
+    sessions: new Set(projects.flatMap((p) => [...p.sessionIds])).size,
+  };
 }
 
 function latest(dates: ReadonlyArray<Date | null>): Date | null {

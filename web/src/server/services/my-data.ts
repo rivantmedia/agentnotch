@@ -22,18 +22,15 @@ export async function removeSummaries(
 ): Promise<{ sessions: number }> {
   return db.$transaction(async (tx) => {
     await lockUserData(tx, userId);
-    const cleared = await tx.session.updateMany({
-      where: {
-        userId,
-        OR: [
-          { summaryText: { not: null } },
-          { summaryModel: { not: null } },
-          { summaryAt: { not: null } },
-        ],
-      },
-      data: { summaryText: null, summaryModel: null, summaryAt: null },
-    });
-    return { sessions: cleared.count };
+    // Raw SQL, because Prisma's update would also bump "updatedAt", which means "synced last":
+    // which of two people's copies of a session counts depends on it (sql.ts), and removing a
+    // summary must not change that.
+    const cleared = await tx.$executeRaw`
+      UPDATE "Session"
+      SET "summaryText" = NULL, "summaryModel" = NULL, "summaryAt" = NULL
+      WHERE "userId" = ${userId}
+        AND ("summaryText" IS NOT NULL OR "summaryModel" IS NOT NULL OR "summaryAt" IS NOT NULL)`;
+    return { sessions: cleared };
   }, LONG_TRANSACTION);
 }
 

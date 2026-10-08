@@ -53,7 +53,8 @@ export function DataControls() {
         <p className="text-sm text-ink-2">
           Clears the summary of every session your Macs synced: its text, the
           model that wrote it and when. Titles, times, tokens and costs stay.
-          Pool members stop seeing your summaries too.
+          Pool members stop seeing your summaries too. A session a pool member
+          also synced still shows their summary of it, if they have one.
         </p>
         <TypedConfirmAction
           trigger="Remove my summaries"

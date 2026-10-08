@@ -9,6 +9,12 @@
  * A session counts in a period by its start, a start dated in the future counting as now, as in
  * the account cards' totals (accounts.ts) and usage by project (project-usage.ts), so the same
  * period reads the same everywhere.
+ *
+ * A Claude session that reached the website from more than one person counts once, from the copy
+ * `canonicalSessionSql` (sql.ts) picks. A session resumed under another account is stored once
+ * per account, each with that account's share: it counts in each account's part, and once in a
+ * total across accounts, so a total's sessions can be fewer than its parts' added up (its tokens
+ * and cost are exactly theirs).
  */
 import {
   bucketStarts,
@@ -26,7 +32,11 @@ import {
   visibleAccountKeys,
   type AccessScope,
 } from "~/server/services/access";
-import { ownedRowSql, sqlTime } from "~/server/services/sql";
+import {
+  canonicalSessionSql,
+  ownedRowSql,
+  sqlTime,
+} from "~/server/services/sql";
 import {
   addUp,
   daysBefore,
@@ -108,8 +118,9 @@ function periodStart(period: UsagePeriod, now: Date): Date | null {
 }
 
 /**
- * The sessions the viewer sees on `keys`, aliased `t`, with their times clamped to the server's
- * clock: one dated in the future counts as now, never later.
+ * The sessions the viewer sees on `keys`, one copy of each (`canonicalSessionSql`), aliased `t`,
+ * with their times clamped to the server's clock: one dated in the future counts as now, never
+ * later.
  */
 function visibleSessions(
   scope: AccessScope,
@@ -117,7 +128,7 @@ function visibleSessions(
   at: Prisma.Sql,
 ): Prisma.Sql {
   return Prisma.sql`(
-      SELECT s."accountKey",
+      SELECT s."accountKey", s."sessionId",
              LEAST(s."startedAt", ${at}) AS "startedAt",
              LEAST(s."lastActivityAt", ${at}) AS "lastActivityAt",
              s."inputTokens", s."outputTokens", s."cacheCreationTokens", s."cacheReadTokens",
@@ -125,12 +136,17 @@ function visibleSessions(
       FROM "Session" s
       WHERE s."accountKey" IN (${Prisma.join(keys)})
         AND ${ownedRowSql(ownedRowWhere(scope), "s")}
+        AND ${canonicalSessionSql(scope, "s")}
     ) t`;
 }
 
-/** Token and cost sums of the rows `where` keeps (on `t`). */
+/**
+ * Token and cost sums of the rows `where` keeps (on `t`), and how many sessions they are. Within
+ * one account each session is one row, so counting distinct ids only matters in a total across
+ * accounts, where a resumed session's parts count once.
+ */
 function sums(where: Prisma.Sql): Prisma.Sql {
-  return Prisma.sql`COUNT(*) FILTER (WHERE ${where})::int AS "sessions",
+  return Prisma.sql`COUNT(DISTINCT t."sessionId") FILTER (WHERE ${where})::int AS "sessions",
        COALESCE(SUM(t."inputTokens") FILTER (WHERE ${where}), 0)::bigint AS "inputTokens",
        COALESCE(SUM(t."outputTokens") FILTER (WHERE ${where}), 0)::bigint AS "outputTokens",
        COALESCE(SUM(t."cacheCreationTokens") FILTER (WHERE ${where}), 0)::bigint
@@ -187,23 +203,28 @@ export async function combinedUsage(
       ? Prisma.sql`TRUE`
       : Prisma.sql`t."startedAt" >= ${sqlTime(from)}`;
 
-  const rows =
+  // One row per account, and one (`isTotal`) for all of them together: its session count is
+  // the distinct sessions across accounts.
+  const grouped =
     keys.length === 0
       ? []
       : await db.$queryRaw<
           Array<
             SumRow & {
-              accountKey: string;
+              accountKey: string | null;
+              isTotal: boolean;
               firstStartedAt: Date | null;
               lastActivityAt: Date | null;
             }
           >
         >`
-          SELECT t."accountKey", ${sums(inPeriod)},
+          SELECT t."accountKey", GROUPING(t."accountKey") = 1 AS "isTotal", ${sums(inPeriod)},
                  MIN(t."startedAt") AS "firstStartedAt",
                  MAX(t."lastActivityAt") AS "lastActivityAt"
           FROM ${visibleSessions(scope, keys, at)}
-          GROUP BY t."accountKey"`;
+          GROUP BY GROUPING SETS ((t."accountKey"), ())`;
+  const rows = grouped.filter((row) => !row.isTotal);
+  const totalRow = grouped.find((row) => row.isTotal);
 
   const accounts = keys
     .map((accountKey): AccountUsage => {
@@ -215,7 +236,10 @@ export async function combinedUsage(
       };
     })
     .sort(byUsage);
-  const total = addUp(accounts);
+  // Tokens and cost are the accounts' added up (a resumed session's parts are disjoint), but a
+  // session that ran on several of them counts once here: the total's sessions can be fewer
+  // than the accounts' added up.
+  const total = { ...addUp(accounts), sessions: totalRow?.sessions ?? 0 };
   const firstStartedAt = rows.reduce<Date | null>(
     (first, row) =>
       row.firstStartedAt !== null &&
@@ -252,8 +276,10 @@ export async function combinedUsage(
 /**
  * The period's usage on the chosen accounts over time, in buckets of the viewer's calendar: days
  * for 7 and 30 days, and for all time days, weeks or months by how far back the first session
- * goes. A rolling period's first bucket is the rest of its first day, so the buckets add up to
- * exactly the period's totals (combinedUsage).
+ * goes. A rolling period's first bucket is the rest of its first day, so the buckets' tokens and
+ * cost add up to exactly the period's totals (combinedUsage). Their sessions can add up to more:
+ * a bucket counts a session once however many accounts it ran on in it, but a session whose
+ * parts started in different buckets counts in each of them.
  */
 export async function usageTimeline(
   db: Db,
@@ -292,30 +318,43 @@ export async function usageTimeline(
 
   const starts = bucketStarts(start, now.getTime(), unit, timeZone);
   // width_bucket numbers the buckets from 1 by the starts (sorted ascending) a time has reached.
+  // One row per account and bucket, and one per bucket (`isTotal`) whose session count is the
+  // distinct sessions started in it across accounts.
   const rows = await db.$queryRaw<
-    Array<SumRow & { accountKey: string; bucket: number }>
+    Array<
+      SumRow & { accountKey: string | null; bucket: number; isTotal: boolean }
+    >
   >`
-    SELECT t."accountKey",
-           width_bucket(
-             t."startedAt",
-             ARRAY[${Prisma.join(starts.map((s) => sqlTime(new Date(s))))}]
-           ) AS "bucket",
+    SELECT t."accountKey", t."bucket", GROUPING(t."accountKey") = 1 AS "isTotal",
            ${sums(Prisma.sql`TRUE`)}
-    FROM ${visibleSessions(scope, keys, at)}
-    WHERE t."startedAt" >= ${sqlTime(new Date(starts[0]!))}
-    GROUP BY t."accountKey", 2`;
+    FROM (
+      SELECT t.*,
+             width_bucket(
+               t."startedAt",
+               ARRAY[${Prisma.join(starts.map((s) => sqlTime(new Date(s))))}]
+             ) AS "bucket"
+      FROM ${visibleSessions(scope, keys, at)}
+      WHERE t."startedAt" >= ${sqlTime(new Date(starts[0]!))}
+    ) t
+    GROUP BY GROUPING SETS ((t."accountKey", t."bucket"), (t."bucket"))`;
 
   return {
     ...empty(unit),
     buckets: starts.map((s, i) => {
-      const parts = rows
-        .filter((row) => row.bucket === i + 1)
-        .map((row) => ({ accountKey: row.accountKey, ...totalsOf(row) }))
+      const inBucket = rows.filter((row) => row.bucket === i + 1);
+      const parts = inBucket
+        .flatMap(({ accountKey, isTotal, ...row }) =>
+          isTotal || accountKey === null
+            ? []
+            : [{ accountKey, ...totalsOf(row) }],
+        )
         .sort(byUsage);
       return {
         start: new Date(s),
         end: new Date(starts[i + 1] ?? now.getTime()),
+        // As in combinedUsage: a session counts once however many accounts it ran on here.
         ...addUp(parts),
+        sessions: inBucket.find((row) => row.isTotal)?.sessions ?? 0,
         accounts: parts,
       };
     }),

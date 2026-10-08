@@ -63,7 +63,9 @@ server has for `(user, accountKey, sessionId)`; usage readings are deduplicated 
 `(user, accountKey, source, window id, observedAt)`. A Claude Code session resumed under a
 different account (Claude Parallel Profiles shares session history between folders) is sent
 once per account, each with only the responses made while that account ran it. See `fixtures/sync-request.json` and
-`fixtures/sync-response.json`.
+`fixtures/sync-response.json`. The website counts each part in its own account's figures, and a
+resumed session once in any total that spans accounts (a project's, the usage page's), so such a
+total's sessions can be fewer than its accounts' added up; tokens and cost add up exactly.
 
 Request:
 
@@ -116,3 +118,15 @@ website; failed attempts are rate-limited per user. Pool members see every membe
 usage for that account, and nothing else of each other's. The creator can revoke the code or
 remove members; members can leave. The app links to `<dashboardUrl>/pools` and does not call
 pool endpoints itself.
+
+The same Claude session can reach the website from more than one person: the app remembers what
+it sent per website user, so a Mac signed in as one person and later as another sends its
+sessions again. Wherever a member sees more than one copy of a session (same `accountKey` and
+`sessionId`), it counts and is listed once, from one copy: the latest `lastActivityAt`, then an
+ended one over one still running, then the larger `messageCount`, then the copy synced last, then
+the smallest user id. Only copies the member can see take part, so a copy outside their pools
+never changes what they see. The session shows that copy's summary, or when it has none the
+latest one another copy the member sees carries. A project (one person's folders of one name)
+whose sessions are all other people's copies is not listed, and a link to it opens the folder
+those copies count in. Copies are never merged or deleted: each person still holds
+and can delete their own rows.

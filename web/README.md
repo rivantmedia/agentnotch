@@ -46,8 +46,13 @@ session counts in a period by its start, as in the account cards' totals. Here a
 folders of one name across accounts as well as Macs: a project key is made from the account's key
 too, so the website can't tell that two accounts worked in the same folder either, and groups by
 name (`src/server/services/project-usage.ts`). A pool member's projects count only on the
-accounts shared with you. Usage limits are per account and nothing reports them per project, so
-these are shares of the tokens, never of a limit, and the pages say so. A project's sessions
+accounts shared with you. A session that reached the website from two people (one Mac signed in
+as each in turn) counts once everywhere, from one copy (`canonicalSessionSql` in
+`src/server/services/sql.ts`; contract/README.md, "Pooling"), and a folder holding only the other
+person's copies isn't listed. A session resumed under another account counts once in a project
+and in totals across accounts, and once on each account it ran on. Usage limits are per account
+and nothing reports them per project, so these are shares of the tokens, never of a limit, and
+the pages say so. A project's sessions
 across accounts are `sessions.list` with `acrossAccounts`; the project row it names must be one
 you can see.
 
