@@ -462,6 +462,12 @@ pub enum HubEvent {
 
 /// The glue's own event: the panel's keyboard focus was confirmed (or lost).
 pub const PANEL_FOCUS_EVENT: &str = "an:panel_focus";
+/// The glue's own event: an open panel moved or changed width (a [`PanelPlace`]).
+///
+/// [`PanelPlace`]: crate::model::PanelPlace
+pub const PANEL_PLACE_EVENT: &str = "an:panel_place";
+/// The glue's own event: the panel window's state (a `PanelState`), to the notch's page.
+pub const PANEL_STATE_EVENT: &str = "an:panel_state";
 
 impl HubEvent {
     /// The Tauri event the glue emits for it, when it is one.
@@ -506,7 +512,7 @@ impl HubEvent {
 /// Receives the hub's events (called from `an-core`).
 pub type EventSink = Box<dyn Fn(&HubEvent) + Send + Sync>;
 
-/// What runs behind a [`Hub`]: the fixture hub today, WP7's runtime next.
+/// What runs behind a [`Hub`]: the sealed fixture hub, or the runtime.
 pub(crate) trait HubBackend: Send + Sync {
     fn start(&self) -> Result<(), String>;
     fn stop(&self);
@@ -534,9 +540,11 @@ impl Hub {
         if cfg.flags.sealed {
             return Hub::sealed(cfg, platform.clock);
         }
-        Hub {
-            backend: Arc::new(Unbuilt { cfg }),
-        }
+        super::runtime::live_hub(cfg, platform, super::runtime::RuntimeOptions::default()).0
+    }
+
+    pub(crate) fn with_backend(backend: Arc<dyn HubBackend>) -> Hub {
+        Hub { backend }
     }
 
     /// Fixtures only; nothing is read, written, spawned or sent.
@@ -603,147 +611,21 @@ impl Hub {
     }
 
     /// Removes this app's hooks from every folder it wrote (the
-    /// `hook-install.json` record plus discovery).
+    /// `hook-install.json` record plus discovery), restoring the status
+    /// lines. Refused while installs are off for the run (`--no-install`,
+    /// read from this process's environment and arguments).
     pub fn uninstall_hooks(roots: &Roots, platform: &Platform) -> Result<String, String> {
-        let _ = (roots, platform);
-        Err("Removing hooks isn't in this build yet.".to_owned())
-    }
-}
-
-/// The live engine before its packages land: it starts nothing and says so.
-struct Unbuilt {
-    cfg: HubConfig,
-}
-
-const UNBUILT: &str = "The Claude Code engine isn't in this build yet.";
-
-impl HubBackend for Unbuilt {
-    fn start(&self) -> Result<(), String> {
-        Err(UNBUILT.to_owned())
+        let args: Vec<String> = std::env::args().collect();
+        let flags = DevFlags::from_env(|name| std::env::var(name).ok(), &args, &roots.paths());
+        Self::uninstall_hooks_with(roots, platform, &flags)
     }
 
-    fn stop(&self) {}
-
-    fn on_event(&self, _sink: EventSink) {}
-
-    fn call(&self, _call: Call) -> Result<Value, CallError> {
-        Err(CallError::failed(UNBUILT))
-    }
-
-    fn snapshot(&self) -> HubSnapshot {
-        let settings = crate::core::settings::ControlSettings::default();
-        HubSnapshot {
-            version: HubSnapshot::VERSION,
-            generated_at_ms: 0,
-            sealed: false,
-            rings: Vec::new(),
-            sessions: Vec::new(),
-            sections: Vec::new(),
-            totals: Counts::default(),
-            resting_marks: RestingMarks::default(),
-            tray_badge: 0,
-            setup: SetupState {
-                hook_consent: None,
-                needs_hook_consent: false,
-                consent_files: Vec::new(),
-                codenotch_hooks_folders: Vec::new(),
-                new_install_folders: Vec::new(),
-                transport_error: Some(UNBUILT.to_owned()),
-                control_off: false,
-                missing_hooks_accounts: Vec::new(),
-                install_disabled: !self.cfg.flags.installs_allowed(),
-            },
-            ui: settings.ui(),
-            accounts_multi: false,
-        }
-    }
-
-    fn settings_snapshot(&self) -> SettingsSnapshot {
-        let settings = crate::core::settings::ControlSettings::default();
-        let snapshot = self.snapshot();
-        SettingsSnapshot {
-            accounts: Vec::new(),
-            suggestions: Vec::new(),
-            unsigned_folders: Vec::new(),
-            hooks: HooksSection {
-                consent: None,
-                enabled: false,
-                enabled_locked: true,
-                summary: UNBUILT.to_owned(),
-                summary_warning: true,
-                status_line: settings.status_line_integration,
-                pipe_name: self.cfg.pipe_name.clone(),
-                claude_version: None,
-                claude_path: None,
-                claude_path_chosen: false,
-                claude_caption: String::new(),
-                last_change: None,
-                install_allowed: false,
-                busy: false,
-                footnotes: Vec::new(),
-            },
-            usage: UsageSection {
-                interval_minutes: settings.usage_probe_interval_minutes,
-                interval_options: vec![0, 5, 10, 15, 30],
-                interval_caption: String::new(),
-                desktop_cache: settings.reads_desktop_usage_cache,
-                desktop_caption: String::new(),
-                desktop_format: None,
-                accounts: Vec::new(),
-                refreshing: false,
-            },
-            cloud: CloudState {
-                website_url: self.cfg.website.clone(),
-                ..CloudState::default()
-            },
-            attention: settings.ui(),
-            notifications: NotificationsSection {
-                notify_needs_input: settings.notify_needs_input,
-                notify_ready_for_review: settings.notify_ready_for_review,
-                permission: "unavailable".into(),
-                permission_text: String::new(),
-                permission_warning: false,
-            },
-            advanced: AdvancedSection {
-                session_count: 0,
-                review_count: 0,
-            },
-            sealed: false,
-            setup: snapshot.setup,
-        }
-    }
-
-    fn launch_rings(&self) -> Vec<RingSummary> {
-        Vec::new()
-    }
-
-    fn upstream_usage(&self) -> UpstreamUsage {
-        UpstreamUsage {
-            status: "none".into(),
-            note: UNBUILT.into(),
-            ..UpstreamUsage::default()
-        }
-    }
-
-    fn handle_deep_link(&self, _url: &str) -> DeepLinkOutcome {
-        DeepLinkOutcome::Ignored(UNBUILT.to_owned())
-    }
-
-    fn control_status(&self) -> ControlStatus {
-        ControlStatus {
-            version: self.cfg.app_version.clone(),
-            transport: "off".into(),
-            hook_consent: "unasked".into(),
-            cloud: "signed_out".into(),
-            ..ControlStatus::default()
-        }
-    }
-
-    fn doctor_report(&self, _extra: &DoctorExtras) -> String {
-        format!(
-            "Agent Notch doctor v{} ({})\n{UNBUILT}\n",
-            self.cfg.app_version,
-            crate::core::roots::IDENTIFIER
-        )
+    /// [`Hub::uninstall_hooks`] with the run's switches given.
+    pub fn uninstall_hooks_with(
+        roots: &Roots,
+        platform: &Platform,
+        flags: &DevFlags,
+    ) -> Result<String, String> {
+        super::wire_hooks::uninstall_everywhere(roots, platform, flags)
     }
 }

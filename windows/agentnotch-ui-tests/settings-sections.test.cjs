@@ -115,7 +115,7 @@ test('every section draws from settings.json in the Mac\'s order, with its rows 
   const titles = page.$$('#pane-claude .sec').map(text);
   assert.deepEqual(titles.slice(2), ['Usage', 'Cloud', 'Sessions and attention', 'Notifications', 'Advanced']);
   const keys = (name) => region(page, name).querySelector('.group').children.map((el) => el.getAttribute('data-key'));
-  assert.deepEqual(keys('usage'), ['interval', 'desktop', 'acct:claude-acct-5f3e1d2c0b9a', 'acct:claude-acct-8a7b6c5d4e3f', 'refresh']);
+  assert.deepEqual(keys('usage'), ['interval', 'desktop', 'acct:claude-acct-1e41d94e802a', 'acct:claude-acct-5688209c6cfb', 'refresh']);
   assert.deepEqual(keys('cloud'), ['website', 'account', 'sync', 'summaries', 'status', 'dashboard']);
   assert.deepEqual(keys('attention'), ['auto-open', 'hold-open', 'ring-badges', 'resting-marks', 'tray-badge', 'ring-click',
     'session-click', 'hotkey', 'sound', 'peek', 'peek-seconds', 'type-replies', 'open-panel']);
@@ -138,7 +138,7 @@ test('Usage: the interval from its options, the engine\'s caption as given, the 
   }
   assert.ok(isOn(switchOf(page, 'readsDesktopUsageCache')));
   assert.match(text(rowOf(page, 'usage', 'desktop')), /Also read Claude Desktop's cached usage Claude Desktop keeps the limits it last saw on disk; no token is involved\./);
-  assert.equal(text(rowOf(page, 'usage', 'acct:claude-acct-8a7b6c5d4e3f')), 'Work 5-hour 72% · weekly 55% · 4m ago');
+  assert.equal(text(rowOf(page, 'usage', 'acct:claude-acct-5688209c6cfb')), 'Work 5-hour 100% · weekly 55% · 4m ago');
   assert.equal(text(rowOf(page, 'usage', 'refresh')), 'Refresh now');
 
   // The engine's Off caption is shown as given too.

@@ -188,3 +188,17 @@ test('the CLI listens on a free port and stops on SIGTERM', async () => {
     await once(child, 'exit');
   }
 });
+
+test('two servers never mint the same tool_use id (real ids are unique; the panel answers an id once)', async () => {
+  const idOf = async () => {
+    let id;
+    await withSite(async (site) => {
+      const body = await (await call(site, ask())).json();
+      id = body.content.find((b) => b.type === 'tool_use').id;
+    });
+    return id;
+  };
+  const [first, second] = [await idOf(), await idOf()];
+  assert.match(first, /^toolu_/);
+  assert.notEqual(first, second);
+});

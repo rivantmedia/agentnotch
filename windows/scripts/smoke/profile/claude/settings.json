@@ -10,7 +10,10 @@
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": "echo foreign-hook" }
+          {
+            "type": "command",
+            "command": "echo foreign-hook"
+          }
         ]
       }
     ]

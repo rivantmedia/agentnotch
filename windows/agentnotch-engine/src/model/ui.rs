@@ -311,6 +311,18 @@ pub struct UiSettings {
     pub type_replies: bool,
     pub sound: bool,
     pub tray_badge: bool,
+    /// The global shortcut is registered (or none is wanted). `false` while the
+    /// chosen one is taken or refused: settings then says so. Added after the
+    /// first fixtures, so a payload without it reads as fine.
+    #[serde(default = "default_true")]
+    pub hotkey_ok: bool,
+    /// Windows' own words for a refusal, when it gave any.
+    #[serde(default)]
+    pub hotkey_message: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// A chat over IPC: a reset (the whole page) when a chat opens or pages,
@@ -509,6 +521,21 @@ pub struct PanelRequest {
     /// `ring_click` | `hover_row` | `peek_click` | `notification` | `hotkey` |
     /// `settings` | `auto`.
     pub reason: String,
+}
+
+/// Where the glue put an open panel (`an:panel_place`, and these four fields
+/// beside the request's own in `an:panel`): what the page draws its tail and
+/// width by. The glue builds it from `geometry::panel`'s placement.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PanelPlace {
+    /// The notch's edge (`left` | `right` | `top` | `bottom`); `null` when
+    /// the panel floats.
+    pub edge: Option<String>,
+    pub floating: bool,
+    /// The card's width in CSS pixels.
+    pub width: f64,
+    /// The tail's offset from the card's centre along its side.
+    pub tail_offset: f64,
 }
 
 /// The Claude Code settings pane's whole state (UI§7).

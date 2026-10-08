@@ -20,7 +20,11 @@ use std::io::Write;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
+use std::time::Duration;
+
 use agentnotch_engine::hub::{DoctorExtras, Hub};
+use agentnotch_win::pipe_server::client::{self, ClientError};
+use agentnotch_win::proto::{ControlOp, ControlResponse, ControlStatus};
 
 use super::{deeplink, setup, DISPLAY_NAME};
 
@@ -37,6 +41,12 @@ const COMMANDS: [&str; 6] = [
 /// The exit code of a command that was refused with nothing run: a command line naming a command
 /// and a link at once, `install-hooks` without the consent, a Claude folder's command sealed.
 const REFUSED: i32 = 2;
+/// `control status|quit` (and nothing else) when no copy of the app is running.
+const NO_INSTANCE: i32 = 3;
+/// How long the doctor waits for a running copy's status: it must not hang a support request.
+const STATUS_WAIT: Duration = Duration::from_secs(2);
+/// How long `control` waits: `quit` answers before the app stops, so this is only the pipe.
+const CONTROL_WAIT: Duration = Duration::from_secs(5);
 /// The scheme the installer registers for the app's links.
 const LINK_SCHEME: &str = "agentnotch";
 
@@ -128,8 +138,13 @@ fn doctor(rest: &[&str]) -> (i32, String) {
         // The Start-menu shortcut Windows needs before it shows this app's notifications.
         shortcut_present: agentnotch_win::shell::start_menu_shortcut(DISPLAY_NAME).is_some(),
         providers: Vec::new(),
-        // Asking a running copy (`control status`) needs the pipe client (WP1).
-        running: None,
+        // A short `control status` call; a sealed run never talks to a real copy.
+        running: if super::sealed() {
+            None
+        } else {
+            let pipe = pipe_name_for(&exe);
+            running_status(|op| client::control(&pipe, op, STATUS_WAIT))
+        },
     };
     match offline_hub(&exe) {
         Ok(hub) => (0, hub.doctor_report(&extras)),
@@ -195,17 +210,76 @@ fn uninstall_hooks(quiet: bool) -> (i32, String) {
     }
 }
 
-/// `control status|quit` asks a running copy over the hook pipe. The pipe's client side isn't
-/// in this build (it comes with the bridge, WP1), so the command says so rather than guess
-/// whether a copy runs; §4.14's exit codes (0, or 3 with no copy running) come with it.
+/// A running copy's status for the doctor's `pipe:` line: only what a good answer carries, `None`
+/// for anything else (no copy, a stranger's pipe, a timeout, an answer that isn't a status).
+fn running_status(
+    ask: impl FnOnce(ControlOp) -> Result<ControlResponse, ClientError>,
+) -> Option<ControlStatus> {
+    ask(ControlOp::Status).ok().and_then(|answer| answer.status)
+}
+
+/// The hook pipe this process talks to (empty when the user's SID can't be read: the client then
+/// refuses the name).
+fn pipe_name_for(exe: &Path) -> String {
+    setup::hub_config(super::app_version().to_string(), exe)
+        .map(|config| config.pipe_name)
+        .unwrap_or_default()
+}
+
+/// `control status|quit` asks a running copy over the hook pipe: 0 and the answer, 3 when no copy
+/// runs, 1 for anything else (a usage slip, a stranger's pipe, a timeout, a refusal).
 fn control(rest: &[&str]) -> (i32, String) {
-    match rest {
-        ["status"] | ["quit"] => (
+    let op = match rest {
+        ["status"] => ControlOp::Status,
+        ["quit"] => ControlOp::Quit,
+        _ => return (1, "usage: agentnotch.exe control status|quit".into()),
+    };
+    let exe = std::env::current_exe().unwrap_or_default();
+    let pipe = pipe_name_for(&exe);
+    control_with(op, |op| client::control(&pipe, op, CONTROL_WAIT))
+}
+
+/// [`control`] over whatever asks the pipe, so the exit codes are tested with a fake client.
+fn control_with(
+    op: ControlOp,
+    ask: impl FnOnce(ControlOp) -> Result<ControlResponse, ClientError>,
+) -> (i32, String) {
+    match ask(op) {
+        Ok(answer) if !answer.ok => (
             1,
-            "control: talking to a running copy isn't available in this build".into(),
+            format!(
+                "control: {}",
+                answer.error.unwrap_or_else(|| "refused".into())
+            ),
         ),
-        _ => (1, "usage: agentnotch.exe control status|quit".into()),
+        Ok(answer) => match (op, answer.status) {
+            (ControlOp::Quit, _) => (0, "Agent Notch is quitting.".into()),
+            (ControlOp::Status, Some(status)) => (0, status_text(&status)),
+            (ControlOp::Status, None) => (1, "control: the answer carried no status".into()),
+        },
+        Err(ClientError::NotRunning) => (NO_INSTANCE, "no instance running".into()),
+        Err(e) => (1, format!("control: {e}")),
     }
+}
+
+/// `control status`, one `name: value` line each: counts and states only (the smoke test reads
+/// `transport:`, `accounts:`, `readings:`, `hook_consent:` and `cloud:`).
+fn status_text(status: &ControlStatus) -> String {
+    [
+        format!("version: {}", status.version),
+        format!("sealed: {}", status.sealed),
+        format!("elevated: {}", status.elevated),
+        format!("accounts: {}", status.accounts),
+        format!("rings: {}", status.rings),
+        format!("readings: {}", status.readings),
+        format!("sessions: {}", status.sessions),
+        format!("held: {}", status.held),
+        format!("hook_consent: {}", status.hook_consent),
+        format!("transport: {}", status.transport),
+        format!("cloud: {}", status.cloud),
+        format!("sync: {}", status.sync),
+    ]
+    .join("\n")
 }
 
 fn autostart(rest: &[&str]) -> (i32, String) {
@@ -253,6 +327,8 @@ fn write_log(command: &str, text: &str) {
 #[cfg(test)]
 mod tests {
     use super::COMMANDS;
+    use agentnotch_win::pipe_server::client::ClientError;
+    use agentnotch_win::proto::{ControlOp, ControlResponse, ControlStatus};
 
     fn argv(args: &[&str]) -> Vec<String> {
         args.iter().map(|a| a.to_string()).collect()
@@ -342,11 +418,94 @@ mod tests {
         assert_eq!(super::sealed_answer("inspect-accounts").0, super::REFUSED);
     }
 
+    fn status() -> ControlStatus {
+        ControlStatus {
+            version: "1.1.0".into(),
+            accounts: 2,
+            rings: 2,
+            readings: 2,
+            hook_consent: "unasked".into(),
+            transport: "listening".into(),
+            cloud: "signed_out".into(),
+            ..ControlStatus::default()
+        }
+    }
+
     #[test]
-    fn control_is_claimed_and_says_it_cannot_ask_yet() {
-        // Never 0: a script must not read "no answer" as "nothing is running".
-        for rest in [&["status"][..], &["quit"], &[], &["status", "now"]] {
+    fn control_status_prints_the_answer_and_exits_0() {
+        let (code, text) = super::control_with(ControlOp::Status, |op| {
+            assert_eq!(op, ControlOp::Status);
+            Ok(ControlResponse::status(status()))
+        });
+        assert_eq!(code, 0);
+        for line in [
+            "transport: listening",
+            "accounts: 2",
+            "readings: 2",
+            "hook_consent: unasked",
+            "cloud: signed_out",
+        ] {
+            assert!(text.lines().any(|l| l == line), "{line} in\n{text}");
+        }
+    }
+
+    #[test]
+    fn control_quit_exits_0_once_the_app_took_it() {
+        let (code, _) = super::control_with(ControlOp::Quit, |op| {
+            assert_eq!(op, ControlOp::Quit);
+            Ok(ControlResponse::ok())
+        });
+        assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn control_exits_3_when_no_instance_runs() {
+        for op in [ControlOp::Status, ControlOp::Quit] {
+            let (code, text) = super::control_with(op, |_| Err(ClientError::NotRunning));
+            assert_eq!((code, text.as_str()), (3, "no instance running"));
+        }
+    }
+
+    #[test]
+    fn control_never_reads_another_failure_as_not_running() {
+        // A script must not take a stranger's pipe, a busy or silent app, or a refusal for
+        // "nothing is running".
+        for failure in [
+            ClientError::NotOurs,
+            ClientError::Busy,
+            ClientError::Timeout,
+            ClientError::NotAvailable,
+            ClientError::Other("closed".into()),
+        ] {
+            let (code, _) = super::control_with(ControlOp::Status, |_| Err(failure.clone()));
+            assert_eq!(code, 1, "{failure:?}");
+        }
+        let (code, text) = super::control_with(ControlOp::Status, |_| {
+            Ok(ControlResponse::error("the hub is stopping"))
+        });
+        assert_eq!((code, text.as_str()), (1, "control: the hub is stopping"));
+        let (code, _) = super::control_with(ControlOp::Status, |_| Ok(ControlResponse::ok()));
+        assert_eq!(code, 1);
+    }
+
+    #[test]
+    fn control_wants_status_or_quit() {
+        for rest in [&[][..], &["now"], &["status", "now"]] {
             assert_eq!(super::control(rest).0, 1, "{rest:?}");
+        }
+    }
+
+    #[test]
+    fn the_doctors_running_line_comes_from_a_good_status_only() {
+        let running = super::running_status(|_| Ok(ControlResponse::status(status())));
+        assert_eq!(running.map(|s| s.accounts), Some(2));
+        for answer in [
+            Err(ClientError::NotRunning),
+            Err(ClientError::Timeout),
+            Ok(ControlResponse::ok()),
+            Ok(ControlResponse::error("no")),
+        ] {
+            assert_eq!(super::running_status(|_| answer), None);
         }
     }
 

@@ -8,6 +8,7 @@ use agentnotch_engine::hub::{Call, Hub, HubConfig, HubEvent};
 use agentnotch_engine::model::*;
 use agentnotch_engine::persist::json_equivalent;
 use agentnotch_engine::platform::Roots;
+use agentnotch_engine::runtime_types::PanelState;
 use agentnotch_engine::testkit::{FakeClock, TEST_START_MS};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -100,7 +101,9 @@ fn the_snapshot_fixture_is_consistent() {
         }
     }
     assert_eq!(snapshot.totals, totals);
-    assert_eq!(snapshot.tray_badge, totals.needs_you + totals.failed);
+    // A failed turn is never amber: the tray counts what can be answered.
+    assert_eq!(snapshot.tray_badge, totals.needs_you);
+    assert_eq!(snapshot.resting_marks.needs_you_key, totals.needs_you);
     let section_total: u32 = snapshot.sections.iter().map(|s| s.count).sum();
     assert_eq!(section_total as usize, snapshot.sessions.len());
     for ring in &snapshot.rings {
@@ -117,10 +120,7 @@ fn the_snapshot_fixture_is_consistent() {
                 .filter(|r| r.ring_id.as_ref() == Some(&ring.ring_id))
                 .count()
         );
-        assert_eq!(
-            ring.badges.needs_you,
-            ring.counts.needs_you + ring.counts.failed
-        );
+        assert_eq!(ring.badges.needs_you, ring.counts.needs_you);
         for window in &ring.usage.windows {
             assert!((0.0..=1.0).contains(&window.used), "{}", window.id);
         }
@@ -267,7 +267,35 @@ fn every_event_payload_is_its_type() {
             "an:settings" => HubEvent::Settings(round_trip(&payload, name)),
             "an:cloud" => HubEvent::Cloud(round_trip(&payload, name)),
             "an:chat" => HubEvent::Chat(round_trip(&payload, name)),
-            "an:panel" => HubEvent::Panel(round_trip(&payload, name)),
+            "an:panel" => {
+                // The glue adds where it put the panel to the request's own fields.
+                let mut request = payload.clone();
+                if payload.get("floating").is_some() {
+                    let fields = request.as_object_mut().unwrap();
+                    let place: Value = ["edge", "floating", "width", "tail_offset"]
+                        .iter()
+                        .map(|k| (k.to_string(), fields.remove(*k).unwrap_or(Value::Null)))
+                        .collect::<serde_json::Map<_, _>>()
+                        .into();
+                    let place: PanelPlace = round_trip(&place, "an:panel placement");
+                    assert!(place.width > 0.0);
+                }
+                let event = HubEvent::Panel(round_trip(&request, name));
+                assert_eq!(event.tauri_event(), Some(name));
+                assert!(json_equivalent(&event.payload(), &request), "{name}");
+                continue;
+            }
+            "an:panel_place" => {
+                // The glue's own event: it has no HubEvent.
+                let place: PanelPlace = round_trip(&payload, name);
+                assert_eq!(place.edge.is_none(), place.floating, "{name}");
+                continue;
+            }
+            "an:panel_state" => {
+                let state: PanelState = round_trip(&payload, name);
+                assert!(state.open || state.route.is_none(), "{name}");
+                continue;
+            }
             "an:peek" => {
                 let ring_id = payload["ring_id"].as_str().unwrap().to_owned();
                 let seconds = payload["seconds"].as_u64().unwrap() as u32;
@@ -291,6 +319,8 @@ fn every_event_payload_is_its_type() {
         "an:chat",
         "an:panel",
         "an:panel_focus",
+        "an:panel_place",
+        "an:panel_state",
         "an:peek",
         "an:notice",
         "usage",
@@ -476,4 +506,15 @@ fn window_labels_gate_methods() {
     assert!(allowed_from_window("settings", "hook_consent"));
     assert!(!allowed_from_window("settings", "hotkey_status"));
     assert!(!allowed_from_window("dropzones", "snapshot"));
+}
+
+#[test]
+fn a_payload_without_a_hotkey_report_reads_as_fine() {
+    let mut ui = fixture("settings.json")["attention"].clone();
+    let object = ui.as_object_mut().unwrap();
+    assert_eq!(object.remove("hotkey_ok"), Some(Value::Bool(true)));
+    assert_eq!(object.remove("hotkey_message"), Some(Value::Null));
+    let read: UiSettings = serde_json::from_value(ui).unwrap();
+    assert!(read.hotkey_ok);
+    assert_eq!(read.hotkey_message, None);
 }

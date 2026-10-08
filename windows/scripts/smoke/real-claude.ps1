@@ -86,6 +86,8 @@ $script:ClaudeCodeNativeIntegrity = 'sha512-7TR0I2gOkYBADZlazRQERyP9WHCOKTZPPUSY
 
 # Obviously not a key; fake-anthropic.mjs accepts exactly this and nothing else.
 $script:FakeKey = 'fake-key-not-a-secret'
+# The entrypoint of the headless (stream-json) runs: the VS Code extension's (see Start-ClaudeDriver).
+$script:HeadlessEntrypoint = 'claude-vscode'
 $script:ConfigFolderName = '.claude-real'
 # The temporary account's identity (no token: Claude Code signs in with the fake key). The
 # engine files P\.claude-real under it.
@@ -107,6 +109,10 @@ $script:ConfigFileAllowList = @(
     '^\.claude\.json$'
     '^\.claude\.json\.(backup|bak|lock|tmp)[^\\/]*$'
     '^history\.jsonl$'
+    # Claude Code's own housekeeping markers (a timestamp each, no login): 2.1.285's bundle lists
+    # exactly these as its sentinel files (`[".npm-cache-cleanup",".version-cleanup",
+    # ".last-cleanup",".deep-link-register-failed"]`); run 37720051731 left .last-cleanup.
+    '^\.(npm-cache-cleanup|version-cleanup|last-cleanup|deep-link-register-failed)$'
 )
 $script:SessionsFileAllowList = @('^\d+\.json$', '^\.fleetview-heartbeat$')
 
@@ -323,14 +329,28 @@ function Get-HookOutcomes {
     $outcomes
 }
 
+# Claude Code's connection warm-up: at start it sends `HEAD <ANTHROPIC_BASE_URL>/api/hello` with
+# no key, no body and its errors ignored (2.1.285's bundle: `preconnectFired`, `{method:"HEAD",
+# signal:AbortSignal.timeout(1e4)}).catch(()=>{})`; run 37709649061 logged it). It goes to the fake
+# API like everything else and carries nothing of the user's, so exactly that request may come
+# keyless; any other keyless request, or this one with a body, a key or an Authorization header,
+# still fails.
+function Test-KeylessPreconnect {
+    param([Parameter(Mandatory)]$Entry)
+    $headers = @($Entry['headers'])
+    $Entry['method'] -eq 'HEAD' -and $Entry['path'] -eq '/api/hello' -and $Entry['apiKey'] -eq 'absent' -and
+        -not $Entry.Contains('authorization') -and -not ($headers -contains 'content-length') -and -not ($headers -contains 'transfer-encoding')
+}
+
 # What the fake Messages API's log says against hermeticity: every request carried exactly the
-# fake key (the log says ok/bad/absent, never the value) and no Authorization header.
+# fake key (the log says ok/bad/absent, never the value) and no Authorization header, apart from
+# Claude Code's keyless warm-up above.
 function Test-FakeApiLog {
     param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Entries, [Parameter(Mandatory)][string]$Name)
     if (-not $Entries.Count) { "${Name}: the fake API saw no request" }
     foreach ($entry in $Entries) {
         $what = "$($entry['method']) $($entry['path'])"
-        if ($entry['apiKey'] -ne 'ok') { "${Name}: $what came with the key $($entry['apiKey'])" }
+        if ($entry['apiKey'] -ne 'ok' -and -not (Test-KeylessPreconnect $entry)) { "${Name}: $what came with the key $($entry['apiKey'])" }
         if ($entry.Contains('authorization')) { "${Name}: $what carried an Authorization header" }
     }
     if (-not @($Entries | Where-Object { $_['path'] -eq '/v1/messages' -and $_['reply'] -eq 'turn' }).Count) { "${Name}: no scripted turn was asked for" }
@@ -495,6 +515,7 @@ public sealed class ConPty : IDisposable {
 
     const uint ExtendedStartupInfoPresent = 0x00080000;
     const uint CreateUnicodeEnvironment = 0x00000400;
+    const int UseStdHandles = 0x00000100;
     static readonly IntPtr PseudoConsoleAttribute = (IntPtr)0x00020016;
 
     IntPtr console = IntPtr.Zero, attributes = IntPtr.Zero, process = IntPtr.Zero;
@@ -520,6 +541,14 @@ public sealed class ConPty : IDisposable {
         var startup = new StartupInfoEx();
         startup.StartupInfo.cb = Marshal.SizeOf(typeof(StartupInfoEx));
         startup.lpAttributeList = pty.attributes;
+        // Without this the child takes this job's redirected standard handles instead of the
+        // pseudo console's: run 37717423874's Claude Code saw a pipe for stdout, ran as print
+        // mode, wrote its answer into the job log and exited 0 with an empty screen. Null handles
+        // under STARTF_USESTDHANDLES make it open the pseudo console's.
+        startup.StartupInfo.dwFlags = UseStdHandles;
+        startup.StartupInfo.hStdInput = IntPtr.Zero;
+        startup.StartupInfo.hStdOutput = IntPtr.Zero;
+        startup.StartupInfo.hStdError = IntPtr.Zero;
         IntPtr environment = Marshal.StringToHGlobalUni(environmentBlock);
         try {
             ProcessInformation info;
@@ -608,15 +637,14 @@ function New-RealClaudeProfile {
 
 function Start-RealClaudeApp {
     $script:CdpPort = Get-FreeTcpPort
-    $environment = @{
-        USERPROFILE                          = $script:P
-        AGENTNOTCH_NO_NOTIFICATIONS          = '1'
-        WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$($script:CdpPort)"
-    }
+    $environment = Merge-Environment @(@{
+        USERPROFILE                 = $script:P
+        AGENTNOTCH_NO_NOTIFICATIONS = '1'
+    }, (Get-DevToolsEnvironment -Port $script:CdpPort -Log { param($line) Write-RcLog $line }))
     $script:LiveApp = Register-OwnProcess (Start-AppProcess -Exe $script:AppExe -Environment $environment)
     Write-RcLog "the app is running as process $($script:LiveApp.Id), DevTools on port $($script:CdpPort)"
     $expect = [ordered]@{ transport = 'listening'; accounts = '1'; hook_consent = 'unasked' }
-    $status = Wait-ControlStatus -Seconds 90 -What 'the app to list the temporary account' -Check ({ param($s) Test-ControlStatus -Status $s -Expect $expect }.GetNewClosure())
+    $status = Wait-ControlStatus -Seconds 90 -What 'the app to list the temporary account' -Expect $expect
     Write-RcLog ('control status: ' + (($status.GetEnumerator() | ForEach-Object { "$($_.Key): $($_.Value)" }) -join ', '))
 }
 
@@ -629,7 +657,7 @@ function Grant-HookConsent {
     Invoke-CdpClick -Page $script:Ui.SettingsPage -Selector $script:Ui.ConsentTurnOn
     Wait-Until { (Get-FileSha256 $settingsPath) -ne $before -and (Test-Path -LiteralPath $hookCopy) } 20 "the app's entries in $settingsPath"
     Start-Sleep -Milliseconds 700   # a pass writes its files one after the other; let it finish
-    Wait-ControlStatus -Seconds 15 -What 'hook consent' -Check ({ param($s) Test-ControlStatus -Status $s -Expect @{ hook_consent = 'granted' } }) | Out-Null
+    Wait-ControlStatus -Seconds 15 -What 'hook consent' -Expect @{ hook_consent = 'granted' } | Out-Null
     $settings = Read-Settings $settingsPath
     $own = @(Get-HookEntries -Settings $settings | Where-Object { $_.Event -eq 'PermissionRequest' } |
         Where-Object { Get-OwnForm -Entry $_ -ExpectedExe $hookCopy -Resolve { param($p) Resolve-LongPath -Path $p } })
@@ -679,6 +707,15 @@ function Start-ClaudeDriver {
     foreach ($argument in $ClaudeArgs) { $psi.ArgumentList.Add('--arg'); $psi.ArgumentList.Add($argument) }
     $psi.Environment.Clear()
     $environment = Get-ClaudeEnvironmentFor -Api $Api
+    # The stream-json host these runs stand for is the VS Code extension's chat panel, which starts
+    # Claude Code this way with CLAUDE_CODE_ENTRYPOINT=claude-vscode (2.1.285 keeps a preset value).
+    # Left unset, `-p` makes it sdk-cli, and the engine ignores sdk-* sessions as the Mac does
+    # (HS 4.3, SessionFilter): run 37331085715 waited for a session the app rightly never listed.
+    $environment['CLAUDE_CODE_ENTRYPOINT'] = $script:HeadlessEntrypoint
+    # The app's hook exe says what it did (delivered, held, answered, no app) only with both
+    # variables (agentnotch-hook trace.rs); the trace is uploaded with the other artifacts.
+    $environment['AGENTNOTCH_DEV'] = '1'
+    $environment['AGENTNOTCH_HOOK_TRACE'] = Join-Path $script:ArtifactsDir "hook-trace-$Name.log"
     foreach ($key in $environment.Keys) { $psi.Environment[$key] = $environment[$key] }
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
@@ -706,7 +743,12 @@ function Wait-DriverSession {
         $null -ne $state -and $state['session_id']
     } 120 "Claude Code's session to start ($($Driver.Name))"
     $state = Read-DriverState $Driver
-    Write-RcLog "Claude Code ($($Driver.Name)): process $($state['pid']), session $($state['session_id'])"
+    $mode = '?'
+    if (Test-Path -LiteralPath $Driver.Events) {
+        $init = @(ConvertFrom-JsonLines -Text ([IO.File]::ReadAllText($Driver.Events)) | Where-Object { $_['type'] -eq 'system' -and $_['subtype'] -eq 'init' })
+        if ($init.Count) { $mode = [string]$init[0]['permissionMode'] }
+    }
+    Write-RcLog "Claude Code ($($Driver.Name)): process $($state['pid']), session $($state['session_id']), permission mode $mode"
     $state
 }
 
@@ -724,8 +766,31 @@ function Wait-Driver {
 function Invoke-PanelAnswer {
     param([Parameter(Mandatory)][string]$SessionId, [Parameter(Mandatory)][string]$Answer)
     Invoke-CdpCall -Page $script:Ui.NotchPage -Method 'panel_open' -Arguments @{ route = 'sessions'; reason = 'ring_click' } | Out-Null
-    Invoke-CdpAnswerClick -Page $script:Ui.PanelPage -Selector ($script:Ui.Answer -f $Answer, $SessionId) -WaitSeconds 120
+    try { Invoke-CdpAnswerClick -Page $script:Ui.PanelPage -Selector ($script:Ui.Answer -f $Answer, $SessionId) -WaitSeconds 120 }
+    catch {
+        Write-PanelAnswerDiagnostics -SessionId $SessionId
+        throw
+    }
     Write-RcLog "  answered '$Answer' in the panel"
+}
+
+# When the answer button never came: how the engine and the panel see the session, so the next
+# round knows which side dropped it.
+function Write-PanelAnswerDiagnostics {
+    param([Parameter(Mandatory)][string]$SessionId)
+    try {
+        $rows = @((Invoke-CdpCall -Page $script:Ui.NotchPage -Method 'snapshot')['sessions'] | Where-Object { $_['session_id'] -eq $SessionId })
+        Write-RcLog "  the engine's row: $(if ($rows.Count) { $rows[0] | ConvertTo-Json -Depth 8 -Compress } else { 'none' })"
+        Write-RcLog "  control status: held $((Get-ControlStatus)['held'])"
+    } catch { Write-RcLog "  (the engine's row could not be read: $($_.Exception.Message))" }
+    $id = ConvertTo-Json $SessionId -Compress
+    $expression = "(() => { const P = window.agentnotchPanel; if (!P) return 'no agentnotchPanel'; const r = P.row($id); " +
+        "const lay = P._.listLayout(P._.view()); return JSON.stringify({ mode: document.body.className, hoverList: P._.state.hoverList, " +
+        "row: r && { bucket: r.bucket, pending: r.pending, detail: r.detail }, " +
+        "sections: lay && lay.sections ? lay.sections.map((s) => ({ bucket: s.bucket, collapsed: s.collapsed, ids: s.rows.map((x) => x.session_id) })) : null, " +
+        "buttons: [...document.querySelectorAll('[data-an-session=' + JSON.stringify($id) + ']')].map((b) => b.getAttribute('data-an-action') + ':' + b.getAttribute('data-an-arg') + ':' + b.className) }); })()"
+    try { Write-RcLog "  the panel: $(Invoke-Cdp -Arguments @('eval', $script:Ui.PanelPage, $expression))" }
+    catch { Write-RcLog "  (the panel could not be read: $($_.Exception.Message))" }
 }
 
 # While Claude Code waits on the first permission: its registry entry and how the engine filed it.
@@ -779,7 +844,11 @@ function Invoke-HeadlessScenarios {
     param([Parameter(Mandatory)][bool]$ExecForm)
     $api = Start-FakeApi -Scenario 'headless' -Name 'headless'
     $readingsBefore = [int](Get-ControlStatus)['readings']
-    $driver = Start-ClaudeDriver -Api $api -Name 'headless' -Prompts @(
+    # 2.1.285 starts in auto mode when no mode is named (runs 37331085715 and 37335586678: init
+    # said permissionMode auto, and the `touch` calls ran with no PermissionRequest at all). The
+    # VS Code panel these runs stand for starts in its own setting, "default" unless the user
+    # changed it, where a Bash call asks; so the run names that mode.
+    $driver = Start-ClaudeDriver -Api $api -Name 'headless' -ClaudeArgs @('--permission-mode', 'default') -Prompts @(
         '[allow] Create the first marker file with Bash.', '[deny] Create the second marker file with Bash.', '[question] Ask me which colour to use.')
     $state = Wait-DriverSession -Driver $driver
     Test-LiveSession -State $state
@@ -1000,6 +1069,7 @@ try {
     Write-Host "::error::real-claude: $($_.Exception.Message)"
 } finally {
     Stop-OwnProcesses
+    if ($IsWindows) { Clear-DevToolsOverride }
     if ($IsWindows -and $script:Log) {
         Remove-ClaudeFirewallRules
         Save-LiveRunLog

@@ -173,6 +173,8 @@ Test-Case 'a tree hash lists every file with forward slashes, and a missing fold
     Assert-Equal $hashes['top.txt'] $hashes['top.txt'].ToLowerInvariant() 'lower case'
     Assert-Equal (Get-TreeHash -Root (Join-Path $root 'absent')).Count 0 'a missing folder'
     Assert-Equal ((Get-TreeHash -Root $root -Prefix 'p/').Keys -join ',') 'p/a/b/deep.txt,p/top.txt' 'prefix'
+    # A skipped path is never opened: one the running app holds locked would fail the hash.
+    Assert-Equal ((Get-TreeHash -Root $root -Skip 'a/*').Keys -join ',') 'top.txt' 'skipped'
 }
 
 Test-Case 'the hash comparison reports changed, added and removed files, and nothing when equal' {
@@ -292,10 +294,15 @@ Test-Case 'the profile is built exactly as the design says' {
     Assert-Equal @(Compare-Hashes -Before $hashes -After (New-SmokeProfile -Root $root -Fixtures $fixtures -FakeClaude $fake)).Count 0 'rebuild'
 }
 
-Test-Case 'the usage fixture is JSON the probe parser can read (five-hour and weekly windows)' {
+Test-Case 'the usage fixture is a get_usage answer the probe parser takes as a reading (five-hour and weekly windows)' {
+    # fake-claude answers get_usage with this object as the control response's `response`.
     $usage = Get-Content (Join-Path $fixtures 'usage.json') -Raw | ConvertFrom-Json
-    Assert-Equal $usage.five_hour.utilization 12 'five hour'
-    Assert-Equal $usage.seven_day.utilization 34 'weekly'
+    Assert-True $usage.rate_limits_available 'rate limits available'
+    Assert-Equal $usage.rate_limits.five_hour.utilization 12 'five hour'
+    Assert-Equal $usage.rate_limits.seven_day.utilization 34 'weekly'
+    # Without `limits` the parser takes the answer for Claude Code's seeded fallback, which the
+    # probe can only date from .claude.json's cache (the fixtures have none): no reading.
+    Assert-Equal (@($usage.rate_limits.limits | ForEach-Object { $_.kind }) -join ',') 'session,weekly_all' 'the limits list'
 }
 
 # --- the doctor -----------------------------------------------------------------------------------
@@ -606,7 +613,9 @@ Test-Case 'the comparison runs through node on generated PNGs when node is here'
 }
 
 Test-Case 'the sealed launch is replaced by the self-test exactly when the selftest gate is open' {
-    $closed = Read-Gates -Path $committedGates
+    $closedPath = Join-Path (New-Scratch 'gates-closed') 'g.json'
+    Write-GatesFile $closedPath @{}
+    $closed = Read-Gates -Path $closedPath
     $numbers = @(Get-PhaseTable -Gates $closed | ForEach-Object { $_.Number })
     Assert-True ('3b' -in $numbers) 'the plain sealed launch stays while the gate is closed'
     Assert-True ('4' -in $numbers) 'phase 4 is in the table (gated)'
@@ -647,6 +656,23 @@ Test-Case 'control status lines are read as key: value, and the check names what
     $bad = @(Test-ControlStatus -Status (ConvertFrom-ControlStatus -Text "transport: stopped`naccounts: 2`n") -Expect $expect)
     Assert-Equal ($bad -join '|') "transport is 'stopped', expected 'listening'|no 'hook_consent' line|no 'readings' line" 'each difference is named'
     Assert-Equal (ConvertFrom-ControlStatus -Text '').Count 0 'empty text is an empty status'
+}
+
+Test-Case 'Wait-ControlStatus compares with -Expect and runs a closure -Check, as the phases call it' {
+    $script:polls = 0
+    function Get-ControlStatus {
+        $script:polls++
+        [ordered]@{ transport = 'listening'; accounts = '2'; readings = [string][math]::Min($script:polls, 2); sessions = '1' }
+    }
+    $seen = Wait-ControlStatus -Seconds 10 -What 'readings' -Expect ([ordered]@{ transport = 'listening'; readings = '2' })
+    Assert-Equal $seen['readings'] '2' 'it waited for the readings'
+    $before = @{ sessions = '0' }
+    # A closure runs in a module of its own: it may use only what it captured.
+    $seen = Wait-ControlStatus -Seconds 5 -What 'sessions' -Check ({ param($s) if ([int]$s['sessions'] -le [int]$before['sessions']) { 'none' } }.GetNewClosure())
+    Assert-Equal $seen['sessions'] '1' 'the closure check passed'
+    $failed = $null
+    try { Wait-ControlStatus -Seconds 1 -What 'the cloud' -Expect @{ cloud = 'signed_in' } | Out-Null } catch { $failed = $_.Exception.Message }
+    Assert-Equal $failed "timed out after 1 s: the cloud (no 'cloud' line)" 'a timeout names what it last saw'
 }
 
 Test-Case 'a private DACL is protected and names only the user and SYSTEM' {
@@ -777,6 +803,14 @@ Test-Case 'settings style: the byte order mark and CRLF must survive, and only t
     Assert-True (@(Test-SettingsStyle -Bytes ([Text.Encoding]::UTF8.GetBytes($text))) -match 'byte order mark') 'a lost BOM'
     $lf = [byte[]](0xEF, 0xBB, 0xBF) + [Text.Encoding]::UTF8.GetBytes(($text -replace ',', ",`n"))
     Assert-True (@(Test-SettingsStyle -Bytes $lf) -match 'bare LF') 'LF endings'
+    # Against the original: an LF file without a BOM stays one.
+    $plain = [Text.Encoding]::UTF8.GetBytes(($text -replace ',', ",`n"))
+    Assert-Equal @(Test-SettingsStyle -Bytes $plain -Original $plain).Count 0 'LF without a BOM, as it was'
+    Assert-True (@(Test-SettingsStyle -Bytes $lf -Original $plain) -match 'byte order mark was added') 'an added BOM'
+    $crlfNoBom = [Text.Encoding]::UTF8.GetBytes(($text -replace ',', ",`r`n"))
+    Assert-True (@(Test-SettingsStyle -Bytes $crlfNoBom -Original $plain) -match 'CRLF line ending') 'CRLF in an LF file'
+    Assert-True (@(Test-SettingsStyle -Bytes $plain -Original $crlf) -match 'byte order mark is gone') 'the BOM of a BOM file'
+    Assert-Equal @(Test-SettingsStyle -Bytes $crlf -Original $crlf).Count 0 'BOM and CRLF, as it was'
     $before = ConvertFrom-SettingsBytes -Bytes $crlf
     Assert-Equal $before.theme 'dark' 'the BOM is skipped when parsing'
     $after = ConvertFrom-SettingsBytes -Bytes ([Text.Encoding]::UTF8.GetBytes(($text -replace '"dark"', '"light"')))
@@ -948,6 +982,32 @@ Test-Case 'a free port can be bound again right after it is handed out' {
     $listener.Stop()
 }
 
+Test-Case 'the DevTools switches: the port first, then wry''s own, for the env and the WebView2 override' {
+    Assert-Equal (Get-DevToolsBrowserArguments -Port 4242) '--remote-debugging-port=4242 --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection' 'override'
+    Assert-Equal @($script:WebView2PolicyKeys | Where-Object { $_ -match '^HK(LM|CU):\\Software\\Policies\\Microsoft\\Edge\\WebView2\\AdditionalBrowserArguments$' }).Count 2 'override keys'
+    Assert-Equal $script:WebView2PolicyValue 'agentnotch.exe' 'value name'
+    Clear-DevToolsOverride   # nothing set: nothing to take away
+    Assert-Equal $script:WebView2PolicySet.Count 0 'nothing recorded'
+}
+
+Test-Case 'a permission answer: HS 1.7 bytes, a suggestion''s keys in any order, nothing else' {
+    $fixtures = Join-Path $windowsDir 'agentnotch-proto/tests/fixtures/v1-responses'
+    $want = [IO.File]::ReadAllBytes((Join-Path $fixtures 'always.stdout'))
+    $sorted = [Text.Encoding]::UTF8.GetBytes('{"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": "allow", "updatedPermissions": [{"behavior": "allow", "destination": "localSettings", "rules": [{"ruleContent": "npm run test:*", "toolName": "Bash"}], "type": "addRules"}]}}}')
+    Assert-True (Test-PermissionBytes -Got $want -Want $want) 'the same bytes'
+    Assert-True (Test-PermissionBytes -Got $sorted -Want $want) 'the suggestion''s keys sorted (run 37307553355)'
+    $otherRule = [Text.Encoding]::UTF8.GetBytes(([Text.Encoding]::UTF8.GetString($sorted)).Replace('test:*', 'tesx:*'))
+    Assert-True (-not (Test-PermissionBytes -Got $otherRule -Want $want)) 'another rule'
+    $outerOrder = [Text.Encoding]::UTF8.GetBytes(([Text.Encoding]::UTF8.GetString($want)).Replace('{"behavior": "allow", "updatedPermissions": ', '{"updatedPermissions": ').Replace('"localSettings"}]}', '"localSettings"}], "behavior": "allow"}'))
+    Assert-Equal $outerOrder.Length $want.Length 'same length'
+    Assert-True (-not (Test-PermissionBytes -Got $outerOrder -Want $want)) 'the decision''s own keys reordered'
+    $allow = [IO.File]::ReadAllBytes((Join-Path $fixtures 'allow.stdout'))
+    $deny = [IO.File]::ReadAllBytes((Join-Path $fixtures 'deny.stdout'))
+    Assert-True (-not (Test-PermissionBytes -Got $deny -Want $allow)) 'deny is not allow'
+    Assert-True (-not (Test-PermissionBytes -Got ([byte[]]@()) -Want $allow)) 'nothing printed'
+    Assert-Equal (ConvertTo-SortedJson ([ordered]@{ b = @(1, @{ z = 'x'; a = $null }); a = @() })) '{"a":[],"b":[1,{"a":null,"z":"x"}]}' 'sorted JSON'
+}
+
 Test-Case 'phases 5-9 are in the table in order, behind the engine gate, between phase 4 and phase 13' {
     $table = @(Get-PhaseTable)
     $numbers = @($table | ForEach-Object { $_.Number })
@@ -1045,7 +1105,38 @@ Test-Case 'the fake website log is read line by line; a torn or foreign line is 
     Assert-Equal (Get-RequestCount -Requests $entries -Method 'POST' -Path '/api/app/v1/sync') 1 'one sync'
     Assert-Equal (Get-RequestCount -Requests $entries -Method 'GET' -Path '/api/app/v1/sync') 0 'method counts'
     Assert-Equal (Get-RequestCount -Requests @() -Method 'POST' -Path '/auth/v1/logout') 0 'no requests'
+    Assert-Equal (Get-RequestCount -Requests (Get-FakeWebsiteRequests -LogFile (Join-Path $scratch 'no-such-log.jsonl')) -Method 'POST' -Path '/auth/v1/logout') 0 'no log yet'
     Assert-Equal @(ConvertFrom-RequestLog -Text '').Count 0 'empty'
+}
+
+Test-Case "the hooks of the default folder's Claude Code get no CLAUDE_CONFIG_DIR" {
+    $arguments = @(Get-HookEnvironmentArguments -ClaudePid 4242)
+    Assert-Equal ($arguments -join ' ') '--env CLAUDE_PID=4242 --env CLAUDE_CODE_ENTRYPOINT=cli' 'the variables'
+}
+
+Test-Case 'the readings waiting for the website are read from the settings snapshot' {
+    Assert-Equal (Get-CloudPendingUsage -Settings @{ cloud = @{ pending_usage = 2 } }) 2 'two'
+    Assert-Equal (Get-CloudPendingUsage -Settings @{ cloud = @{ sync_enabled = $true } }) 0 'none named'
+    Assert-Equal (Get-CloudPendingUsage -Settings $null) 0 'no snapshot'
+}
+
+Test-Case 'the usage cache is added to a .claude.json the way Claude Code keeps it, the rest kept' {
+    $original = [IO.File]::ReadAllText((Join-Path $fixtures 'claude.json'))
+    $at = 1790000100000
+    $text = ConvertTo-ClaudeJsonWithCachedUsage -Text ([string][char]0xFEFF + $original) -FetchedAtMs $at
+    Assert-True ($text[0] -ne [char]0xFEFF) 'no BOM'
+    $config = $text | ConvertFrom-Json -AsHashtable
+    $before = $original | ConvertFrom-Json -AsHashtable
+    Assert-Equal $config['oauthAccount']['accountUuid'] $before['oauthAccount']['accountUuid'] 'the login kept'
+    Assert-Equal $config['hasCompletedOnboarding'] $true 'other keys kept'
+    $cached = $config['cachedUsageUtilization']
+    Assert-Equal $cached['accountUuid'] $before['oauthAccount']['accountUuid'] 'the cache names the login'
+    Assert-Equal ([long]$cached['fetchedAtMs']) $at 'fetched at'
+    Assert-Equal $cached['utilization']['five_hour']['utilization'] 17 'five-hour'
+    # Read from the text: ConvertFrom-Json turns the date into a local DateTime.
+    $iso = [DateTimeOffset]::FromUnixTimeMilliseconds($at + 3 * 3600 * 1000).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture)
+    Assert-True ($text.Contains("`"resets_at`": `"$iso`"")) "five-hour resets at $iso (three hours later, UTC)"
+    Assert-Throws { ConvertTo-ClaudeJsonWithCachedUsage -Text '{"numStartups":1}' -FetchedAtMs $at } 'login|null'
 }
 
 Test-Case 'the cloud switches are read from the settings snapshot; anything but true is off' {

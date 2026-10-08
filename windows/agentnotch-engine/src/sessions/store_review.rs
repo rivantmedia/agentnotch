@@ -57,6 +57,15 @@ impl SessionStore {
         self.tracker.initial_scan_completed(now);
     }
 
+    /// The review file's bytes now, whatever its debounce says (the hub's
+    /// stop writes them at once: the process may end right after). `None`
+    /// for a store never given the file. Added by WP7.
+    pub fn review_file_now(&mut self, now: SystemTime) -> Option<Vec<u8>> {
+        self.review_loaded_at?;
+        self.review_persist_due = None;
+        Some(self.review.encode(now))
+    }
+
     /// The earliest moment the review file or the attention baseline needs
     /// the clock (only once the file was handed over).
     pub(super) fn review_deadline(&self) -> Option<SystemTime> {

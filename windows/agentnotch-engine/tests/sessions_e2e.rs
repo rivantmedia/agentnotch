@@ -4,9 +4,12 @@
 //! Every hook event and status line is built the way the Windows hook exe
 //! builds it (`build_hook_message`, `encode_hook_message`,
 //! `build_statusline_message`, `encode_frame`), injected into a
-//! `MemoryTransport`, drained as `TransportEvent`s, decoded by the test-only
-//! decoder in `sessions_support/frames.rs` (ingress is WP1's) and fed to the
-//! `SessionStore`. Every job the store asks for is run synchronously: the
+//! `MemoryTransport`, drained as `TransportEvent`s, handled by WP1's real
+//! `HookIngress` (decode, the ToolUseIdCache, held requests) and fed to the
+//! `SessionStore`; answers are the hub's mapping
+//! (`control::answers::permission_response`) written through
+//! `HookIngress::answer`, and the store's releases close held connections
+//! through `HookIngress::release`. Every job the store asks for is run synchronously: the
 //! registry reads (against `FakeProcesses` stand-ins for the fake Claude
 //! processes), the transcript syncs, chat loads, Desktop lookups and the
 //! review file's write. The clock is the store's own: the harness sends
@@ -22,9 +25,11 @@
 
 mod sessions_support;
 
+use agentnotch_engine::control::answers::permission_response;
 use agentnotch_engine::core::atomic::StdSecureFiles;
 use agentnotch_engine::core::paths::{project_slug, Paths};
 use agentnotch_engine::core::time::{iso8601, to_ms};
+use agentnotch_engine::ingress::{fill_status_line_account, HookIngress};
 use agentnotch_engine::model::{
     AccountId, Answer, AttentionTransition, Attribution, IdentityId, NeedsInputReason, Phase,
     SessionId, SessionState, SessionView,
@@ -32,7 +37,8 @@ use agentnotch_engine::model::{
 use agentnotch_engine::persist::review::ReviewStateFile;
 use agentnotch_engine::platform::{ConnId, HookTransport, Processes, TransportEvent};
 use agentnotch_engine::runtime_types::{
-    IngestContext, Job, PersistFile, Release, SessionEffects, SessionInput,
+    AnswerResult, IngestContext, IngressConfig, IngressOut, Job, PersistFile, Release,
+    SessionEffects, SessionInput,
 };
 use agentnotch_engine::sessions::background::WaitTiming;
 use agentnotch_engine::sessions::chat::{load_chat, PAGE_SIZE};
@@ -47,11 +53,9 @@ use agentnotch_proto::frame::encode_frame;
 use agentnotch_proto::message::{
     build_hook_message, build_statusline_message, encode_hook_message, HookEnv,
 };
-use agentnotch_proto::permission::{
-    permission_output_for_stdin, PermissionResponse, KEEP_PLANNING_REASON,
-};
+use agentnotch_proto::permission::permission_output_for_stdin;
 use serde_json::{json, Map, Value};
-use sessions_support::frames::{Decoded, FrameDecoder};
+use sessions_support::frames::unframe;
 use sessions_support::Harness;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -126,7 +130,7 @@ struct Sim {
     procs: Arc<FakeProcesses>,
     transport: Arc<MemoryTransport>,
     rx: crossbeam_channel::Receiver<TransportEvent>,
-    decoder: FrameDecoder,
+    ingress: HookIngress,
     support: PathBuf,
     fakes: Vec<Fake>,
     held: Vec<Held>,
@@ -169,6 +173,8 @@ impl Sim {
             std::fs::create_dir_all(root.join(folder).join("sessions")).unwrap();
         }
         h.store.load_review(None, h.now);
+        let ingress =
+            HookIngress::with_transport(IngressConfig::new("agentnotch-e2e"), transport.clone());
         let mut sim = Sim {
             next_scan: h.now + SCAN,
             h,
@@ -178,7 +184,7 @@ impl Sim {
             procs,
             transport,
             rx,
-            decoder: FrameDecoder::new(),
+            ingress,
             support,
             fakes: Vec::new(),
             held: Vec::new(),
@@ -413,58 +419,83 @@ impl Sim {
     fn send(&mut self, message_bytes: &[u8], stdin: Vec<u8>) {
         self.last_stdin = Some(stdin);
         let frame = encode_frame(message_bytes).expect("a frame");
-        self.transport.inject(frame, self.h.now);
+        // The pipe server reads the length and hands the engine the body.
+        let body = unframe(&frame).expect("a well-formed frame");
+        self.transport
+            .inject(serde_json::to_vec(&body).unwrap(), self.h.now);
         self.injected += 1;
         self.pump();
     }
 
-    /// Drains the transport's events and feeds the store, in order.
+    /// Drains the transport's events through the ingress and feeds the
+    /// store, in order.
     fn pump(&mut self) {
         while let Ok(event) = self.rx.try_recv() {
             let is_frame = matches!(event, TransportEvent::Frame(_));
             if is_frame {
                 self.drained += 1;
             }
-            let decoded = self.decoder.decode(event, &self.paths);
-            let input = match decoded {
-                Decoded::Hook(event) => {
-                    let ctx = self.context_for(
-                        event.transcript_path.as_deref(),
-                        event.config_dir_env.as_deref(),
-                        event.pid,
-                    );
-                    SessionInput::Hook { event, ctx }
-                }
-                Decoded::StatusLine(message) => {
-                    let ctx = self.context_for(
-                        message.transcript_path.as_deref(),
-                        message.config_dir_env.as_deref(),
-                        message.pid,
-                    );
-                    SessionInput::StatusLine { message, ctx }
-                }
-                Decoded::Held(held) => {
-                    self.held.push(Held {
-                        conn: held.conn,
-                        session: held.session_id.clone(),
-                        tool_use_id: held.tool_use_id.clone(),
-                        tool: held.event.tool.clone().unwrap_or_default(),
-                        agent_id: held.agent_id.clone(),
-                        stdin: self.last_stdin.clone().unwrap_or_default(),
-                    });
-                    SessionInput::Held(held)
-                }
-                Decoded::Dropped(why) => {
-                    self.dropped.push(why);
-                    continue;
-                }
-                Decoded::Other => continue,
-            };
-            if is_frame {
-                self.applied_from_frames += 1;
+            let outs = self.ingress.on_transport(event, self.h.now);
+            let mut reached = false;
+            for out in outs {
+                let input = match out {
+                    IngressOut::Hook(event) => {
+                        let ctx = self.context_for(
+                            event.transcript_path.as_deref(),
+                            event.config_dir_env.as_deref(),
+                            event.pid,
+                        );
+                        SessionInput::Hook { event, ctx }
+                    }
+                    IngressOut::StatusLine(mut message) => {
+                        fill_status_line_account(&mut message, &self.paths, |_| false);
+                        let ctx = self.context_for(
+                            message.transcript_path.as_deref(),
+                            message.config_dir_env.as_deref(),
+                            message.pid,
+                        );
+                        SessionInput::StatusLine { message, ctx }
+                    }
+                    IngressOut::PermissionHeld(held) => {
+                        self.held.push(Held {
+                            conn: held.conn,
+                            session: held.session_id.clone(),
+                            tool_use_id: held.tool_use_id.clone(),
+                            tool: held.event.tool.clone().unwrap_or_default(),
+                            agent_id: held.agent_id.clone(),
+                            stdin: self.last_stdin.clone().unwrap_or_default(),
+                        });
+                        SessionInput::Held(held)
+                    }
+                    IngressOut::PermissionFailed {
+                        session,
+                        tool_use_id,
+                    } => SessionInput::PermissionFailed {
+                        session,
+                        tool_use_id,
+                    },
+                    IngressOut::Control { .. } | IngressOut::TransportStatus(_) => continue,
+                };
+                reached = true;
+                self.apply(input);
             }
-            self.apply(input);
+            if is_frame {
+                if reached {
+                    self.applied_from_frames += 1;
+                } else {
+                    self.dropped.push("a frame the ingress kept from the store");
+                }
+            }
+            self.forget_closed();
         }
+    }
+
+    /// The held requests the ingress closed itself (a PostToolUse, the
+    /// main Stop, SessionEnd) are no longer held.
+    fn forget_closed(&mut self) {
+        let ingress = &self.ingress;
+        self.held
+            .retain(|held| ingress.is_pending(&held.session, &held.tool_use_id));
     }
 
     // ---- the store and its jobs ----
@@ -487,28 +518,8 @@ impl Sim {
     }
 
     fn release(&mut self, release: Release) {
-        let mut closing = Vec::new();
-        self.held.retain(|held| {
-            let hit = match &release {
-                Release::Request {
-                    session,
-                    tool_use_id,
-                } => &held.session == session && &held.tool_use_id == tool_use_id,
-                Release::MainAgent(session) => &held.session == session && held.agent_id.is_none(),
-                Release::Agent { session, agent_id } => {
-                    &held.session == session && held.agent_id.as_ref() == Some(agent_id)
-                }
-                Release::Session(session) => &held.session == session,
-                Release::All => true,
-            };
-            if hit {
-                closing.push(held.conn);
-            }
-            !hit
-        });
-        for conn in closing {
-            self.transport.close(conn);
-        }
+        self.ingress.release(release);
+        self.forget_closed();
     }
 
     /// Runs jobs the way the runtime's `an-io` lane does, and feeds their
@@ -893,40 +904,32 @@ impl Sim {
         let held = self.held.remove(position);
         let answer: Answer =
             serde_json::from_value(step["answer"].clone()).map_err(|e| e.to_string())?;
-        let always_rule = self.h.store.view(&id).and_then(|view| {
-            view.pending
-                .iter()
-                .find(|request| request.tool_use_id == held.tool_use_id)
-                .and_then(|request| request.always.as_ref().map(|rule| rule.suggestion.clone()))
-        });
+        let request = self
+            .h
+            .store
+            .view(&id)
+            .and_then(|view| {
+                view.pending
+                    .into_iter()
+                    .find(|request| request.tool_use_id == held.tool_use_id)
+            })
+            .ok_or("the store shows no such request")?;
+        // What the hub sends the hook: the control package's mapping of the
+        // request it showed, written once through the ingress, then the
+        // store hears of it (the answer can't overtake a PostToolUse).
+        let response = permission_response(&request, &answer)?;
+        match self
+            .ingress
+            .answer(&id, &held.tool_use_id, response.clone())
+        {
+            AnswerResult::Delivered => {}
+            other => return Err(format!("the answer was {other:?}")),
+        }
         self.apply(SessionInput::PermissionResolved {
             session: id.clone(),
             tool_use_id: held.tool_use_id.clone(),
             answer: answer.clone(),
         });
-        // What the hub sends the hook (WP7's mapping, in short).
-        let response = match &answer {
-            Answer::Allow { always } => {
-                let mut response = PermissionResponse::allow();
-                if *always {
-                    response.updated_permissions = Some(always_rule.into_iter().collect());
-                }
-                response
-            }
-            Answer::Deny { reason } => PermissionResponse::deny(reason.clone()),
-            Answer::Questions { answers } => {
-                let mut response = PermissionResponse::allow();
-                let mut input = Map::new();
-                input.insert("answers".into(), json!(answers));
-                response.updated_input = Some(input);
-                response
-            }
-            Answer::ApprovePlan => PermissionResponse::allow(),
-            Answer::KeepPlanning => PermissionResponse::deny(Some(KEEP_PLANNING_REASON.into())),
-        };
-        if !self.transport.respond(held.conn, response.to_json()) {
-            return Err("the held connection was gone".into());
-        }
         self.answers_sent += 1;
         let output = permission_output_for_stdin(&held.stdin, &response).unwrap_or_default();
         for needle in step["hook_output_contains"]
@@ -1344,11 +1347,15 @@ fn answers_go_back_over_the_connection_that_asked() {
         "Postgres"
     );
     assert_ne!(responses[0].0, responses[1].0);
+    // Every other connection is closed at once (fire and forget); an
+    // answered one is never closed unanswered as well.
+    let closed = sim.transport.closed();
     assert!(
-        sim.transport.closed().is_empty(),
-        "nothing is closed unanswered"
+        responses.iter().all(|(conn, _)| !closed.contains(conn)),
+        "an answered request was also closed"
     );
     assert!(sim.held.is_empty());
+    assert_eq!(sim.ingress.held_count(), 0);
 }
 
 /// The agent's request survives the main Stop, and the end of the session's
@@ -1357,10 +1364,13 @@ fn answers_go_back_over_the_connection_that_asked() {
 fn a_release_closes_the_held_connection_unanswered() {
     let mut sim = play(&["bgagent"]);
     assert_eq!(sim.held.len(), 1);
+    let conn = sim.held[0].conn;
+    assert!(!sim.transport.is_closed(conn));
     let session = sim.fakes[sim.index("bgagent").unwrap()].id.clone();
     sim.release(Release::Session(session));
     assert!(sim.held.is_empty());
-    assert_eq!(sim.transport.closed().len(), 1);
+    assert!(sim.transport.is_closed(conn));
+    assert_eq!(sim.ingress.held_count(), 0);
     assert!(sim.transport.responses().is_empty());
 }
 

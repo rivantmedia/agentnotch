@@ -7,9 +7,9 @@
 //! - whether the run is sealed is `core::sealed::is_sealed`, the rule `DevFlags::sealed` is set
 //!   from too: upstream's config folder (WR-DIR) depends on it, and that folder is needed before
 //!   the hub's roots exist;
-//! - the rebrand of upstream copy is `core::rebrand` (WP7); until it lands, the name swap below
-//!   stands in for it, which is exact for the strings the glue rebrands (the "Quit …" items in
-//!   every language, which carry no article or compound);
+//! - the rebrand of upstream copy is `core::rebrand` (WP7, the Mac's `Fork.rebranded`): the
+//!   English article ("an Agent Notch"), compounds, and the phone app and upstream's Windows
+//!   build keep their name;
 //! - the website comes from `app-config.json` through the engine's validation
 //!   (`cloud::website::from_app_config`, WP8): a file that breaks the Mac build's rules means no
 //!   sync website, which Settings shows as such.
@@ -40,11 +40,9 @@ pub fn is_sealed() -> bool {
     })
 }
 
-/// Upstream's name for the app, as its copy spells it.
-const UPSTREAM_NAME: &str = "Codenotch";
-
+/// Upstream's copy with its name for the app replaced by this app's.
 pub fn rebrand(text: &str) -> String {
-    text.replace(UPSTREAM_NAME, super::DISPLAY_NAME)
+    agentnotch_engine::core::rebrand::rebranded(text)
 }
 
 /// The sync website named by `app-config.json`, once the engine has checked it.

@@ -264,4 +264,6 @@ jobs:
             echo "::notice::Rust contract e2e not run: waiting for $(jq -r '._why.rustContract' "$gates")."
             exit 0
           fi
+          # The script runs the website's real route, so it needs web/'s packages.
+          (cd web && npm ci --no-audit --no-fund)
           AGENTNOTCH_CONTRACT_APP=rust Scripts/cloud-contract-e2e.sh

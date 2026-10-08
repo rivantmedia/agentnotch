@@ -12,6 +12,7 @@
 // router is a table (`routes`, then `defaultRoutes`) so that decision is data, not code.
 import http from 'node:http';
 import { readFileSync, appendFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -50,6 +51,11 @@ export async function startFakeAnthropic({ scenario, scenarioFile, port = 0, log
   const sc = scenario ?? (scenarioFile ? JSON.parse(readFileSync(scenarioFile, 'utf8')) : EXAMPLE_SCENARIO);
   const log = [];
   let ids = 0;
+  // Each server's ids are its own, as real tool_use ids are unique: the real-Claude job starts one
+  // server per scenario, and with a plain counter its plan run's ExitPlanMode came as toolu_fake_1
+  // like the headless run's first Bash call, which the panel had answered, so the panel (one
+  // answer per request, ever) drew Approve as answered (run 37715299033).
+  const run = randomBytes(6).toString('hex');
   const used = new Set();
 
   // The scenario's next turn: an unused one whose promptIncludes matches, else the first unused
@@ -76,12 +82,12 @@ export async function startFakeAnthropic({ scenario, scenarioFile, port = 0, log
     return { kind: 'turn', turn: t.index, content: t.content };
   }
 
-  const withIds = (blocks) => blocks.map((b) => (b.type === 'tool_use' ? { id: `toolu_fake_${++ids}`, input: {}, ...b } : b));
+  const withIds = (blocks) => blocks.map((b) => (b.type === 'tool_use' ? { id: `toolu_fake_${run}_${++ids}`, input: {}, ...b } : b));
   const stopReason = (blocks) => (blocks.some((b) => b.type === 'tool_use') ? 'tool_use' : 'end_turn');
 
   function jsonMessage(model, blocks) {
     return {
-      id: `msg_fake_${++ids}`, type: 'message', role: 'assistant', model, content: blocks,
+      id: `msg_fake_${run}_${++ids}`, type: 'message', role: 'assistant', model, content: blocks,
       stop_reason: stopReason(blocks), stop_sequence: null,
       usage: { input_tokens: 10, output_tokens: 5, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
     };

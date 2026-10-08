@@ -115,15 +115,18 @@ function Get-FileSha256 {
 }
 
 # Every file under Root: relative path (forward slashes) -> SHA-256. A missing Root is empty.
-# Empty folders are not recorded: what the smoke test compares is bytes.
+# Empty folders are not recorded: what the smoke test compares is bytes. Paths matching a -Skip
+# pattern (relative, before the prefix) are never opened: P's AppData holds the running app's
+# WebView2 profile, whose databases are locked while it runs.
 function Get-TreeHash {
-    param([Parameter(Mandatory)][string]$Root, [string]$Prefix = '')
+    param([Parameter(Mandatory)][string]$Root, [string]$Prefix = '', [string[]]$Skip = @())
     $hashes = [ordered]@{}
     if (-not (Test-Path -LiteralPath $Root -PathType Container)) { return $hashes }
     $full = (Resolve-Path -LiteralPath $Root).ProviderPath
     $files = Get-ChildItem -LiteralPath $full -Recurse -File -Force | Sort-Object FullName
     foreach ($file in $files) {
         $relative = [IO.Path]::GetRelativePath($full, $file.FullName).Replace('\', '/')
+        if (@($Skip | Where-Object { $relative -like $_ }).Count) { continue }
         $hashes[$Prefix + $relative] = Get-FileSha256 -Path $file.FullName
     }
     $hashes
@@ -643,7 +646,7 @@ function Invoke-SealedLaunchPhase {
     if ($runLog -notmatch 'an: hub started \(sealed\)') { throw "the sealed hub did not start: $runLog" }
     $changed = @(Compare-Hashes -Before $dataBefore -After (Get-AppDataTrees))
     if ($changed) { throw "a sealed run wrote to the app's own data folder: $($changed -join ', ')" }
-    $changedP = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P) -Exclude 'AppData/*')
+    $changedP = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P -Skip 'AppData/*') -Exclude 'AppData/*')
     if ($changedP) { throw "a sealed run changed P: $($changedP -join ', ')" }
     Remove-SealedData
 }
@@ -867,7 +870,7 @@ function Invoke-SelfTestPhase {
 
     $changed = @(Compare-Hashes -Before $dataBefore -After (Get-AppDataTrees))
     if ($changed) { $problems.Add("a sealed run wrote to the app's own data folder: $($changed -join ', ')") }
-    $changedP = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P) -Exclude 'AppData/*')
+    $changedP = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P -Skip 'AppData/*') -Exclude 'AppData/*')
     if ($changedP) { $problems.Add("a sealed run changed P: $($changedP -join ', ')") }
     foreach ($root in $script:DataRoots) {
         if (Test-Path -LiteralPath (Join-Path $root 'Agent Notch Sealed')) { $problems.Add("Agent Notch Sealed is still there under $root") }
@@ -900,6 +903,10 @@ $script:Ui = @{
     # The list row's way into the chat ("Review plan"); {0} = session id.
     OpenChat        = '[data-an-action="open-chat"][data-an-arg="{0}"]'
     Back            = '[data-an-action="back"]'
+    # An account's "Show folders" link in Settings ({0} = the account's identity id); its folder
+    # rows, and their status line notes, are rendered only once it is open.
+    ShowFolders     = '[data-an-action="folders"][data-an-arg="{0}"]'
+    ShowFoldersText = 'Show folders'
 }
 # The panel's AnswerGate arms a button 0.35 s after it is on screen; clicking sooner does
 # nothing, so the script waits longer than that before a click (and for the page to say armed).
@@ -955,7 +962,34 @@ function Invoke-Cdp {
     param([Parameter(Mandatory)][string[]]$Arguments, [int]$TimeoutSeconds = 60)
     $tool = Join-Path $PSScriptRoot 'smoke\cdp.mjs'
     $run = Wait-NodeScript -Run (Start-NodeScript -Script $tool -Arguments (@('--port', [string]$script:CdpPort) + $Arguments)) -TimeoutSeconds $TimeoutSeconds
-    try { ConvertFrom-CdpOutput -Text $run.Stdout } catch { throw "$($_.Exception.Message) (cdp $($Arguments -join ' '); stderr: $($run.Stderr.Trim()))" }
+    try { ConvertFrom-CdpOutput -Text $run.Stdout } catch {
+        if ($_.Exception.Message -match 'fetch failed') { Write-CdpDiagnostics }
+        throw "$($_.Exception.Message) (cdp $($Arguments -join ' '); stderr: $($run.Stderr.Trim()))"
+    }
+}
+
+# When the DevTools port does not answer: what the WebView2 browser processes were started with,
+# the ports they listen on, and the port file WebView2 writes into its user data folder. Once.
+$script:CdpDiagnosed = $false
+function Write-CdpDiagnostics {
+    if ($script:CdpDiagnosed) { return }
+    $script:CdpDiagnosed = $true
+    try {
+        Write-PhaseLog "DevTools port $($script:CdpPort) does not answer; the WebView2 processes:"
+        $browsers = @(Get-CimInstance Win32_Process -Filter "Name = 'msedgewebview2.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -notmatch '--type=' })
+        foreach ($b in $browsers) {
+            Write-PhaseLog "  pid $($b.ProcessId) (parent $($b.ParentProcessId)): $($b.CommandLine)"
+            foreach ($c in @(Get-NetTCPConnection -OwningProcess $b.ProcessId -State Listen -ErrorAction SilentlyContinue)) { Write-PhaseLog "    listens on $($c.LocalAddress):$($c.LocalPort)" }
+        }
+        if (-not $browsers) { Write-PhaseLog '  none' }
+        foreach ($key in $script:WebView2PolicyKeys) {
+            $value = (Get-ItemProperty -LiteralPath $key -Name $script:WebView2PolicyValue -ErrorAction SilentlyContinue).$($script:WebView2PolicyValue)
+            Write-PhaseLog "  override ${key}: $(if ($value) { $value } else { '(none)' })"
+        }
+        foreach ($file in @(Get-ChildItem -LiteralPath (Join-Path $script:P 'AppData\Local') -Recurse -Force -Filter 'DevToolsActivePort' -ErrorAction SilentlyContinue)) {
+            Write-PhaseLog "  $($file.FullName): $((Get-Content -LiteralPath $file.FullName -Raw -ErrorAction SilentlyContinue) -replace '\s+', ' ')"
+        }
+    } catch { Write-PhaseLog "  (diagnostics failed: $($_.Exception.Message))" }
 }
 
 # window.__TAURI__.core.invoke(command, args) in the named page, as the page itself calls it.
@@ -1004,6 +1038,55 @@ function Get-FreeTcpPort {
     try { $listener.LocalEndpoint.Port } finally { $listener.Stop() }
 }
 
+# The DevTools port for the app's WebView2 browser. On the runner the browser ignores
+# WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS (run 37300672648: the app, elevated there, started it with
+# wry's switches only), so the same switches also go into WebView2's per-app registry override,
+# <root>\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments, value agentnotch.exe:
+# HKLM, which an elevated process reads, and HKCU. wry's own switches are repeated, so the browser
+# runs as it does for a user whether the override replaces them or is appended to them.
+$script:WebView2PolicyKeys = @(
+    'HKLM:\SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments',
+    'HKCU:\Software\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments')
+$script:WebView2PolicyValue = 'agentnotch.exe'
+$script:WebView2PolicyCreated = [Collections.Generic.List[string]]::new()
+$script:WebView2PolicySet = [Collections.Generic.List[string]]::new()
+
+function Get-DevToolsBrowserArguments {
+    param([Parameter(Mandatory)][int]$Port)
+    "--remote-debugging-port=$Port --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"
+}
+
+# Sets the override for $Port and returns the environment layer for the app; what it did goes to $Log.
+function Get-DevToolsEnvironment {
+    param([Parameter(Mandatory)][int]$Port, [scriptblock]$Log = { param($line) Write-Host $line })
+    $arguments = Get-DevToolsBrowserArguments -Port $Port
+    foreach ($key in $script:WebView2PolicyKeys) {
+        try {
+            if (-not (Test-Path -LiteralPath $key)) {
+                New-Item -Path $key -Force | Out-Null
+                if (-not $script:WebView2PolicyCreated.Contains($key)) { $script:WebView2PolicyCreated.Add($key) }
+            }
+            New-ItemProperty -LiteralPath $key -Name $script:WebView2PolicyValue -Value $arguments -PropertyType String -Force | Out-Null
+            if (-not $script:WebView2PolicySet.Contains($key)) { $script:WebView2PolicySet.Add($key) }
+            & $Log "WebView2 override set: $key\$($script:WebView2PolicyValue) = $arguments"
+        } catch { & $Log "WebView2 override not set in ${key}: $($_.Exception.Message)" }
+    }
+    @{ WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$Port" }
+}
+
+# Takes the overrides away again: the value, and the key when this run made it.
+function Clear-DevToolsOverride {
+    foreach ($key in @($script:WebView2PolicySet)) {
+        Remove-ItemProperty -LiteralPath $key -Name $script:WebView2PolicyValue -Force -ErrorAction SilentlyContinue
+    }
+    foreach ($key in @($script:WebView2PolicyCreated)) {
+        $left = Get-Item -LiteralPath $key -ErrorAction SilentlyContinue
+        if ($left -and -not $left.ValueCount -and -not $left.SubKeyCount) { Remove-Item -LiteralPath $key -Force -ErrorAction SilentlyContinue }
+    }
+    $script:WebView2PolicySet.Clear()
+    $script:WebView2PolicyCreated.Clear()
+}
+
 # --- helpers: what the app prints and writes ---------------------------------------------------------------------
 
 # `control status` is lines of "key: value"; a "key=value" line is read the same way.
@@ -1032,15 +1115,21 @@ function Get-ControlStatus {
 }
 
 # Polls `control status` until it passes the check or the time is up; throws what it last saw.
+# -Expect compares lines with Test-ControlStatus; -Check is a script block for anything else. A
+# check made with GetNewClosure runs in a module of its own that sees none of this script's
+# functions, so it may use only its captured variables: a comparison goes through -Expect.
 function Wait-ControlStatus {
-    param([Parameter(Mandatory)][scriptblock]$Check, [Parameter(Mandatory)][int]$Seconds, [Parameter(Mandatory)][string]$What)
+    param([scriptblock]$Check = $null, [System.Collections.IDictionary]$Expect = $null, [Parameter(Mandatory)][int]$Seconds, [Parameter(Mandatory)][string]$What)
+    if (-not $Check -and -not $Expect) { throw 'Wait-ControlStatus needs -Check or -Expect' }
     $deadline = (Get-Date).AddSeconds($Seconds)
     $last = $null
     while ($true) {
         $last = $null
         try { $last = Get-ControlStatus } catch { $last = "no status: $($_.Exception.Message)" }
         if ($last -isnot [string]) {
-            $problems = @(& $Check $last)
+            $problems = @()
+            if ($Expect) { $problems += @(Test-ControlStatus -Status $last -Expect $Expect) }
+            if ($Check) { $problems += @(& $Check $last) }
             if (-not $problems.Count) { return $last }
             $seen = ($problems -join '; ')
         } else { $seen = $last }
@@ -1158,11 +1247,25 @@ function ConvertFrom-SettingsBytes {
 function Read-Settings { param([Parameter(Mandatory)][string]$Path) ConvertFrom-SettingsBytes -Bytes ([IO.File]::ReadAllBytes($Path)) }
 
 # CRLF and a byte order mark are what Windows editors write; an edit must keep both.
+# The file kept the shape it had: a BOM if (and only if) $Original had one, CRLF line endings in a
+# CRLF file, LF in an LF file. Without $Original the file must be BOM and CRLF (.claude's shape).
 function Test-SettingsStyle {
-    param([Parameter(Mandatory)][byte[]]$Bytes)
-    if ($Bytes.Length -lt 3 -or $Bytes[0] -ne 0xEF -or $Bytes[1] -ne 0xBB -or $Bytes[2] -ne 0xBF) { 'the byte order mark is gone' }
-    $bare = [regex]::Matches([Text.Encoding]::UTF8.GetString($Bytes), "(?<!`r)`n").Count
-    if ($bare) { "$bare bare LF line ending(s): CRLF was not kept" }
+    param([Parameter(Mandatory)][byte[]]$Bytes, [byte[]]$Original = $null)
+    $hasBom = { param([byte[]]$b) $b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF }
+    $bareCount = { param([byte[]]$b) [regex]::Matches([Text.Encoding]::UTF8.GetString($b), "(?<!`r)`n").Count }
+    $crlfCount = { param([byte[]]$b) [regex]::Matches([Text.Encoding]::UTF8.GetString($b), "`r`n").Count }
+    $wantBom = if ($null -eq $Original) { $true } else { & $hasBom $Original }
+    $wantCrlf = if ($null -eq $Original) { $true } else { (& $crlfCount $Original) -gt (& $bareCount $Original) }
+    $bom = & $hasBom $Bytes
+    if ($wantBom -and -not $bom) { 'the byte order mark is gone' }
+    if ($bom -and -not $wantBom) { 'a byte order mark was added' }
+    if ($wantCrlf) {
+        $bare = & $bareCount $Bytes
+        if ($bare) { "$bare bare LF line ending(s): CRLF was not kept" }
+    } else {
+        $crlf = & $crlfCount $Bytes
+        if ($crlf) { "$crlf CRLF line ending(s) in a file written with LF" }
+    }
 }
 
 function ConvertTo-CompactJson { param($Value) ConvertTo-Json $Value -Depth 50 -Compress }
@@ -1321,6 +1424,43 @@ function Get-ProtoFixtureDir {
     Join-Path (Split-Path -Parent $PSScriptRoot) 'agentnotch-proto\tests\fixtures'
 }
 
+# The hook printed HS§1.7's answer. Byte for byte, except that the keys of a permission suggestion
+# echoed in updatedPermissions may come in another order: the hook prints the order the app's
+# frame carries, and neither the Mac (JSONEncoder of [AnyCodable]) nor the engine (serde_json, whose
+# frames' key order is irrelevant, DESIGN-WIN §1.4) keeps the order Claude Code sent. So the same
+# length and the same JSON once every object's keys are sorted, and nothing else differs.
+function Test-PermissionBytes {
+    param([Parameter(Mandatory)][AllowEmptyCollection()][byte[]]$Got, [Parameter(Mandatory)][byte[]]$Want)
+    if ([Convert]::ToBase64String($Got) -ceq [Convert]::ToBase64String($Want)) { return $true }
+    if ($Got.Length -ne $Want.Length) { return $false }
+    $utf8 = [Text.UTF8Encoding]::new($false, $true)
+    try { $gotJson = $utf8.GetString($Got) | ConvertFrom-Json -AsHashtable -Depth 50; $wantJson = $utf8.GetString($Want) | ConvertFrom-Json -AsHashtable -Depth 50 } catch { return $false }
+    $decision = { param($j) $j['hookSpecificOutput']['decision'] }
+    if (-not ((& $decision $gotJson) -is [System.Collections.IDictionary]) -or -not (& $decision $wantJson).Contains('updatedPermissions')) { return $false }
+    # Only updatedPermissions may differ in order: everything else is compared as it was printed.
+    $outside = { param($j) $copy = ConvertFrom-Json (ConvertTo-Json $j -Depth 50 -Compress) -AsHashtable -Depth 50; $copy['hookSpecificOutput']['decision'].Remove('updatedPermissions'); ConvertTo-Json $copy -Depth 50 -Compress }
+    if ((& $outside $gotJson) -cne (& $outside $wantJson)) { return $false }
+    if ((@((& $decision $gotJson).Keys) -join ',') -cne (@((& $decision $wantJson).Keys) -join ',')) { return $false }
+    (ConvertTo-SortedJson (& $decision $gotJson)['updatedPermissions']) -ceq (ConvertTo-SortedJson (& $decision $wantJson)['updatedPermissions'])
+}
+
+# Compact JSON with every object's keys sorted (ordinal), so two values compare by content.
+function ConvertTo-SortedJson {
+    param($Value)
+    if ($null -eq $Value) { return 'null' }
+    if ($Value -is [System.Collections.IDictionary]) {
+        [string[]]$keys = @($Value.Keys | ForEach-Object { [string]$_ })
+        [Array]::Sort($keys, [StringComparer]::Ordinal)
+        $parts = foreach ($key in $keys) {
+            (ConvertTo-Json ([string]$key) -Compress) + ':' + (ConvertTo-SortedJson $Value[$key])
+        }
+        return '{' + (@($parts) -join ',') + '}'
+    }
+    if ($Value -is [string]) { return (ConvertTo-Json $Value -Compress) }
+    if ($Value -is [System.Collections.IEnumerable]) { return '[' + (@(foreach ($item in $Value) { ConvertTo-SortedJson $item }) -join ',') + ']' }
+    ConvertTo-Json $Value -Compress
+}
+
 function Get-ExpectedPermissionBytes {
     param([Parameter(Mandatory)][string]$Name, [string]$Fixtures = (Get-ProtoFixtureDir))
     [IO.File]::ReadAllBytes((Join-Path $Fixtures "v1-responses\$Name.stdout"))
@@ -1390,38 +1530,47 @@ function Invoke-BeforeConsentPhase {
     foreach ($root in $script:DataRoots) { Remove-Item -LiteralPath (Join-Path (Join-Path $root 'Agent Notch') 'run.log') -Force -ErrorAction SilentlyContinue }
     Remove-Item -LiteralPath $script:FakeClaudeLog -Force -ErrorAction SilentlyContinue
     $script:CdpPort = Get-FreeTcpPort
-    $environment = Merge-Environment @((Get-AppEnvironment), $script:ScrubSentinels, @{ WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$($script:CdpPort)" })
+    $environment = Merge-Environment @((Get-AppEnvironment), $script:ScrubSentinels, (Get-DevToolsEnvironment -Port $script:CdpPort -Log { param($line) Write-PhaseLog $line }))
     $script:LiveApp = Register-OwnProcess (Start-AppProcess -Exe $script:AppExe -Environment $environment)
     Write-PhaseLog "the real app is running as process $($script:LiveApp.Id), DevTools on port $($script:CdpPort)"
     Start-Sleep -Seconds 30
     if ($script:LiveApp.HasExited) { throw "the app exited with $($script:LiveApp.ExitCode) within 30 s" }
+    # run.log and the fake claude's log go into the artifacts whatever happens: a red phase is read from them.
+    try {
+        $expect = [ordered]@{ transport = 'listening'; accounts = '2'; hook_consent = 'unasked'; readings = '2' }
+        $status = Wait-ControlStatus -Seconds 60 -What 'control status before consent' -Expect $expect
+        Write-PhaseLog ("control status: " + (($status.GetEnumerator() | ForEach-Object { "$($_.Key): $($_.Value)" }) -join ', '))
 
-    $expect = [ordered]@{ transport = 'listening'; accounts = '2'; hook_consent = 'unasked'; readings = '2' }
-    $status = Wait-ControlStatus -Seconds 60 -What 'control status before consent' -Check ({ param($s) Test-ControlStatus -Status $s -Expect $expect }.GetNewClosure())
-    Write-PhaseLog ("control status: " + (($status.GetEnumerator() | ForEach-Object { "$($_.Key): $($_.Value)" }) -join ', '))
+        $changed = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P -Skip 'AppData/*') -Exclude 'AppData/*')
+        if ($changed) { throw "the app wrote to P before any consent: $($changed -join ', ')" }
 
-    $changed = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P) -Exclude 'AppData/*')
-    if ($changed) { throw "the app wrote to P before any consent: $($changed -join ', ')" }
+        $lines = if (Test-Path -LiteralPath $script:FakeClaudeLog) { @(Get-Content -LiteralPath $script:FakeClaudeLog) } else { @() }
+        $support = Find-SupportDir -Profile $script:P
+        if (-not $support) { throw "no support folder (com.rivantmedia.agentnotch\Claude) under the local app data or P's" }
+        Write-PhaseLog "support folder: $support; fake claude was run $($lines.Count) time(s)"
+        $probes = @($lines | Where-Object { $_ -match '--input-format' })
+        if (-not $probes.Count) { throw 'the fake claude log shows no usage probe' }
+        $logProblems = @(Test-FakeClaudeLog -Lines $lines -ProbeDir (Join-Path $support 'usage-probe'))
+        if ($logProblems) { throw "the fake claude log: $($logProblems -join '; ')" }
 
-    $lines = if (Test-Path -LiteralPath $script:FakeClaudeLog) { @(Get-Content -LiteralPath $script:FakeClaudeLog) } else { @() }
-    $support = Find-SupportDir -Profile $script:P
-    if (-not $support) { throw "no support folder (com.rivantmedia.agentnotch\Claude) under the local app data or P's" }
-    Write-PhaseLog "support folder: $support; fake claude was run $($lines.Count) time(s)"
-    $probes = @($lines | Where-Object { $_ -match '--input-format' })
-    if (-not $probes.Count) { throw 'the fake claude log shows no usage probe' }
-    $logProblems = @(Test-FakeClaudeLog -Lines $lines -ProbeDir (Join-Path $support 'usage-probe'))
-    if ($logProblems) { throw "the fake claude log: $($logProblems -join '; ')" }
+        $aclProblems = @(Get-AclProblems -Path $support)
+        if ($aclProblems) { throw "the support folder: $($aclProblems -join '; ')" }
+        # cloud-folder-logins.json is the one exception: since when each folder has been signed in as
+        # its account, local only and kept whether or not sync is on (the Mac's CloudSync.tick), so a
+        # later backfill knows it. Nothing in it is ever sent.
+        $cloud = @(Get-ChildItem -LiteralPath $support -Force -Filter 'cloud-*' -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -ne 'cloud-folder-logins.json' })
+        if ($cloud) { throw "the support folder holds $($cloud.Name -join ', ') before sign-in" }
+        if ($null -ne (Get-RunValue)) { throw 'a Run value exists although autostart was never turned on' }
 
-    $aclProblems = @(Get-AclProblems -Path $support)
-    if ($aclProblems) { throw "the support folder: $($aclProblems -join '; ')" }
-    $cloud = @(Get-ChildItem -LiteralPath $support -Force -Filter 'cloud-*' -ErrorAction SilentlyContinue)
-    if ($cloud) { throw "the support folder holds $($cloud.Name -join ', ') before sign-in" }
-    if ($null -ne (Get-RunValue)) { throw 'a Run value exists although autostart was never turned on' }
-
-    $runLog = Get-LiveRunLogText
-    Save-LiveRunLog
-    if ($runLog -notmatch '(?m)an: hub started(?! \(sealed\))') { throw 'run.log has no "an: hub started"' }
-    if ($runLog -notmatch '(?m)an: pipe listening') { throw 'run.log has no "an: pipe listening"' }
+        $runLog = Get-LiveRunLogText
+        Save-LiveRunLog
+        if ($runLog -notmatch '(?m)an: hub started(?! \(sealed\))') { throw 'run.log has no "an: hub started"' }
+        if ($runLog -notmatch '(?m)an: pipe listening') { throw 'run.log has no "an: pipe listening"' }
+    } finally {
+        Save-LiveRunLog
+        if (Test-Path -LiteralPath $script:FakeClaudeLog) { Copy-Item -LiteralPath $script:FakeClaudeLog -Destination (Join-Path $script:ArtifactsDir 'fake-claude.log') -Force -ErrorAction SilentlyContinue }
+    }
 }
 
 # --- phase 6: the deep link with nothing pending ------------------------------------------------------------
@@ -1474,9 +1623,9 @@ function Get-InstalledFolderProblems {
     $problems = [Collections.Generic.List[string]]::new()
     $add = { param($lines) foreach ($l in @($lines)) { if ($l) { $problems.Add("${Name}: $l") } } }
     $bytes = [IO.File]::ReadAllBytes($path)
-    & $add (Test-SettingsStyle -Bytes $bytes)
-    $now = ConvertFrom-SettingsBytes -Bytes $bytes
     $originalBytes = [IO.File]::ReadAllBytes((Join-Path $script:OriginalsDir "$Name.settings.json"))
+    & $add (Test-SettingsStyle -Bytes $bytes -Original $originalBytes)
+    $now = ConvertFrom-SettingsBytes -Bytes $bytes
     $before = ConvertFrom-SettingsBytes -Bytes $originalBytes
     $edited = if ($StatusLineWrapped) { @('hooks', 'statusLine') } else { @('hooks') }
     & $add (Test-OtherKeysUnchanged -Before $before -After $now -Edited $edited)
@@ -1545,7 +1694,8 @@ function Invoke-TurnOnPhase {
         $problems = [Collections.Generic.List[string]]::new()
         foreach ($line in (Get-InstalledFolderProblems -Name '.claude' -StatusLineWrapped $true -ExecFormAllowed $execAllowed)) { $problems.Add($line) }
         foreach ($line in (Get-InstalledFolderProblems -Name '.claude-work' -StatusLineWrapped $false -ExecFormAllowed $execAllowed)) { $problems.Add($line) }
-        # Settings says why the status line of .claude-work was left alone.
+        # Settings says why the status line of .claude-work was left alone (under its account's folders).
+        try { Show-SettingsFolders } catch { $problems.Add("Settings would not show the folders: $($_.Exception.Message)") }
         $note = ConvertTo-JsString $script:Ui.StatusLineAlone
         try { [void](Invoke-Cdp -Arguments @('wait', $script:Ui.SettingsPage, "document.body.innerText.includes($note)", '10000')) }
         catch { $problems.Add("Settings does not show '$($script:Ui.StatusLineAlone)'") }
@@ -1555,6 +1705,15 @@ function Invoke-TurnOnPhase {
     } finally {
         Save-LiveRunLog
     }
+}
+
+# Opens every account's folder list in Settings that is closed (a second click would close it).
+function Show-SettingsFolders {
+    $label = ConvertTo-JsString $script:Ui.ShowFoldersText
+    $expression = "Array.from(document.querySelectorAll('[data-an-action=`"folders`"]')).filter(b => b.textContent.trim() === $label).map(b => b.getAttribute('data-an-arg')).join('\n')"
+    $ids = @(([string](Invoke-Cdp -Arguments @('eval', $script:Ui.SettingsPage, $expression))) -split "`n" | Where-Object { $_ })
+    foreach ($id in $ids) { [void](Invoke-Cdp -Arguments @('click', $script:Ui.SettingsPage, ($script:Ui.ShowFolders -f $id))) }
+    Write-PhaseLog "Settings: opened the folders of $($ids.Count) account(s)"
 }
 
 # --- phase 8: every entry as written, then every answer ---------------------------------------------------------------
@@ -1569,9 +1728,13 @@ function Start-DummyClaude {
     Register-OwnProcess $process
 }
 
+# What Claude Code started in P's default folder hands its hooks. No CLAUDE_CONFIG_DIR: a `claude`
+# run in ~\.claude has none, and one set to that folder is another login file for Claude Code (and
+# the engine): <dir>\.claude.json instead of ~\.claude.json. Run 37331085715 set it, and from
+# phase 8 on the app filed ~\.claude as signed out (one account left).
 function Get-HookEnvironmentArguments {
     param([Parameter(Mandatory)][int]$ClaudePid)
-    @('--env', "CLAUDE_PID=$ClaudePid", '--env', "CLAUDE_CONFIG_DIR=$(Get-Folder '.claude')", '--env', 'CLAUDE_CODE_ENTRYPOINT=cli')
+    @('--env', "CLAUDE_PID=$ClaudePid", '--env', 'CLAUDE_CODE_ENTRYPOINT=cli')
 }
 
 # run-hook.mjs's runs, parsed. A tool that fails to run is an error here; what the hooks did is
@@ -1670,7 +1833,7 @@ function Invoke-EntriesAsWrittenPhase {
             if ($run['timedOut'] -or $run['exit'] -ne 0) { throw "answer '$($case.Name)': the hook exited with $($run['exit'])" }
             $got = [Convert]::FromBase64String([string]$run['stdout_b64'])
             $want = Get-ExpectedPermissionBytes -Name $case.Expected
-            if ([Convert]::ToBase64String($got) -cne [Convert]::ToBase64String($want)) {
+            if (-not (Test-PermissionBytes -Got $got -Want $want)) {
                 throw "answer '$($case.Name)' ($shell): the hook printed`n  $([Text.Encoding]::UTF8.GetString($got))`nexpected`n  $([Text.Encoding]::UTF8.GetString($want))"
             }
             Write-PhaseLog "  answer '$($case.Name)' ($shell): printed the expected $($want.Length) bytes, exit 0"
@@ -1715,7 +1878,7 @@ function Invoke-TurnOffPhase {
             $left = @(Get-ChildItem -LiteralPath $hooks -Force -Filter 'agentnotch*' -ErrorAction SilentlyContinue)
             if ($left) { $problems.Add("$name\hooks still holds $($left.Name -join ', ')") }
         }
-        $differences = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P) -Exclude 'AppData/*')
+        $differences = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P -Skip 'AppData/*') -Exclude 'AppData/*')
         foreach ($line in (Test-OnlyBackupsAdded -Differences $differences)) { $problems.Add($line) }
         foreach ($line in $differences) { Write-PhaseLog "  P: $line" }
         if ($problems.Count) { throw ("after Turn off:`n  " + ($problems -join "`n  ")) }
@@ -1732,6 +1895,7 @@ $script:Ui.CloudSignIn      = '[data-an-action="an-cloud-sign-in"]'
 $script:Ui.CloudSignOutAsk  = '[data-an-action="an-cloud-sign-out-ask"]'
 $script:Ui.CloudSignOut     = '[data-an-action="an-cloud-sign-out"]'
 $script:Ui.CloudSyncOff     = '[data-an-action="an-cloud-sync"][data-an-on="0"]'
+$script:Ui.CloudSyncNow     = '[data-an-action="an-cloud-sync-now"]'
 $script:Ui.HooksSwitchOff   = '[data-an-action="hooks-enabled"][data-an-on="0"]'
 $script:Ui.Reconsider       = '[data-an-action="reconsider"]'
 
@@ -1786,7 +1950,9 @@ function ConvertFrom-RequestLog {
 }
 
 function Get-RequestCount {
-    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Requests, [Parameter(Mandatory)][string]$Method, [Parameter(Mandatory)][string]$Path)
+    # AllowNull: Get-FakeWebsiteRequests' empty answer reaches here as $null.
+    param([Parameter(Mandatory)][AllowNull()][AllowEmptyCollection()][object[]]$Requests, [Parameter(Mandatory)][string]$Method, [Parameter(Mandatory)][string]$Path)
+    if ($null -eq $Requests) { return 0 }   # piped on, $null would be one item
     @($Requests | Where-Object { $_['method'] -ceq $Method -and $_['path'] -ceq $Path }).Count
 }
 
@@ -1798,6 +1964,34 @@ function Get-CloudSwitches {
         Sync      = ($cloud.Contains('sync_enabled') -and $cloud['sync_enabled'] -eq $true)
         Summaries = ($cloud.Contains('summaries_enabled') -and $cloud['summaries_enabled'] -eq $true)
     }
+}
+
+# The readings the cloud holds to send (`pending_usage` of the settings snapshot's cloud).
+function Get-CloudPendingUsage {
+    param([Parameter(Mandatory)][AllowNull()]$Settings)
+    if ($Settings -is [System.Collections.IDictionary] -and $Settings.Contains('cloud') -and $Settings['cloud'] -is [System.Collections.IDictionary] -and $Settings['cloud'].Contains('pending_usage')) {
+        [int]$Settings['cloud']['pending_usage']
+    } else { 0 }
+}
+
+# A .claude.json as Claude Code leaves it after a response: its own usage cache
+# (`cachedUsageUtilization`, the shape `usage::parser::parse_cached_usage` reads) added, for the
+# file's own login, fetched at FetchedAtMs; every other key kept. Plain JSON, no BOM.
+function ConvertTo-ClaudeJsonWithCachedUsage {
+    param([Parameter(Mandatory)][string]$Text, [Parameter(Mandatory)][double]$FetchedAtMs)
+    $config = $Text.TrimStart([char]0xFEFF) | ConvertFrom-Json -AsHashtable
+    $uuid = [string]$config['oauthAccount']['accountUuid']
+    if (-not $uuid) { throw 'the .claude.json names no login' }
+    $resets = { param([double]$hours) [DateTimeOffset]::FromUnixTimeMilliseconds([long]$FetchedAtMs).AddHours($hours).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture) }
+    $config['cachedUsageUtilization'] = [ordered]@{
+        accountUuid = $uuid
+        fetchedAtMs = [long]$FetchedAtMs
+        utilization = [ordered]@{
+            five_hour = [ordered]@{ utilization = 17; resets_at = (& $resets 3) }
+            seven_day = [ordered]@{ utilization = 29; resets_at = (& $resets 100) }
+        }
+    }
+    $config | ConvertTo-Json -Depth 20
 }
 
 function Get-FakeWebsiteRequests {
@@ -1845,10 +2039,10 @@ function Start-LiveApp {
     param([hashtable]$Extra = @{})
     Stop-LiveApp
     $script:CdpPort = Get-FreeTcpPort
-    $environment = Merge-Environment @((Get-AppEnvironment), @{ WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$($script:CdpPort)" }, $Extra)
+    $environment = Merge-Environment @((Get-AppEnvironment), (Get-DevToolsEnvironment -Port $script:CdpPort -Log { param($line) Write-PhaseLog $line }), $Extra)
     $script:LiveApp = Register-OwnProcess (Start-AppProcess -Exe $script:AppExe -Environment $environment)
     Write-PhaseLog "the real app is running as process $($script:LiveApp.Id), DevTools on port $($script:CdpPort)"
-    Wait-ControlStatus -Seconds 60 -What 'the app to listen' -Check ({ param($s) Test-ControlStatus -Status $s -Expect @{ transport = 'listening' } }.GetNewClosure()) | Out-Null
+    Wait-ControlStatus -Seconds 60 -What 'the app to listen' -Expect @{ transport = 'listening' } | Out-Null
     if ($script:LiveApp.HasExited) { throw "the app exited with $($script:LiveApp.ExitCode)" }
 }
 
@@ -1879,6 +2073,16 @@ function Get-SettingsSnapshot {
 
 # --- phase 10: sign-in and sync against the fake website ---------------------------------------------------------------
 
+# One line of what the app shows now (control status) and the account lines of its doctor, for the log.
+function Write-AccountsSeen {
+    param([Parameter(Mandatory)][string]$When)
+    try { Write-PhaseLog "$When, control status: $(@((Get-ControlStatus).GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ' ')" } catch { Write-PhaseLog "$When, control status: $($_.Exception.Message)" }
+    try {
+        $doctor = Invoke-Cli -Arguments @('doctor') -Environment (Get-AppEnvironment)
+        foreach ($line in @(($doctor.Text -split "`r?`n") | Where-Object { $_ -match '^(accounts|account|folder|store)\b' })) { Write-PhaseLog "$When, doctor: $line" }
+    } catch { Write-PhaseLog "$When, doctor: $($_.Exception.Message)" }
+}
+
 function Invoke-CloudPhase {
     $log = Join-Path $script:ArtifactsDir 'fake-website.jsonl'
     $syncDir = Join-Path $script:ArtifactsDir 'fake-website-sync'
@@ -1887,15 +2091,20 @@ function Invoke-CloudPhase {
     Remove-Item -LiteralPath $syncDir -Recurse -Force -ErrorAction SilentlyContinue
     $site = Start-FakeWebsite -LogFile $log -SyncDir $syncDir
     Write-PhaseLog "fake website on $($site.Url)"
+    $claudeJsonBefore = [ordered]@{}
     try {
         # A fresh start of the app, pointed at the fake website: only this run, only 127.0.0.1.
+        Write-AccountsSeen -When 'before the restart'
         Stop-LiveAppGracefully
         Start-LiveApp -Extra @{ AGENTNOTCH_WEB_URL = $site.Url; AGENTNOTCH_DEV = '1'; AGENTNOTCH_DEV_BROWSER_LOG = $browserLog }
+        Write-AccountsSeen -When 'after the restart'
 
         # 1. Sign in: the URL the app would have opened.
         Invoke-SettingsClick -Selector $script:Ui.CloudSignIn
-        Wait-Until { (Get-AuthorizeUrls -Text ([string](Get-Content -LiteralPath $browserLog -Raw -ErrorAction SilentlyContinue))).Count -gt 0 } 15 'the authorize URL in the dev browser log'
-        $url = (Get-AuthorizeUrls -Text (Get-Content -LiteralPath $browserLog -Raw))[0]
+        # @(...): a function's empty or one-item array comes back as $null or the item itself, and
+        # strict mode has no .Count on those (run 37311858421); [0] of a lone string is its first letter.
+        Wait-Until { @(Get-AuthorizeUrls -Text ([string](Get-Content -LiteralPath $browserLog -Raw -ErrorAction SilentlyContinue))).Count -gt 0 } 15 'the authorize URL in the dev browser log'
+        $url = @(Get-AuthorizeUrls -Text ([string](Get-Content -LiteralPath $browserLog -Raw)))[0]
         Write-PhaseLog "authorize URL: $url"
         $problems = @(Test-AuthorizeUrl -Url $url -Website $site.Url)
         if ($problems) { throw "the authorize URL: $($problems -join '; ')" }
@@ -1903,7 +2112,7 @@ function Invoke-CloudPhase {
 
         # 2. The browser's answer: the registered scheme hands the callback to the running app.
         Start-Process 'agentnotch://auth-callback?code=smoke'
-        Wait-ControlStatus -Seconds 10 -What 'control status to say cloud: signed_in' -Check ({ param($s) Test-ControlStatus -Status $s -Expect @{ cloud = 'signed_in' } }.GetNewClosure()) | Out-Null
+        Wait-ControlStatus -Seconds 10 -What 'control status to say cloud: signed_in' -Expect @{ cloud = 'signed_in' } | Out-Null
         $support = Find-SupportDir -Profile $script:P
         if (-not $support) { throw 'no support folder' }
         $session = Join-Path $support 'cloud-session.json'
@@ -1922,7 +2131,51 @@ function Invoke-CloudPhase {
 
         # 4. Sync on: one upload, in the contract's shape, with nothing of this machine's folders.
         Invoke-SettingsClick -Selector $script:Ui.CloudSyncOff
-        Wait-Until { (Get-RequestCount -Requests (Get-FakeWebsiteRequests -LogFile $log) -Method 'POST' -Path '/api/app/v1/sync') -ge 1 } 30 'a /sync request'
+        Wait-ControlStatus -Seconds 10 -What 'control status to say sync: true' -Expect @{ sync = 'true' } | Out-Null
+        # Something to send: readings are recorded only while sync is on, and this profile's only
+        # source so far was the probe, which ran before the sign-in and is 5 minutes apart. So
+        # Claude Code "answers" now: it leaves its usage cache in .claude.json, which the app reads
+        # every 20 s (run 37320814137 waited for a /sync that had nothing to carry).
+        # Both accounts' Claude Code do (the default folder's login lives in P\.claude.json, the
+        # other's in its own folder), so each account the app shows has a reading.
+        $shownAccounts = [int](Get-ControlStatus)['accounts']
+        if ($shownAccounts -ne 2) { throw "the restarted app shows $shownAccounts account(s), not P's 2 (see the doctor lines above)" }
+        $fetchedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        foreach ($file in (Join-Path $script:P '.claude.json'), (Join-Path $script:P '.claude-work\.claude.json')) {
+            $bytes = [IO.File]::ReadAllBytes($file)
+            $claudeJsonBefore[$file] = $bytes
+            $withUsage = ConvertTo-ClaudeJsonWithCachedUsage -Text ([Text.Encoding]::UTF8.GetString($bytes)) -FetchedAtMs $fetchedAt
+            [IO.File]::WriteAllText($file, $withUsage, [Text.UTF8Encoding]::new($false))
+        }
+        $syncCount = { Get-RequestCount -Requests (Get-FakeWebsiteRequests -LogFile $log) -Method 'POST' -Path '/api/app/v1/sync' }
+        try {
+            Wait-Until { (& $syncCount) -ge 1 -or (Get-CloudPendingUsage -Settings (Get-SettingsSnapshot)) -ge 2 } 45 'a cached reading of each account to be recorded for the website'
+            Write-PhaseLog "readings waiting for the website: $(Get-CloudPendingUsage -Settings (Get-SettingsSnapshot)); /sync requests so far: $(& $syncCount)"
+        } catch {
+            # What the cloud, the app's support folder and the file say, for the next round.
+            try { Write-PhaseLog "settings cloud: $((Get-SettingsSnapshot)['cloud'] | ConvertTo-Json -Compress -Depth 6)" } catch { Write-PhaseLog "settings: $($_.Exception.Message)" }
+            Write-AccountsSeen -When 'no reading'
+            $supportNow = Find-SupportDir -Profile $script:P
+            # Strict mode: a folder has no Length.
+            if ($supportNow) { Write-PhaseLog "support files: $(@(Get-ChildItem -LiteralPath $supportNow -Force | ForEach-Object { if ($_ -is [IO.FileInfo]) { "$($_.Name)($($_.Length))" } else { "$($_.Name)\" } }) -join ' ')" }
+            foreach ($file in $claudeJsonBefore.Keys) { Write-PhaseLog "$file now: $([IO.File]::ReadAllText($file) -replace '\s+', ' ')" }
+            try {
+                $shown = (Invoke-CdpCall -Page $script:Ui.NotchPage -Method 'snapshot') | ConvertTo-Json -Compress -Depth 8
+                Write-PhaseLog "snapshot: $($shown.Substring(0, [Math]::Min(4000, $shown.Length)))"
+            } catch { Write-PhaseLog "snapshot: $($_.Exception.Message)" }
+            throw
+        }
+        # The first pass after sync on runs at the next 20 s tick. When it came before the reading
+        # it had nothing to send, and the next is 5 minutes away (as on the Mac: setSyncEnabled,
+        # syncInterval); "Sync now" is what a user has for that.
+        try {
+            Wait-Until { (& $syncCount) -ge 1 } 21 'the scheduled /sync'
+            Write-PhaseLog 'the scheduled pass sent the reading'
+        } catch {
+            Write-PhaseLog 'the pass after sync on came before the reading; pressing Sync now'
+            Invoke-SettingsClick -Selector $script:Ui.CloudSyncNow
+        }
+        Wait-Until { (& $syncCount) -ge 1 } 30 'a /sync request'
         $bodies = @(Get-ChildItem -LiteralPath $syncDir -Filter 'sync-*.json' -ErrorAction SilentlyContinue | Sort-Object Name)
         if (-not $bodies.Count) { throw "the fake website saved no sync body under $syncDir" }
         Invoke-ContractShape -BodyFile $bodies[0].FullName
@@ -1951,6 +2204,8 @@ function Invoke-CloudPhase {
     } finally {
         Save-LiveRunLog
         Stop-OwnProcess -Process $site.Process
+        # The later phases compare P with what phase 2 built.
+        foreach ($file in $claudeJsonBefore.Keys) { [IO.File]::WriteAllBytes($file, $claudeJsonBefore[$file]) }
     }
     # The phases after this one run the app as a user has it: no fake website, no dev switches.
     Stop-LiveAppGracefully
@@ -1961,7 +2216,7 @@ function Invoke-CloudPhase {
 
 # The files of P the update must leave alone: every settings.json and every hook copy.
 function Get-HookFilesHash {
-    $hashes = Get-TreeHash -Root $script:P
+    $hashes = Get-TreeHash -Root $script:P -Skip 'AppData/*'
     $kept = [ordered]@{}
     foreach ($key in $hashes.Keys) {
         if ($key -like '.claude*/settings.json' -or $key -like '.claude*/hooks/*') { $kept[$key] = $hashes[$key] }
@@ -2063,7 +2318,7 @@ function Invoke-UpdatePhase {
         # /R: the updated app is running again.
         Wait-Until { [bool](Find-RunningApp) } 60 'the app to run again after the update'
         Use-RunningApp -Process (Find-RunningApp)
-        $status = Wait-ControlStatus -Seconds 60 -What 'the updated app to listen' -Check ({ param($s) Test-ControlStatus -Status $s -Expect @{ transport = 'listening' } }.GetNewClosure())
+        $status = Wait-ControlStatus -Seconds 60 -What 'the updated app to listen' -Expect @{ transport = 'listening' }
         if ($status['accounts'] -ne '2') { Write-Host "::warning::the app started by the installer sees $($status['accounts']) account(s), not 2: it may not run with the temporary profile as its home" }
         Write-PhaseLog ("the updated app runs as process {0}; control status: {1}" -f $script:LiveApp.Id, (($status.GetEnumerator() | ForEach-Object { "$($_.Key): $($_.Value)" }) -join ', '))
 
@@ -2108,7 +2363,7 @@ function Invoke-ReinstallPhase {
     # The first launch after it: consent was kept (it lives with the app's data, which an uninstall keeps).
     $running = Find-RunningApp
     if ($running) { Use-RunningApp -Process $running } else { Start-LiveApp }
-    $status = Wait-ControlStatus -Seconds 60 -What 'control status to say hook_consent: granted' -Check ({ param($s) Test-ControlStatus -Status $s -Expect @{ hook_consent = 'granted' } }.GetNewClosure())
+    $status = Wait-ControlStatus -Seconds 60 -What 'control status to say hook_consent: granted' -Expect @{ hook_consent = 'granted' }
     Write-PhaseLog ("after the first launch control status: " + (($status.GetEnumerator() | ForEach-Object { "$($_.Key): $($_.Value)" }) -join ', '))
     Start-Sleep -Seconds 3
     $changed = @(Compare-Hashes -Before $settingsOnly -After (Get-HookFilesHash) -Filter '.claude*/settings.json')
@@ -2211,7 +2466,7 @@ function Invoke-UninstallPhase {
     Wait-Until { -not (Test-Path $script:AppExe) -and -not (Test-Path $script:UninstallKey) } 60 'the uninstall'
     if ($null -ne (Get-RunValue)) { throw 'the Run value is still there' }
     if (Test-Path 'HKCU:\Software\Classes\agentnotch') { throw 'the agentnotch: scheme is still registered' }
-    $changed = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P) -Filter '.claude*/settings.json')
+    $changed = @(Compare-Hashes -Before $script:ProfileHashes -After (Get-TreeHash -Root $script:P -Skip 'AppData/*') -Filter '.claude*/settings.json')
     if ($changed) { throw "uninstall changed what it must leave: $($changed -join ', ')" }
     $copies = @(Get-ChildItem -LiteralPath $script:P -Recurse -Force -Filter 'agentnotch-hook*' -ErrorAction SilentlyContinue)
     if ($copies) { throw "hook copies are left in P: $($copies.FullName -join ', ')" }
@@ -2292,6 +2547,7 @@ try {
     }
 } finally {
     Stop-OwnProcesses
+    Clear-DevToolsOverride
     Write-Results
 }
 exit ([int](-not $ok))

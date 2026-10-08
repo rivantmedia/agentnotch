@@ -31,8 +31,8 @@ const harness = require('./lib/harness.cjs');
 const scripts = require('./lib/scripts.cjs');
 
 const CSS = fs.readFileSync(path.join(harness.UI, 'agentnotch', 'panel.css'), 'utf8');
-const PERSONAL = 'claude-acct-5f3e1d2c0b9a';
-const WORK = 'claude-acct-8a7b6c5d4e3f';
+const PERSONAL = 'claude-acct-1e41d94e802a';
+const WORK = 'claude-acct-5688209c6cfb';
 const NOW = harness.NOW;
 const plain = scripts.plain;
 
@@ -295,16 +295,17 @@ test('every row detail kind of the fixture renders its own words', async () => {
   assert.equal(text(detail('needs-question')), 'Asks Which charting library should the dashboard use?');
   assert.equal(text(detail('needs-plan')), 'Plan ready for approval');
   assert.equal(text(detail('needs-elicitation')), 'Figma needs you to pick a file');
-  assert.equal(text(detail('needs-ratelimit')), 'Rate limited · weekly limit resets Fri 9:00 AM');
+  assert.equal(text(detail('needs-ratelimit')), 'Rate limited · 5-hour limit resets in 40m');
   assert.ok(detail('needs-ratelimit').classList.contains('an-d-error'));
   assert.equal(text(detail('review-darkmode')), 'Added a Dark mode toggle under Settings › Appearance. It follows the system by default, persists the choice, and all 42 tests pass.');
   assert.equal(text(detail('work-migration')), 'Writing tests for the v2 schema');
   assert.ok(detail('work-migration').classList.contains('an-d-primary'));
-  assert.equal(text(detail('work-ci')), 'Grep ETIMEDOUT|socket hang up');
-  assert.ok(detail('work-ci').classList.contains('an-d-secondary'), 'a tool line or Thinking… is secondary ink');
+  assert.equal(text(detail('work-ci')), 'Bisecting the failing commit', 'the active task wins over the last tool');
+  assert.ok(detail('work-ci').classList.contains('an-d-primary'));
   const more = await open({ route: 'sessions' }, only('work-summary', 'idle-notch', 'idle-readme', 'idle-logo', 'review-just-finished'));
   more.click('.an-foldsum');
   assert.equal(text(row(more, 'work-summary').querySelector('.an-detail')), 'Thinking…');
+  assert.ok(row(more, 'work-summary').querySelector('.an-detail').classList.contains('an-d-secondary'), 'Thinking… is secondary ink');
   assert.equal(text(row(more, 'idle-notch').querySelector('.an-detail')), 'The work area excludes the taskbar, so the notch sits below it.');
   assert.equal(text(row(more, 'idle-readme').querySelector('.an-detail')), 'You: thanks, that\'s all for now');
   assert.equal(text(row(more, 'idle-logo').querySelector('.an-detail')), 'No messages yet');
@@ -488,7 +489,7 @@ test('past eight drawn rows the rows other than Needs you are one line; Needs yo
   assert.ok(row(page, 'review-darkmode').classList.contains('an-cmp'));
   const ci = row(page, 'work-ci');
   assert.equal(text(ci.querySelector('.an-ctitle')), 'Investigate the flaky CI job');
-  assert.equal(text(ci.querySelector('.an-cdet')), 'Grep ETIMEDOUT|socket hang up', 'working: the detail text');
+  assert.equal(text(ci.querySelector('.an-cdet')), 'Bisecting the failing commit', 'working: the detail text');
   assert.equal(text(row(page, 'review-darkmode').querySelector('.an-cdet')), 'acme-web', 'review and idle: the project');
   assert.equal(ci.querySelector('.an-detail'), null, 'one line: no detail, no meta line');
   assert.equal(ci.querySelector('.an-meta'), null);

@@ -214,7 +214,7 @@ test('the settings a page may set are the engine\'s keys, with its choices', () 
 
 // ---- events ---------------------------------------------------------------------------------
 
-const KNOWN_EVENTS = ['an:snapshot', 'an:settings', 'an:cloud', 'an:chat', 'an:panel', 'an:panel_focus', 'an:peek', 'an:notice', 'usage'];
+const KNOWN_EVENTS = ['an:snapshot', 'an:settings', 'an:cloud', 'an:chat', 'an:panel', 'an:panel_focus', 'an:panel_place', 'an:panel_state', 'an:peek', 'an:notice', 'usage'];
 
 test('every event of events.json is one the pages know, and api.rs emits the fork\'s', () => {
   const events = contract.fixture('events.json');

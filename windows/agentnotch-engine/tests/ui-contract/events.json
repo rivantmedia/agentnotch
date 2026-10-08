@@ -90,7 +90,7 @@
     "event": "an:panel",
     "payload": {
       "route": "session:needs-permission",
-      "ring_id": "claude-acct-8a7b6c5d4e3f",
+      "ring_id": "claude-acct-5688209c6cfb",
       "highlight": "needs-permission",
       "reason": "notification"
     }
@@ -102,9 +102,52 @@
     }
   },
   {
+    "event": "an:panel",
+    "payload": {
+      "route": "sessions",
+      "ring_id": "claude-acct-5688209c6cfb",
+      "highlight": null,
+      "reason": "ring_click",
+      "edge": "right",
+      "floating": false,
+      "width": 400.0,
+      "tail_offset": -12.5
+    }
+  },
+  {
+    "event": "an:panel_place",
+    "payload": {
+      "edge": "bottom",
+      "floating": false,
+      "width": 520.0,
+      "tail_offset": 36.0
+    }
+  },
+  {
+    "event": "an:panel_place",
+    "payload": {
+      "edge": null,
+      "floating": true,
+      "width": 520.0,
+      "tail_offset": 0.0
+    }
+  },
+  {
+    "event": "an:panel_state",
+    "payload": {
+      "open": true,
+      "route": "session:needs-permission",
+      "ring_id": "claude-acct-5688209c6cfb",
+      "reason": "notification",
+      "engaged": false,
+      "focused": true,
+      "pinned": false
+    }
+  },
+  {
     "event": "an:peek",
     "payload": {
-      "ring_id": "claude-acct-5f3e1d2c0b9a",
+      "ring_id": "claude-acct-1e41d94e802a",
       "seconds": 5
     }
   },
@@ -119,7 +162,7 @@
       "windows": [
         {
           "id": "session",
-          "label": "Session",
+          "label": "Current session",
           "used": 0.34,
           "resets_at": 1790007800000,
           "count": null,
@@ -128,7 +171,7 @@
         },
         {
           "id": "weekly_all",
-          "label": "Weekly",
+          "label": "All models",
           "used": 0.41,
           "resets_at": 1790273600000,
           "count": null,
@@ -145,17 +188,17 @@
           "group": "Personal"
         },
         {
-          "id": "session@claude-acct-8a7b6c5d4e3f",
-          "label": "Session",
-          "used": 0.72,
+          "id": "session@claude-acct-5688209c6cfb",
+          "label": "Current session",
+          "used": 1.0,
           "resets_at": 1790002400000,
           "count": null,
           "derived": false,
           "group": "Work"
         },
         {
-          "id": "weekly_all@claude-acct-8a7b6c5d4e3f",
-          "label": "Weekly",
+          "id": "weekly_all@claude-acct-5688209c6cfb",
+          "label": "All models",
           "used": 0.55,
           "resets_at": 1790439200000,
           "count": null,

@@ -4,7 +4,7 @@
   "sealed": true,
   "rings": [
     {
-      "ring_id": "claude-acct-5f3e1d2c0b9a",
+      "ring_id": "claude-acct-1e41d94e802a",
       "label": "Personal",
       "monogram": "PE",
       "color_index": 0,
@@ -15,7 +15,7 @@
         "windows": [
           {
             "id": "session",
-            "label": "Session",
+            "label": "Current session",
             "used": 0.34,
             "resets_at": 1790007800000,
             "count": null,
@@ -24,7 +24,7 @@
           },
           {
             "id": "weekly_all",
-            "label": "Weekly",
+            "label": "All models",
             "used": 0.41,
             "resets_at": 1790273600000,
             "count": null,
@@ -58,10 +58,10 @@
         "working": 1,
         "idle": 2
       },
-      "a11y": "Personal: 5-hour 34%, weekly 41%; 3 need you, 2 to review"
+      "a11y": "Personal: 5-hour 34%, weekly 41%; 3 need you, 2 to review, 1 working"
     },
     {
-      "ring_id": "claude-acct-8a7b6c5d4e3f",
+      "ring_id": "claude-acct-5688209c6cfb",
       "label": "Work",
       "monogram": "WO",
       "color_index": 3,
@@ -72,8 +72,8 @@
         "windows": [
           {
             "id": "session",
-            "label": "Session",
-            "used": 0.72,
+            "label": "Current session",
+            "used": 1.0,
             "resets_at": 1790002400000,
             "count": null,
             "derived": false,
@@ -81,7 +81,7 @@
           },
           {
             "id": "weekly_all",
-            "label": "Weekly",
+            "label": "All models",
             "used": 0.55,
             "resets_at": 1790439200000,
             "count": null,
@@ -96,7 +96,7 @@
       "activity": "waiting",
       "success_settles_at_ms": null,
       "badges": {
-        "needs_you": 2,
+        "needs_you": 1,
         "review": 1
       },
       "counts": {
@@ -106,13 +106,151 @@
         "working": 2,
         "idle": 2
       },
-      "a11y": "Work: 5-hour 72%, weekly 55%; 2 need you, 1 to review"
+      "a11y": "Work: 5-hour 100%, weekly 55%; 1 needs you, 1 to review, 2 working, 1 failed"
     }
   ],
   "sessions": [
     {
+      "session_id": "needs-plan",
+      "ring_id": "claude-acct-1e41d94e802a",
+      "account_label": "Personal",
+      "account_color": 0,
+      "title": "Migrate settings storage to SQLite",
+      "project": "notes-app",
+      "bucket": "needs_you",
+      "failed": false,
+      "state_word": "needs you",
+      "since_ms": 1789999340000,
+      "detail": {
+        "kind": "plan"
+      },
+      "tasks": null,
+      "context_pct": 61.0,
+      "background_count": 0,
+      "pending": {
+        "tool_use_id": "toolu_sample_plan",
+        "kind": "plan",
+        "tool_name": "ExitPlanMode",
+        "received_at_ms": 1789999340000,
+        "request": "Plan ready for approval",
+        "needs_review": false,
+        "always": null,
+        "inline_always": false,
+        "questions": null,
+        "single_tap": false,
+        "plan_markdown": "## Plan\n\n1. Add the models\n2. Migrate the stored settings\n3. Remove the old store",
+        "diff": null
+      },
+      "focus_label": "Show terminal",
+      "can_message": true,
+      "reviewable": false,
+      "a11y": "Migrate settings storage to SQLite, Needs you, Plan ready for approval, waiting 11m, account Personal",
+      "card": {
+        "name": "Console · notes-app",
+        "detail": "ctx 61%",
+        "state": "needs_you",
+        "waiting_for": "Plan ready for approval",
+        "since_ms": 1789999340000
+      }
+    },
+    {
+      "session_id": "needs-question",
+      "ring_id": "claude-acct-1e41d94e802a",
+      "account_label": "Personal",
+      "account_color": 0,
+      "title": "Pick a charting library",
+      "project": "dashboard",
+      "bucket": "needs_you",
+      "failed": false,
+      "state_word": "needs you",
+      "since_ms": 1789999640000,
+      "detail": {
+        "kind": "question",
+        "text": "Which charting library should the dashboard use?"
+      },
+      "tasks": null,
+      "context_pct": 18.0,
+      "background_count": 0,
+      "pending": {
+        "tool_use_id": "toolu_sample_question",
+        "kind": "question",
+        "tool_name": "AskUserQuestion",
+        "received_at_ms": 1789999640000,
+        "request": "Which charting library should the dashboard use?",
+        "needs_review": false,
+        "always": null,
+        "inline_always": false,
+        "questions": [
+          {
+            "text": "Which charting library should the dashboard use?",
+            "header": "Charts",
+            "multi_select": false,
+            "options": [
+              {
+                "label": "Recharts",
+                "description": "Composable React components"
+              },
+              {
+                "label": "Chart.js",
+                "description": "Canvas, small bundle"
+              },
+              {
+                "label": "ECharts",
+                "description": "Feature-rich, larger bundle"
+              }
+            ]
+          }
+        ],
+        "single_tap": true,
+        "plan_markdown": null,
+        "diff": null
+      },
+      "focus_label": "Show in editor",
+      "can_message": false,
+      "reviewable": false,
+      "a11y": "Pick a charting library, Needs you, Asks Which charting library should the dashboard use?, waiting 6m, account Personal",
+      "card": {
+        "name": "VS Code · dashboard",
+        "detail": "ctx 18%",
+        "state": "needs_you",
+        "waiting_for": "Question · Charts",
+        "since_ms": 1789999640000
+      }
+    },
+    {
+      "session_id": "needs-elicitation",
+      "ring_id": "claude-acct-1e41d94e802a",
+      "account_label": "Personal",
+      "account_color": 0,
+      "title": "Sync the design tokens",
+      "project": "design-system",
+      "bucket": "needs_you",
+      "failed": false,
+      "state_word": "needs you",
+      "since_ms": 1789999700000,
+      "detail": {
+        "kind": "dialog",
+        "text": "Figma needs you to pick a file"
+      },
+      "tasks": null,
+      "context_pct": 33.0,
+      "background_count": 0,
+      "pending": null,
+      "focus_label": "Show terminal",
+      "can_message": true,
+      "reviewable": false,
+      "a11y": "Sync the design tokens, Needs you, Figma needs you to pick a file, waiting 5m, account Personal",
+      "card": {
+        "name": "Windows Terminal · design-system",
+        "detail": "ctx 33%",
+        "state": "needs_you",
+        "waiting_for": "Figma needs you to pick a file",
+        "since_ms": 1789999700000
+      }
+    },
+    {
       "session_id": "needs-permission",
-      "ring_id": "claude-acct-8a7b6c5d4e3f",
+      "ring_id": "claude-acct-5688209c6cfb",
       "account_label": "Work",
       "account_color": 3,
       "title": "Fix the login redirect loop",
@@ -188,7 +326,7 @@
       "focus_label": "Show terminal",
       "can_message": true,
       "reviewable": false,
-      "a11y": "Fix the login redirect loop, needs you, 3 of 7 tasks done, account Work",
+      "a11y": "Fix the login redirect loop, Needs you, Bash npm run test -- --watch=false auth/redirect.spec.ts, waiting 2m, 3 of 7 tasks done, now: Running the auth test suite, account Work",
       "card": {
         "name": "Windows Terminal · acme-web",
         "detail": "3/7 Running the auth test suite · ctx 42%",
@@ -198,146 +336,8 @@
       }
     },
     {
-      "session_id": "needs-question",
-      "ring_id": "claude-acct-5f3e1d2c0b9a",
-      "account_label": "Personal",
-      "account_color": 0,
-      "title": "Pick a charting library",
-      "project": "dashboard",
-      "bucket": "needs_you",
-      "failed": false,
-      "state_word": "needs you",
-      "since_ms": 1789999640000,
-      "detail": {
-        "kind": "question",
-        "text": "Which charting library should the dashboard use?"
-      },
-      "tasks": null,
-      "context_pct": 18.0,
-      "background_count": 0,
-      "pending": {
-        "tool_use_id": "toolu_sample_question",
-        "kind": "question",
-        "tool_name": "AskUserQuestion",
-        "received_at_ms": 1789999640000,
-        "request": "Which charting library should the dashboard use?",
-        "needs_review": false,
-        "always": null,
-        "inline_always": false,
-        "questions": [
-          {
-            "text": "Which charting library should the dashboard use?",
-            "header": "Charts",
-            "multi_select": false,
-            "options": [
-              {
-                "label": "Recharts",
-                "description": "Composable React components"
-              },
-              {
-                "label": "Chart.js",
-                "description": "Canvas, small bundle"
-              },
-              {
-                "label": "ECharts",
-                "description": "Feature-rich, larger bundle"
-              }
-            ]
-          }
-        ],
-        "single_tap": true,
-        "plan_markdown": null,
-        "diff": null
-      },
-      "focus_label": "Show in editor",
-      "can_message": false,
-      "reviewable": false,
-      "a11y": "Pick a charting library, needs you, Which charting library should the dashboard use?, account Personal",
-      "card": {
-        "name": "VS Code · dashboard",
-        "detail": "ctx 18%",
-        "state": "needs_you",
-        "waiting_for": "Question · Charts",
-        "since_ms": 1789999640000
-      }
-    },
-    {
-      "session_id": "needs-plan",
-      "ring_id": "claude-acct-5f3e1d2c0b9a",
-      "account_label": "Personal",
-      "account_color": 0,
-      "title": "Migrate settings storage to SQLite",
-      "project": "notes-app",
-      "bucket": "needs_you",
-      "failed": false,
-      "state_word": "needs you",
-      "since_ms": 1789999340000,
-      "detail": {
-        "kind": "plan"
-      },
-      "tasks": null,
-      "context_pct": 61.0,
-      "background_count": 0,
-      "pending": {
-        "tool_use_id": "toolu_sample_plan",
-        "kind": "plan",
-        "tool_name": "ExitPlanMode",
-        "received_at_ms": 1789999340000,
-        "request": "Plan ready for approval",
-        "needs_review": false,
-        "always": null,
-        "inline_always": false,
-        "questions": null,
-        "single_tap": false,
-        "plan_markdown": "## Plan\n\n1. Add the models\n2. Migrate the stored settings\n3. Remove the old store",
-        "diff": null
-      },
-      "focus_label": "Show terminal",
-      "can_message": true,
-      "reviewable": false,
-      "a11y": "Migrate settings storage to SQLite, needs you, account Personal",
-      "card": {
-        "name": "Console · notes-app",
-        "detail": "ctx 61%",
-        "state": "needs_you",
-        "waiting_for": "Plan ready for approval",
-        "since_ms": 1789999340000
-      }
-    },
-    {
-      "session_id": "needs-elicitation",
-      "ring_id": "claude-acct-5f3e1d2c0b9a",
-      "account_label": "Personal",
-      "account_color": 0,
-      "title": "Sync the design tokens",
-      "project": "design-system",
-      "bucket": "needs_you",
-      "failed": false,
-      "state_word": "needs you",
-      "since_ms": 1789999700000,
-      "detail": {
-        "kind": "dialog",
-        "text": "Figma needs you to pick a file"
-      },
-      "tasks": null,
-      "context_pct": 33.0,
-      "background_count": 0,
-      "pending": null,
-      "focus_label": "Show terminal",
-      "can_message": true,
-      "reviewable": false,
-      "a11y": "Sync the design tokens, needs you, Figma needs you to pick a file, account Personal",
-      "card": {
-        "name": "Windows Terminal · design-system",
-        "detail": "ctx 33%",
-        "state": "needs_you",
-        "waiting_for": "Figma needs you to pick a file",
-        "since_ms": 1789999700000
-      }
-    },
-    {
       "session_id": "needs-ratelimit",
-      "ring_id": "claude-acct-8a7b6c5d4e3f",
+      "ring_id": "claude-acct-5688209c6cfb",
       "account_label": "Work",
       "account_color": 3,
       "title": "Refactor the billing webhooks",
@@ -348,7 +348,7 @@
       "since_ms": 1789999460000,
       "detail": {
         "kind": "failed",
-        "text": "Rate limited · weekly limit resets Fri 9:00 AM"
+        "text": "Rate limited · 5-hour limit resets in 40m"
       },
       "tasks": null,
       "context_pct": 57.0,
@@ -357,7 +357,7 @@
       "focus_label": "Show terminal",
       "can_message": true,
       "reviewable": false,
-      "a11y": "Refactor the billing webhooks, failed, Rate limited · weekly limit resets Fri 9:00 AM, account Work",
+      "a11y": "Refactor the billing webhooks, Failed, Rate limited · 5-hour limit resets in 40m, waiting 9m, account Work",
       "card": {
         "name": "Windows Terminal · billing-service",
         "detail": "ctx 57%",
@@ -368,7 +368,7 @@
     },
     {
       "session_id": "review-just-finished",
-      "ring_id": "claude-acct-5f3e1d2c0b9a",
+      "ring_id": "claude-acct-1e41d94e802a",
       "account_label": "Personal",
       "account_color": 0,
       "title": "Fix the flaky date test",
@@ -409,7 +409,7 @@
       "focus_label": "Show terminal",
       "can_message": true,
       "reviewable": true,
-      "a11y": "Fix the flaky date test, done, The test pinned the time zone to UTC; it now uses a fixed calendar and passes 50 runs in a row., 3 of 3 tasks done, account Personal",
+      "a11y": "Fix the flaky date test, Ready for review, finished just now, 3 of 3 tasks done, account Personal",
       "card": {
         "name": "Windows Terminal · billing-service",
         "detail": "3/3 · ctx 27%",
@@ -420,7 +420,7 @@
     },
     {
       "session_id": "review-darkmode",
-      "ring_id": "claude-acct-5f3e1d2c0b9a",
+      "ring_id": "claude-acct-1e41d94e802a",
       "account_label": "Personal",
       "account_color": 0,
       "title": "Add a dark mode toggle to settings",
@@ -471,7 +471,7 @@
       "focus_label": "Show terminal",
       "can_message": true,
       "reviewable": true,
-      "a11y": "Add a dark mode toggle to settings, done, Added a Dark mode toggle under Settings › Appearance. It follows the system by default, persists the choice, and all 42 tests pass., 5 of 5 tasks done, account Personal",
+      "a11y": "Add a dark mode toggle to settings, Ready for review, finished 5m ago, 5 of 5 tasks done, account Personal",
       "card": {
         "name": "Console · acme-web",
         "detail": "5/5 · ctx 38%",
@@ -482,7 +482,7 @@
     },
     {
       "session_id": "review-devserver",
-      "ring_id": "claude-acct-8a7b6c5d4e3f",
+      "ring_id": "claude-acct-5688209c6cfb",
       "account_label": "Work",
       "account_color": 3,
       "title": "Set up the local dev server",
@@ -502,7 +502,7 @@
       "focus_label": "Show terminal",
       "can_message": true,
       "reviewable": true,
-      "a11y": "Set up the local dev server, done, The dev server is up on http://localhost:5173 with hot reload. I left the type checker watching in the background., account Work",
+      "a11y": "Set up the local dev server, Ready for review, finished 12m ago, account Work",
       "card": {
         "name": "Windows Terminal · acme-web",
         "detail": "2 background · ctx 22%",
@@ -513,7 +513,7 @@
     },
     {
       "session_id": "work-migration",
-      "ring_id": "claude-acct-8a7b6c5d4e3f",
+      "ring_id": "claude-acct-5688209c6cfb",
       "account_label": "Work",
       "account_color": 3,
       "title": "Write migration tests for the v2 schema",
@@ -570,7 +570,7 @@
       "focus_label": "Show terminal",
       "can_message": true,
       "reviewable": false,
-      "a11y": "Write migration tests for the v2 schema, working, Writing tests for the v2 schema, 2 of 6 tasks done, account Work",
+      "a11y": "Write migration tests for the v2 schema, Working, Writing tests for the v2 schema, running 14m, 2 of 6 tasks done, now: Writing tests for the v2 schema, account Work",
       "card": {
         "name": "Windows Terminal · billing-service",
         "detail": "2/6 Writing tests for the v2 schema · ctx 84%",
@@ -581,7 +581,7 @@
     },
     {
       "session_id": "work-ci",
-      "ring_id": "claude-acct-5f3e1d2c0b9a",
+      "ring_id": "claude-acct-1e41d94e802a",
       "account_label": "Personal",
       "account_color": 0,
       "title": "Investigate the flaky CI job",
@@ -592,8 +592,8 @@
       "since_ms": 1789999520000,
       "detail": {
         "kind": "working",
-        "text": "Grep ETIMEDOUT|socket hang up",
-        "secondary": true
+        "secondary": false,
+        "text": "Bisecting the failing commit"
       },
       "tasks": {
         "done": 9,
@@ -683,7 +683,7 @@
       "focus_label": "Show in editor",
       "can_message": true,
       "reviewable": false,
-      "a11y": "Investigate the flaky CI job, working, Grep ETIMEDOUT|socket hang up, 9 of 15 tasks done, account Personal",
+      "a11y": "Investigate the flaky CI job, Working, Bisecting the failing commit, running 8m, 9 of 15 tasks done, now: Bisecting the failing commit, account Personal",
       "card": {
         "name": "VS Code · infra",
         "detail": "9/15 Bisecting the failing commit · ctx 93%",
@@ -694,7 +694,7 @@
     },
     {
       "session_id": "work-summary",
-      "ring_id": "claude-acct-8a7b6c5d4e3f",
+      "ring_id": "claude-acct-5688209c6cfb",
       "account_label": "Work",
       "account_color": 3,
       "title": "Summarize the PR review feedback",
@@ -715,7 +715,7 @@
       "focus_label": "Show terminal",
       "can_message": true,
       "reviewable": false,
-      "a11y": "Summarize the PR review feedback, working, Thinking…, account Work",
+      "a11y": "Summarize the PR review feedback, Working, Thinking…, running <1m, account Work",
       "card": {
         "name": "Windows Terminal · acme-web",
         "detail": "ctx 12%",
@@ -726,7 +726,7 @@
     },
     {
       "session_id": "idle-notch",
-      "ring_id": "claude-acct-5f3e1d2c0b9a",
+      "ring_id": "claude-acct-1e41d94e802a",
       "account_label": "Personal",
       "account_color": 0,
       "title": "Explore the notch APIs",
@@ -746,7 +746,7 @@
       "focus_label": "Show terminal",
       "can_message": true,
       "reviewable": false,
-      "a11y": "Explore the notch APIs, idle, The work area excludes the taskbar, so the notch sits below it., account Personal",
+      "a11y": "Explore the notch APIs, Idle, last active 50m ago, account Personal",
       "card": {
         "name": "Windows Terminal · agent-notch",
         "detail": "ctx 7%",
@@ -757,7 +757,7 @@
     },
     {
       "session_id": "idle-readme",
-      "ring_id": "claude-acct-8a7b6c5d4e3f",
+      "ring_id": "claude-acct-5688209c6cfb",
       "account_label": "Work",
       "account_color": 3,
       "title": "Tidy up the README",
@@ -777,7 +777,7 @@
       "focus_label": "Show terminal",
       "can_message": true,
       "reviewable": false,
-      "a11y": "Tidy up the README, idle, You: thanks, that's all for now, account Work",
+      "a11y": "Tidy up the README, Idle, last active 3h ago, account Work",
       "card": {
         "name": "Windows Terminal · acme-web",
         "detail": null,
@@ -788,7 +788,7 @@
     },
     {
       "session_id": "idle-deps",
-      "ring_id": "claude-acct-8a7b6c5d4e3f",
+      "ring_id": "claude-acct-5688209c6cfb",
       "account_label": "Work",
       "account_color": 3,
       "title": "Bump dependencies",
@@ -808,7 +808,7 @@
       "focus_label": "Show terminal",
       "can_message": true,
       "reviewable": false,
-      "a11y": "Bump dependencies, idle, Bash npm outdated, account Work",
+      "a11y": "Bump dependencies, Idle, last active 5h ago, account Work",
       "card": {
         "name": "Windows Terminal · billing-service",
         "detail": null,
@@ -819,7 +819,7 @@
     },
     {
       "session_id": "idle-logo",
-      "ring_id": "claude-acct-5f3e1d2c0b9a",
+      "ring_id": "claude-acct-1e41d94e802a",
       "account_label": "Personal",
       "account_color": 0,
       "title": "Draft a new logo brief",
@@ -839,7 +839,7 @@
       "focus_label": null,
       "can_message": false,
       "reviewable": false,
-      "a11y": "Draft a new logo brief, idle, No messages yet, account Personal",
+      "a11y": "Draft a new logo brief, Idle, last active 1d ago, account Personal",
       "card": {
         "name": "Windows Terminal · brand",
         "detail": null,
@@ -886,22 +886,13 @@
     "needs_you": true,
     "review": true,
     "working": true,
-    "needs_you_key": 5
+    "needs_you_key": 4
   },
-  "tray_badge": 5,
+  "tray_badge": 4,
   "setup": {
     "hook_consent": true,
     "needs_hook_consent": false,
-    "consent_files": [
-      {
-        "path": "~\\.claude\\settings.json",
-        "account": "me@personal.example"
-      },
-      {
-        "path": "~\\.claude-work\\settings.json",
-        "account": "me@work.example"
-      }
-    ],
+    "consent_files": [],
     "codenotch_hooks_folders": [],
     "new_install_folders": [],
     "transport_error": null,
@@ -922,7 +913,9 @@
     "peek_seconds": 5,
     "type_replies": false,
     "sound": true,
-    "tray_badge": true
+    "tray_badge": true,
+    "hotkey_ok": true,
+    "hotkey_message": null
   },
   "accounts_multi": true
 }

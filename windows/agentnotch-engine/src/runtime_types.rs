@@ -106,6 +106,15 @@ pub enum Job {
     },
     /// [Ui] → `Visible`.
     Visibility,
+    /// [Io] → `HookStatus`. Added by WP7: what each folder's settings.json
+    /// registers, read back (read-only, so also before consent).
+    ReadHookStatus { folders: Vec<(AccountId, PathBuf)> },
+    /// [Io] → `CodenotchRemoved`. Added by WP7: the official app's entries
+    /// out of one settings.json, on the user's click.
+    RemoveCodenotchHooks {
+        folder: AccountId,
+        settings_path: PathBuf,
+    },
 }
 
 impl Job {
@@ -143,6 +152,13 @@ pub enum JobResult {
     Visible {
         any_terminal: bool,
         full_screen: bool,
+    },
+    /// Added by WP7 (`Job::ReadHookStatus`).
+    HookStatus(Vec<(AccountId, FolderHookStatus)>),
+    /// Added by WP7 (`Job::RemoveCodenotchHooks`): how many entries went.
+    CodenotchRemoved {
+        folder: AccountId,
+        result: Result<u32, String>,
     },
 }
 

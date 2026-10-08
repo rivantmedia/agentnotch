@@ -27,8 +27,8 @@ const NOTCH_CSS = fs.readFileSync(path.join(AGENTNOTCH, 'notch.css'), 'utf8');
 const NOTCH_HTML = fs.readFileSync(path.join(harness.UI, 'notch.html'), 'utf8');
 const NOW = harness.NOW;
 const EDGES = ['right', 'left', 'top', 'bottom'];
-const PERSONAL = 'claude-acct-5f3e1d2c0b9a';
-const WORK = 'claude-acct-8a7b6c5d4e3f';
+const PERSONAL = 'claude-acct-1e41d94e802a';
+const WORK = 'claude-acct-5688209c6cfb';
 
 // Objects built in the page's vm context have that context's prototypes: compare plain data.
 const plain = (value) => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
@@ -222,7 +222,7 @@ test('claudeCells is null before the first snapshot, then one cell per shown rin
   const weekly = plain(page.run("weeklyOf(agentnotch.claudeCells()[1].snap, 'claude')"));
   assert.equal(headline.id, 'session');
   assert.equal(weekly.id, 'weekly_all');
-  assert.deepEqual(cellsOf(page).map((c) => c.querySelector('.pct').textContent), ['34%', '72%']);
+  assert.deepEqual(cellsOf(page).map((c) => c.querySelector('.pct').textContent), ['34%', '100%']);
   clean(page);
 });
 
@@ -1163,7 +1163,7 @@ test('a new needs_you_key restarts the bar\'s breath; the same key leaves it alo
   const page = await load();
   const bar = () => page.$('#an-marks .an-mark-needs');
   const first = bar();
-  assert.equal(first.getAttribute('data-key'), 'needs-5');
+  assert.equal(first.getAttribute('data-key'), 'needs-4');
   page.emit('an:snapshot', snapshotWith());
   assert.equal(bar(), first, 'same key: the same element, its breath is not restarted');
   page.emit('an:snapshot', snapshotWith((s) => { s.resting_marks.needs_you_key = 6; }));

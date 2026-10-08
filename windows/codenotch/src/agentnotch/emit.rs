@@ -4,6 +4,8 @@
 //! that touches a window hops to the main thread inside `panel`. Nothing here may block, and
 //! nothing may call back into the hub synchronously (the hub is the caller).
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use agentnotch_engine::hub::HubEvent;
 use agentnotch_engine::model::UpstreamUsage;
 use serde::Serialize;
@@ -16,7 +18,19 @@ const NOTCH: &str = "notch";
 /// Upstream's settings window.
 const SETTINGS: &str = "settings";
 
+/// Set once the app exits: the hub's last events (its stop's final projection) go nowhere but
+/// run.log, so none of them waits on the main thread, which is waiting for the stop.
+static QUITTING: AtomicBool = AtomicBool::new(false);
+
+/// The app is exiting (`RunEvent::Exit`).
+pub(super) fn quitting() {
+    QUITTING.store(true, Ordering::SeqCst);
+}
+
 pub(super) fn forward(app: &AppHandle, event: &HubEvent) {
+    if QUITTING.load(Ordering::SeqCst) && !matches!(event, HubEvent::Log(_)) {
+        return;
+    }
     match event {
         HubEvent::Snapshot(snapshot) => {
             emit_to(app, NOTCH, "an:snapshot", snapshot);

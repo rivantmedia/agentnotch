@@ -176,6 +176,8 @@ Test-Case "the allow-lists: Claude Code's own files pass, anything else is named
     Assert-Equal ((Get-UnexpectedNames -Names $names -AllowList $script:ConfigFileAllowList) -join ',') 'login.json,other.txt' 'unexpected'
     Assert-Equal ((Get-UnexpectedNames -Names @('4242.json', '.fleetview-heartbeat', '4242.lock') -AllowList $script:SessionsFileAllowList) -join ',') '4242.lock' 'sessions folder'
     Assert-Equal @(Get-UnexpectedNames -Names @() -AllowList $script:ConfigFileAllowList).Count 0 'nothing'
+    $markers = @('.last-cleanup', '.npm-cache-cleanup', '.version-cleanup', '.deep-link-register-failed', '.last-cleanup.bak', 'last-cleanup', 'login.json')
+    Assert-Equal ((Get-UnexpectedNames -Names $markers -AllowList $script:ConfigFileAllowList) -join ',') '.last-cleanup.bak,last-cleanup,login.json' "Claude Code's housekeeping markers only"
 }
 
 Test-Case 'stream-json: tool calls paired with their results, hook outcomes counted, noise skipped' {
@@ -215,6 +217,31 @@ Test-Case "the fake API's log: only the fake key, no Authorization header, a scr
     Assert-True ($problems -match 'Authorization') 'an Authorization header is named'
     Assert-True (@(Test-FakeApiLog -Entries @() -Name 'x') -match 'no request') 'an empty log'
     Assert-True (@(Test-FakeApiLog -Entries @(@{ method = 'POST'; path = '/v1/messages'; apiKey = 'ok'; reply = 'passive' }) -Name 'x') -match 'no scripted turn') 'no turn'
+}
+
+Test-Case "the fake API's log: only Claude Code's keyless HEAD /api/hello warm-up may come without the key" {
+    $turn = @{ method = 'POST'; path = '/v1/messages'; apiKey = 'ok'; reply = 'turn' }
+    $hello = @{ method = 'HEAD'; path = '/api/hello'; apiKey = 'absent'; headers = @('accept', 'accept-encoding', 'connection', 'host', 'user-agent'); status = 401 }
+    Assert-Equal @(Test-FakeApiLog -Entries @($hello, $turn) -Name 'x').Count 0 'the warm-up as 2.1.285 sends it'
+    $others = @(
+        @{ method = 'GET'; path = '/api/hello'; apiKey = 'absent'; headers = @('host') },
+        @{ method = 'HEAD'; path = '/api/hello2'; apiKey = 'absent'; headers = @('host') },
+        @{ method = 'HEAD'; path = '/api/hello'; apiKey = 'bad'; headers = @('host', 'x-api-key') },
+        @{ method = 'HEAD'; path = '/api/hello'; apiKey = 'absent'; headers = @('content-length', 'host') },
+        @{ method = 'HEAD'; path = '/api/hello'; apiKey = 'absent'; headers = @('host'); authorization = 'present' },
+        @{ method = 'POST'; path = '/v1/messages'; apiKey = 'absent'; reply = 'turn' })
+    foreach ($other in $others) {
+        Assert-True (@(Test-FakeApiLog -Entries @($other, $turn) -Name 'x').Count -gt 0) "$($other['method']) $($other['path']) key $($other['apiKey']) headers $(@($other['headers']) -join ',') is still refused"
+    }
+}
+
+Test-Case 'the headless runs name the permission mode a Bash call asks in; the plan run names plan' {
+    # 2.1.285 starts in auto mode when none is named, and auto runs a `touch` with no PermissionRequest.
+    $headless = [string]${function:Invoke-HeadlessScenarios}
+    Assert-True ($headless -match "-ClaudeArgs @\('--permission-mode', 'default'\)") 'the headless run names default'
+    Assert-True ([string]${function:Invoke-PlanScenario} -match "'--permission-mode', 'plan'") 'the plan run names plan'
+    $driver = [string]${function:Start-ClaudeDriver}
+    Assert-True ($driver -match "AGENTNOTCH_HOOK_TRACE") 'the hook exe traces into the artifacts'
 }
 
 Test-Case 'cmdkey targets and terminal escapes' {

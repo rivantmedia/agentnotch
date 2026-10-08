@@ -24,8 +24,8 @@ const DIR = path.join(harness.UI, 'agentnotch');
 const HTML = fs.readFileSync(path.join(DIR, 'panel.html'), 'utf8');
 const CSS = fs.readFileSync(path.join(DIR, 'panel.css'), 'utf8');
 const THEME = fs.readFileSync(path.join(DIR, 'theme.css'), 'utf8');
-const PERSONAL = 'claude-acct-5f3e1d2c0b9a';
-const WORK = 'claude-acct-8a7b6c5d4e3f';
+const PERSONAL = 'claude-acct-1e41d94e802a';
+const WORK = 'claude-acct-5688209c6cfb';
 const POLICY = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
 
 const plain = (value) => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));

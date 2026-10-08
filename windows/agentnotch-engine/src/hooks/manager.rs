@@ -235,6 +235,13 @@ impl HookManager {
             .unwrap_or_default()
     }
 
+    /// Whether the folder's settings.json has been read (or written) since
+    /// launch. `folder_status` is the default for a folder never read, which
+    /// would otherwise look like a missing folder.
+    pub fn has_status(&self, folder: &AccountId) -> bool {
+        self.known(folder).is_some_and(|known| known.ours.is_some())
+    }
+
     /// Takes in what `read_status` found on disk. The last outcome, the last
     /// error and the not-hookable reason stay the manager's. Why the status
     /// line was left alone only matters while the integration is on.
