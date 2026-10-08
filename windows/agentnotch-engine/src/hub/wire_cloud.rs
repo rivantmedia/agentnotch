@@ -298,10 +298,37 @@ impl Core {
             CloudAction::SetSummaries => CloudCall::SetSummaries(switch("set_summaries")?),
             CloudAction::SyncNow => CloudCall::SyncNow,
         };
+        self.switches_off_now(call);
         handle
             .call(call)
             .map(|()| json!({}))
             .map_err(CallError::failed)
+    }
+
+    /// The switches `call` turns off, off now in the settings `an-core`
+    /// saves. On the Mac they are written at once on the main actor; here
+    /// the call may wait behind a pass on the cloud thread (a backfill scan,
+    /// a request of up to 30 s), and a quit meanwhile would leave them on
+    /// for the next launch, which would capture and upload again. The cloud
+    /// thread writes the same values when it gets to the call, and the
+    /// config it is handed meanwhile carries them, so nothing is undone.
+    /// Turning sync off leaves the summaries switch as it is, as on the Mac.
+    fn switches_off_now(&mut self, call: CloudCall) {
+        let mut next = self.settings.clone();
+        match call {
+            CloudCall::SignOut => {
+                next.cloud_sync_enabled = false;
+                next.cloud_summaries_enabled = false;
+            }
+            CloudCall::SetSync(false) => next.cloud_sync_enabled = false,
+            CloudCall::SetSummaries(false) => next.cloud_summaries_enabled = false,
+            CloudCall::SignIn
+            | CloudCall::CancelSignIn
+            | CloudCall::SetSync(true)
+            | CloudCall::SetSummaries(true)
+            | CloudCall::SyncNow => return,
+        }
+        self.replace_settings(next);
     }
 
     /// `cloud_url {target}` → `{url}`, once the website has said where.

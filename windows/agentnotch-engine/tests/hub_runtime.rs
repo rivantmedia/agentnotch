@@ -273,6 +273,128 @@ fn stop_saves_the_settings_now() {
     }
 }
 
+/// A settings write that failed is made by the stop's save: the file never
+/// keeps a choice the user changed (cloud sync turned off) only because a
+/// worker's write was refused or drained.
+#[test]
+fn a_settings_write_that_failed_is_made_at_the_stop() {
+    let hub = TestHub::started();
+    *hub.files.refused.lock().unwrap() = Some("control-settings.json".into());
+    hub.inputs.send(set("trayBadge", json!(false)));
+    assert!(
+        eventually(|| hub
+            .logs()
+            .iter()
+            .any(|line| line.starts_with("settings not saved"))),
+        "{:?}",
+        hub.logs()
+    );
+    assert_ne!(hub.settings_file()["trayBadge"], json!(false));
+    hub.hub.stop();
+    assert_eq!(hub.settings_file()["trayBadge"], json!(false));
+}
+
+/// A settings write that failed is tried again on its own (2 s later),
+/// not only with the next change or at the stop.
+#[test]
+fn a_settings_write_that_failed_is_tried_again() {
+    let hub = TestHub::started();
+    *hub.files.refused.lock().unwrap() = Some("control-settings.json".into());
+    hub.inputs.send(set("trayBadge", json!(false)));
+    assert!(eventually(|| hub
+        .logs()
+        .iter()
+        .any(|line| line.starts_with("settings not saved"))));
+    *hub.files.refused.lock().unwrap() = None;
+    hub.handles.clock.advance(Duration::from_secs(2));
+    hub.inputs.send(Input::Tick);
+    assert!(
+        eventually(|| hub.settings_file()["trayBadge"] == json!(false)),
+        "{:?}",
+        hub.logs()
+    );
+}
+
+const DEVICE: &str = "8C2F6B1E-3D4A-4B5C-9D6E-7F8091A2B3C4";
+
+/// A settings file another program holds at the start is read later.
+fn saved_settings(hub: &TestHub) -> Value {
+    let saved = json!({
+        "hookConsent": false,
+        "cloudDeviceId": DEVICE,
+        "typeReplies": true,
+        "trayBadge": false,
+        "aKeyFromANewerBuild": "kept",
+    });
+    std::fs::create_dir_all(&hub.roots.support).unwrap();
+    std::fs::write(hub.settings_path(), serde_json::to_vec(&saved).unwrap()).unwrap();
+    *hub.files.unreadable.lock().unwrap() = Some("control-settings.json".into());
+    saved
+}
+
+/// control-settings.json can't be read at the start (held without read
+/// sharing): the run goes on with the defaults, but nothing is written over
+/// the file; once it reads, the user's change made meanwhile is merged into
+/// what it holds (unknown keys, the device id and the consent kept).
+#[test]
+fn a_settings_file_that_could_not_be_read_is_never_written_over() {
+    let hub = TestHub::new();
+    let saved = saved_settings(&hub);
+    hub.hub.start().unwrap();
+    hub.inputs.send(set("ringBadges", json!(false)));
+    hub.sync();
+    assert_eq!(hub.settings_file(), saved);
+    assert!(hub.files.writes_of("control-settings.json").is_empty());
+    *hub.files.unreadable.lock().unwrap() = None;
+    hub.handles.clock.advance(Duration::from_secs(2));
+    hub.inputs.send(Input::Tick);
+    assert!(
+        eventually(|| hub.settings_file()["ringBadges"] == json!(false)),
+        "{:?}",
+        hub.logs()
+    );
+    let file = hub.settings_file();
+    assert_eq!(file["hookConsent"], json!(false));
+    assert_eq!(file["cloudDeviceId"], json!(DEVICE));
+    assert_eq!(file["typeReplies"], json!(true));
+    assert_eq!(file["trayBadge"], json!(false));
+    assert_eq!(file["aKeyFromANewerBuild"], json!("kept"));
+    // And the run uses them now.
+    let ui = shown(&hub).ui;
+    assert!(!ui.tray_badge && ui.type_replies && !ui.ring_badges);
+}
+
+/// Still unreadable at the stop: the stop's save leaves the file as it is.
+#[test]
+fn a_stop_never_writes_the_defaults_over_an_unreadable_settings_file() {
+    let hub = TestHub::new();
+    let saved = saved_settings(&hub);
+    hub.hub.start().unwrap();
+    hub.inputs.send(set("ringBadges", json!(false)));
+    hub.sync();
+    hub.hub.stop();
+    assert_eq!(hub.settings_file(), saved);
+    assert!(hub.files.writes_of("control-settings.json").is_empty());
+}
+
+/// A panic in one of the glue's event sinks is contained: `an-core` goes on
+/// applying inputs and answering calls.
+#[test]
+fn a_sink_that_panics_leaves_the_engine_running() {
+    let hub = TestHub::new();
+    hub.hub.on_event(Box::new(|event| {
+        if matches!(event, HubEvent::Log(line) if line.contains("boom")) {
+            panic!("a bug in the glue");
+        }
+    }));
+    hub.hub.start().unwrap();
+    // A refused setting logs its key: the sink panics there.
+    hub.inputs.send(set("boom", json!(true)));
+    hub.inputs.send(set("ringBadges", json!(false)));
+    assert!(!shown(&hub).ui.ring_badges);
+    assert!(hub.logs().iter().any(|line| line.contains("boom")));
+}
+
 // ---- calls ----
 
 /// A call `an-core` can't take within the bound is answered `busy`; the

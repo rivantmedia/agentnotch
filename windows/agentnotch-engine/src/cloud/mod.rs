@@ -139,8 +139,16 @@ impl CloudHandle {
     /// Queues a settings-section action; the state shows how it went. What
     /// the call stops (a pass, a summary, a sign-in still out) is stopped
     /// before it is queued, so nothing more is sent while it waits its turn.
+    ///
+    /// A sign-out's local half happens here too: the saved session is
+    /// forgotten (its file removed) before the call waits its turn, so a
+    /// quit before the cloud thread gets to it can't sign the next launch
+    /// back in. The `/logout` it owes is still sent from the cloud thread.
     pub fn call(&self, c: CloudCall) -> Result<(), String> {
         self.generations.interrupt(c);
+        if c == CloudCall::SignOut {
+            self.service.forget_session_now();
+        }
         self.sender
             .send(Message::Call(c))
             .map_err(|_| STOPPED.to_owned())

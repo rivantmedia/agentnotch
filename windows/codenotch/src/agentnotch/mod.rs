@@ -35,7 +35,7 @@ mod webview;
 
 pub use menu::{notch_menu_event, notch_menu_items};
 pub use setup::setup;
-pub use update::updater;
+pub use update::{install_failed, updater};
 
 /// This app's name wherever upstream's copy says "Codenotch".
 pub const DISPLAY_NAME: &str = "Agent Notch";

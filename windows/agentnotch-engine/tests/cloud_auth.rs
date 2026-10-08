@@ -719,6 +719,31 @@ fn sign_out_ends_this_session_only_and_forgets_it() {
     assert_eq!(rig.http.requests().len(), 1);
 }
 
+/// A sign-out's local half (the handle's, before the call waits its turn):
+/// the session is forgotten and its file cleared at once with no request;
+/// the sign-out that follows still ends it on Supabase, once.
+#[test]
+fn a_session_ended_locally_is_still_signed_out_on_supabase() {
+    let rig = make_rig(Some(3600));
+    let epoch = rig.auth.sign_in_epoch();
+    rig.auth.end_locally();
+    assert!(rig.http.requests().is_empty());
+    assert!(rig.store.load().is_none());
+    assert_eq!(rig.auth.valid_access_token(), Err(AuthError::SignedOut));
+    assert!(rig.auth.sign_in_epoch() > epoch);
+    rig.http.push(Ok(json_response(204, "")));
+    rig.auth.sign_out();
+    let requests = rig.http.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(path_of(&requests[0]), "/auth/v1/logout");
+    assert_eq!(
+        header(&requests[0], "Authorization"),
+        Some("Bearer access-1")
+    );
+    rig.auth.sign_out();
+    assert_eq!(rig.http.requests().len(), 1);
+}
+
 #[test]
 fn a_set_aside_session_stays_on_disk_unused() {
     let rig = make_rig(Some(3600));

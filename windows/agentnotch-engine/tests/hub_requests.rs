@@ -17,13 +17,16 @@ use accounts_support::{Home, BIIOS, BIIOS_UUID, PARAS, PARAS_UUID};
 use agentnotch_engine::hub::runtime::RuntimeOptions;
 use agentnotch_engine::hub::{Call, HubEvent, RevealKind};
 use agentnotch_engine::model::{Answer, HubSnapshot, SessionRow};
-use agentnotch_engine::platform::{Clock, ConnId};
+use agentnotch_engine::platform::{Clock, ConnId, Platform};
+use agentnotch_engine::runtime_types::Input;
 use agentnotch_proto::{ControlResponse, KEEP_PLANNING_REASON};
 use hub_support::live::{eventually, TestHub};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime};
 
 /// Claude Code's pid in every frame (the hook's own is another).
 const PID: u32 = 4242;
@@ -41,6 +44,11 @@ fn world() -> World {
 
 /// [`world`], with more written into the home before the hub starts.
 fn world_with(build: impl FnOnce(&Home)) -> World {
+    world_over(build, |_| {})
+}
+
+/// [`world_with`], with platform services replaced.
+fn world_over(build: impl FnOnce(&Home), customise: impl FnOnce(&mut Platform)) -> World {
     let home = Home::new();
     home.write_json(".claude.json", &home.login(PARAS_UUID, PARAS, None));
     home.mkdir(".claude/sessions");
@@ -52,7 +60,7 @@ fn world_with(build: impl FnOnce(&Home)) -> World {
         .parent()
         .expect("the test's root")
         .to_path_buf();
-    let hub = TestHub::over(&base, RuntimeOptions::default(), |_| {}, |_| {});
+    let hub = TestHub::over(&base, RuntimeOptions::default(), |_| {}, customise);
     let started = hub.handles.clock.now() - Duration::from_secs(60);
     hub.handles.processes.add(PID, 1, "claude.exe", started);
     hub.hub.start().expect("the hub starts");
@@ -359,6 +367,71 @@ fn a_stop_releases_every_held_request() {
         w.answer("s1", Answer::Allow { always: false }).unwrap(),
         json!({"result": "not_pending"})
     );
+}
+
+/// The platform's clock, whose next reading on `an-core` once `armed`
+/// panics (a bug anywhere in what `an-core` runs).
+struct PanickingClock {
+    clock: Arc<dyn Clock>,
+    armed: Arc<AtomicBool>,
+}
+
+impl Clock for PanickingClock {
+    fn now(&self) -> SystemTime {
+        let on_core = std::thread::current().name() == Some("an-core");
+        if on_core && self.armed.swap(false, Ordering::SeqCst) {
+            panic!("a bug on an-core");
+        }
+        self.clock.now()
+    }
+
+    fn monotonic(&self) -> Instant {
+        self.clock.monotonic()
+    }
+}
+
+/// A panic on `an-core` ends the engine as a crash ends the Mac app: every
+/// held request is closed with no frame (its hook fails open instead of
+/// waiting a day), the pipe stops, calls are answered at once, and a stop
+/// and a start listen again from the saved files.
+#[test]
+fn a_panic_on_an_core_releases_every_held_request() {
+    let armed = Arc::new(AtomicBool::new(false));
+    let bomb = armed.clone();
+    let w = world_over(
+        |_| {},
+        move |platform| {
+            platform.clock = Arc::new(PanickingClock {
+                clock: platform.clock.clone(),
+                armed: bomb,
+            });
+        },
+    );
+    let held = w.ask("s1", "Bash", bash(), json!([]));
+    armed.store(true, Ordering::SeqCst);
+    w.hub.inputs.send(Input::Tick);
+    let transport = &w.hub.handles.transport;
+    assert!(eventually(|| transport.is_closed(held)));
+    assert!(transport.is_stopped());
+    assert!(transport.responses().is_empty());
+    assert!(w.hub.logs().iter().any(|l| l.contains("internal error")));
+
+    let asked = Instant::now();
+    let refused = w.hub.hub.call(Call::Snapshot).unwrap_err();
+    assert_eq!(refused.code, "failed");
+    assert!(asked.elapsed() < Duration::from_secs(2));
+
+    let stopping = Instant::now();
+    w.hub.hub.stop();
+    assert!(stopping.elapsed() < Duration::from_secs(5));
+    w.hub.hub.start().unwrap();
+    assert!(eventually(|| w.status().transport == "listening"));
+    let again = w.ask("s2", "Bash", bash(), json!([]));
+    assert_eq!(
+        w.answer("s2", Answer::Allow { always: false }).unwrap(),
+        json!({"result": "delivered"})
+    );
+    assert_eq!(w.response(again), Some(json!({"decision": "allow"})));
 }
 
 /// The updater's exit: the glue stops the hub, then starts nothing; a
