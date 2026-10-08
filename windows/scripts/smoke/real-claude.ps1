@@ -511,6 +511,7 @@ public sealed class ConPty : IDisposable {
 
     const uint ExtendedStartupInfoPresent = 0x00080000;
     const uint CreateUnicodeEnvironment = 0x00000400;
+    const int UseStdHandles = 0x00000100;
     static readonly IntPtr PseudoConsoleAttribute = (IntPtr)0x00020016;
 
     IntPtr console = IntPtr.Zero, attributes = IntPtr.Zero, process = IntPtr.Zero;
@@ -536,6 +537,14 @@ public sealed class ConPty : IDisposable {
         var startup = new StartupInfoEx();
         startup.StartupInfo.cb = Marshal.SizeOf(typeof(StartupInfoEx));
         startup.lpAttributeList = pty.attributes;
+        // Without this the child takes this job's redirected standard handles instead of the
+        // pseudo console's: run 37717423874's Claude Code saw a pipe for stdout, ran as print
+        // mode, wrote its answer into the job log and exited 0 with an empty screen. Null handles
+        // under STARTF_USESTDHANDLES make it open the pseudo console's.
+        startup.StartupInfo.dwFlags = UseStdHandles;
+        startup.StartupInfo.hStdInput = IntPtr.Zero;
+        startup.StartupInfo.hStdOutput = IntPtr.Zero;
+        startup.StartupInfo.hStdError = IntPtr.Zero;
         IntPtr environment = Marshal.StringToHGlobalUni(environmentBlock);
         try {
             ProcessInformation info;
