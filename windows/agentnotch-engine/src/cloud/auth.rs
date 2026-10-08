@@ -620,6 +620,9 @@ struct Inner {
     /// (adopted, forgotten, set aside), never by a refresh.
     epoch: u64,
     refresh: RefreshSlot,
+    /// Sessions forgotten by [`Auth::end_locally`] whose `/logout` the next
+    /// [`Auth::sign_out`] still sends (memory only).
+    ended: Vec<AuthSession>,
 }
 
 /// The one refresh in flight, and what the last one came to: callers that
@@ -671,6 +674,7 @@ impl Auth {
                 loaded: false,
                 epoch: 0,
                 refresh: RefreshSlot::default(),
+                ended: Vec::new(),
             }),
             refreshed: Condvar::new(),
         }
@@ -901,16 +905,30 @@ impl Auth {
 
     /// Forget the session, then sign it out on Supabase (best effort; this
     /// PC's session only, not the user's other ones).
+    /// Sessions [`end_locally`](Self::end_locally) forgot are signed out
+    /// there too.
     pub fn sign_out(&self) {
         let ended = {
             let mut inner = self.inner();
-            let ended = inner.session.take();
+            let mut ended = std::mem::take(&mut inner.ended);
+            ended.extend(inner.session.take());
             self.forget_locked(&mut inner);
             ended
         };
-        if let Some(ended) = ended {
-            self.logout(&ended);
+        for session in &ended {
+            self.logout(session);
         }
+    }
+
+    /// The first half of [`sign_out`](Self::sign_out), with no request: the
+    /// session is forgotten here and its file removed now, and kept in
+    /// memory only for the `/logout` the next `sign_out` sends.
+    pub fn end_locally(&self) {
+        let mut inner = self.inner();
+        if let Some(session) = inner.session.take() {
+            inner.ended.push(session);
+        }
+        self.forget_locked(&mut inner);
     }
 
     /// Stop using the saved session without removing it: it was made through

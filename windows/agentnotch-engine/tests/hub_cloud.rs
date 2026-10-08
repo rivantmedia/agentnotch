@@ -330,6 +330,93 @@ fn nothing_is_uploaded_before_a_sign_in_and_sync_on() {
     assert_eq!(sync_requests(&hub), sent, "signed out again: nothing more");
 }
 
+/// Signed in with sync on and a pass on the cloud thread held in its
+/// `/sync` request until the returned sender lets it go (or drops).
+fn hub_held_in_a_pass(home: &Home) -> (TestHub, crossbeam_channel::Sender<()>) {
+    let hub = hub_with_accounts(home);
+    sign_in(&hub);
+    cloud(&hub, CloudAction::SetSync, Some(true)).expect("queued");
+    cloud(&hub, CloudAction::SetSummaries, Some(true)).expect("queued");
+    assert!(eventually(|| {
+        let file = hub.settings_file();
+        file["cloudSyncEnabled"] == json!(true) && file["cloudSummariesEnabled"] == json!(true)
+    }));
+    assert!(hub.roots.support.join("cloud-session.json").exists());
+    let fetched = agentnotch_engine::core::time::to_ms(hub.handles.clock.now());
+    home.write_json(
+        ".claude-work/.claude.json",
+        &home.login(BIIOS_UUID, BIIOS, Some(fetched as f64)),
+    );
+    assert!(eventually(|| {
+        hub.handles.clock.advance(Duration::from_secs(5));
+        hub.sync();
+        settings(&hub).cloud.pending_usage > 0
+    }));
+    let (release, gate) = crossbeam_channel::bounded::<()>(0);
+    let (entered, held) = crossbeam_channel::unbounded::<()>();
+    hub.handles.http.set_handler(move |request| {
+        if path_of(request) == SYNC {
+            let _ = entered.send(());
+            let _ = gate.recv_timeout(Duration::from_secs(20));
+        }
+        Ok(website_answer(request))
+    });
+    cloud(&hub, CloudAction::SyncNow, None).expect("queued");
+    held.recv_timeout(Duration::from_secs(10))
+        .expect("the pass sends its request");
+    (hub, release)
+}
+
+/// Sync turned off while a pass holds the cloud thread, then a quit: the
+/// switch is saved off at once (by `an-core`, before the call's turn), so
+/// the next launch doesn't sync again. The summaries switch stays as it
+/// was (the Mac's `setSyncEnabled`).
+#[test]
+fn sync_off_is_saved_even_when_the_app_quits_during_a_pass() {
+    let home = Home::new();
+    let (hub, release) = hub_held_in_a_pass(&home);
+    cloud(&hub, CloudAction::SetSync, Some(false)).expect("queued");
+    hub.hub.stop();
+    let file = hub.settings_file();
+    assert_eq!(file["cloudSyncEnabled"], json!(false));
+    assert_eq!(file["cloudSummariesEnabled"], json!(true));
+    drop(release);
+}
+
+/// The same for summaries off.
+#[test]
+fn summaries_off_is_saved_even_when_the_app_quits_during_a_pass() {
+    let home = Home::new();
+    let (hub, release) = hub_held_in_a_pass(&home);
+    cloud(&hub, CloudAction::SetSummaries, Some(false)).expect("queued");
+    hub.hub.stop();
+    let file = hub.settings_file();
+    assert_eq!(file["cloudSummariesEnabled"], json!(false));
+    assert_eq!(file["cloudSyncEnabled"], json!(true));
+    drop(release);
+}
+
+/// A sign-out while a pass holds the cloud thread, then a quit: both
+/// switches are saved off and the session's file is gone at once, so the
+/// next launch is signed out. The `/logout` is still sent once the cloud
+/// thread gets to the call.
+#[test]
+fn a_sign_out_holds_even_when_the_app_quits_during_a_pass() {
+    let home = Home::new();
+    let (hub, release) = hub_held_in_a_pass(&home);
+    cloud(&hub, CloudAction::SignOut, None).expect("queued");
+    assert!(!hub.roots.support.join("cloud-session.json").exists());
+    hub.hub.stop();
+    let file = hub.settings_file();
+    assert_eq!(file["cloudSyncEnabled"], json!(false));
+    assert_eq!(file["cloudSummariesEnabled"], json!(false));
+    assert!(!hub.roots.support.join("cloud-session.json").exists());
+    assert_eq!(requests_to(&hub, "/auth/v1/logout"), 0);
+    drop(release);
+    assert!(eventually(|| requests_to(&hub, "/auth/v1/logout") == 1));
+    assert!(!hub.roots.support.join("cloud-session.json").exists());
+}
+
 fn ids(set: &std::collections::BTreeSet<String>) -> Vec<&str> {
     set.iter().map(String::as_str).collect()
 }

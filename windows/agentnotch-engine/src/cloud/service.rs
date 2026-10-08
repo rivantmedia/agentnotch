@@ -1115,6 +1115,18 @@ impl CloudSync {
         self.publish();
     }
 
+    /// The local half of a sign-out, from any thread: the saved session is
+    /// forgotten at once (its file removed); [`sign_out`](Self::sign_out)
+    /// still ends it on Supabase when the cloud thread gets to it.
+    pub fn forget_session_now(&self) {
+        if self.sealed {
+            return;
+        }
+        if let Some(auth) = &self.auth {
+            auth.end_locally();
+        }
+    }
+
     fn api(&self, website: &str) -> CloudApi {
         let version = lock(&self.inner).cfg.app_version.clone();
         CloudApi::new(website, self.http.clone(), self.auth.clone(), &version)
