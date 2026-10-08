@@ -11,10 +11,14 @@
 //!
 //! Upstream's order: session, then weekly_all, then the rest by id. Pure.
 
-use crate::model::{AccountUsage, DesktopWindow, ExtraUsage, IdentityId, UsageSource, UsageWindow};
+use crate::model::{
+    AccountUsage, DesktopWindow, ExtraUsage, IdentityId, LimitWindowKind, RingStatus, UsageSource,
+    UsageWindow,
+};
+use crate::runtime_types::RingReading;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 pub const SESSION_ID: &str = "session";
 pub const WEEKLY_ID: &str = "weekly_all";
@@ -80,6 +84,101 @@ fn window(id: String, label: Option<String>, window: &UsageWindow, now: SystemTi
         duration_s: Some(window.duration_s),
         money: None,
     }
+}
+
+/// For a window of unknown length: far more than rounding, far less than any
+/// window.
+pub const SAME_WINDOW_FALLBACK_TOLERANCE: Duration = Duration::from_secs(60);
+
+/// `next` with each window's reset time as `previous` had it, when the two are
+/// the same window. Usage sources disagree on a reset time by rounding (the
+/// status line's whole epoch seconds against the usage endpoint's fractional
+/// ISO dates), and whichever reading wins decides the time; a reset time that
+/// moved later by a fraction of a second reads as a new window to anything
+/// that watches for one. A real new window resets at least a quarter of its
+/// length later (`UsageStore::is_same_window`). Pure.
+pub fn keeping_reset_times(mut next: Vec<RingWindow>, previous: &[RingWindow]) -> Vec<RingWindow> {
+    for window in &mut next {
+        let Some(resets_at) = window.resets_at else {
+            continue;
+        };
+        let Some(kept) = previous
+            .iter()
+            .find(|before| before.id == window.id)
+            .and_then(|before| before.resets_at.map(|kept| (before, kept)))
+            .filter(|(_, kept)| *kept != resets_at)
+        else {
+            continue;
+        };
+        let (before, kept) = kept;
+        let shortest = [window.duration_s, before.duration_s]
+            .into_iter()
+            .flatten()
+            .filter(|length| *length > 0)
+            .min();
+        let tolerance = shortest.map_or(SAME_WINDOW_FALLBACK_TOLERANCE, |length| {
+            Duration::from_secs_f64(length as f64 / 4.0)
+        });
+        let apart = resets_at
+            .duration_since(kept)
+            .unwrap_or_else(|earlier| earlier.duration());
+        if apart < tolerance {
+            window.resets_at = Some(kept);
+        }
+    }
+    next
+}
+
+/// `usage` with the reset time of each window as `windows` (its ring windows,
+/// [`keeping_reset_times`] applied) have it: the same ids [`windows`] makes.
+pub fn with_reset_times(usage: &AccountUsage, windows: &[RingWindow]) -> AccountUsage {
+    let reset_of = |id: &str| {
+        windows
+            .iter()
+            .find(|w| w.id == id)
+            .and_then(|w| w.resets_at)
+    };
+    let mut usage = usage.clone();
+    if let Some(five) = usage.five_hour.as_mut() {
+        five.resets_at = reset_of(SESSION_ID).or(five.resets_at);
+    }
+    if let Some(seven) = usage.seven_day.as_mut() {
+        seven.resets_at = reset_of(WEEKLY_ID).or(seven.resets_at);
+    }
+    let mut seen = vec![SESSION_ID.to_owned(), WEEKLY_ID.to_owned()];
+    for (name, scoped) in &mut usage.scoped {
+        let id = scoped_id(name);
+        if seen.contains(&id) {
+            continue;
+        }
+        scoped.resets_at = reset_of(&id).or(scoped.resets_at);
+        seen.push(id);
+    }
+    usage
+}
+
+/// A used-up window reads as lifted under this: the level the Mac's limit
+/// watcher re-arms at.
+pub const LIFTED_BELOW: f64 = 0.95;
+
+/// The 5-hour and weekly windows of a fresh reading that are back under
+/// [`LIFTED_BELOW`]. A stale reading, or none, proves nothing. Pure.
+pub fn lifted_limit_windows(reading: &RingReading, now: SystemTime) -> Vec<LimitWindowKind> {
+    let RingReading::Reading { usage, status, .. } = reading else {
+        return Vec::new();
+    };
+    if *status != RingStatus::Ok {
+        return Vec::new();
+    }
+    windows(usage, now)
+        .into_iter()
+        .filter(|window| window.used_fraction < LIFTED_BELOW)
+        .filter_map(|window| match window.id.as_str() {
+            SESSION_ID => Some(LimitWindowKind::Session),
+            WEEKLY_ID => Some(LimitWindowKind::Weekly),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Extra usage when it is switched on and has a limit or spend to show.

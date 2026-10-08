@@ -201,6 +201,33 @@ impl AccountUsage {
         }
         best
     }
+
+    /// The used-up window a limit is announced under (`control::limits`):
+    /// the 5-hour or the weekly window when either is used up (they stop
+    /// every model), the one that resets last; else a model's own window. A
+    /// failed turn doesn't say which window stopped it, and a model's week
+    /// used up days ago must not stand in for today's 5-hour limit. Pure.
+    pub fn announced_limit_hit(&self, now: SystemTime) -> Option<LimitHit> {
+        let mut best: Option<LimitHit> = None;
+        for (window, kind) in [
+            (self.five_hour.as_ref(), LimitWindowKind::Session),
+            (self.seven_day.as_ref(), LimitWindowKind::Weekly),
+        ] {
+            let Some(window) = window.filter(|w| w.effective_utilization(now) >= 100.0) else {
+                continue;
+            };
+            let hit = LimitHit {
+                window: kind,
+                resets_at: window.resets_at,
+            };
+            // Of equal resets the first stays, as in `limit_hit`.
+            let later = |hit: &LimitHit| hit.resets_at.map_or(FAR_FUTURE_KEY, sort_key);
+            if best.as_ref().is_none_or(|b| later(b) < later(&hit)) {
+                best = Some(hit);
+            }
+        }
+        best.or_else(|| self.limit_hit(now))
+    }
 }
 
 /// A sort key for times (`None` sorts as the distant future).

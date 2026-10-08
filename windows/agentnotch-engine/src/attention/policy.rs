@@ -10,7 +10,8 @@
 //!
 //! Owner: WP6.
 
-use crate::model::{AttentionTransition, Counts, RingId, SessionId, SessionState};
+use crate::control::notifications;
+use crate::model::{AttentionTransition, Counts, LimitHit, RingId, SessionId, SessionState};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, SystemTime};
 
@@ -53,6 +54,30 @@ pub fn kind_of(tr: &AttentionTransition) -> Option<TransitionKind> {
 /// nothing to answer from the panel.
 pub fn is_failure(tr: &AttentionTransition) -> bool {
     matches!(tr.to, SessionState::Failed(_)) || tr.to.reason().is_some_and(|r| r.is_error())
+}
+
+/// Whether the chime and peek for `tr` would repeat a usage limit already
+/// announced: a turn stopped by the limit (needs input, by a rate limit) of an
+/// account whose limit was announced, once per account and limit
+/// (`control::limits`), not on every retry, wake-up or /loop tick that fails
+/// again. `claim(ring, limit_hit)` says whether the limit's reaction is still
+/// to come, and records it; it is asked only for such a transition, which must
+/// be placed on a ring. Anything else is never held back.
+pub fn repeats_limit_reaction(
+    tr: &AttentionTransition,
+    limit_hit: Option<&LimitHit>,
+    claim: impl FnOnce(&RingId, Option<&LimitHit>) -> bool,
+) -> bool {
+    if kind_of(tr) != Some(TransitionKind::NeedsInput) {
+        return false;
+    }
+    if !tr.to.reason().is_some_and(notifications::is_rate_limit) {
+        return false;
+    }
+    match &tr.session.ring {
+        Some(ring) => !claim(ring, limit_hit),
+        None => false,
+    }
 }
 
 // ---- Reactions ----

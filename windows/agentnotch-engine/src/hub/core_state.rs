@@ -25,6 +25,7 @@ use super::wire_sessions::{session_store, SessionsWiring};
 use super::wire_usage::UsageWiring;
 use crate::accounts::{AccountRegistry, DiskProbe};
 use crate::attention::rows::ResetClock;
+use crate::control::limits::LimitAnnouncementStore;
 use crate::core::settings::ControlSettings;
 use crate::hooks::HookManager;
 use crate::model::*;
@@ -33,6 +34,7 @@ use crate::persist::settings::SettingsFile;
 use crate::persist::usage::UsageStateFile;
 use crate::platform::{Expect, NotifyPermission, Platform, WriteMode};
 use crate::runtime_types::*;
+use crate::usage::ring_windows::{self, RingWindow};
 use crate::usage::store::{UsageStore, UsageStoreConfig};
 use crate::usage::ProbeEnvironment;
 use agentnotch_proto::ControlStatus;
@@ -106,6 +108,11 @@ pub(crate) struct Core {
     pub(crate) changed_folders: Vec<AccountId>,
     pub(crate) window_names: BTreeMap<String, String>,
     pub(crate) notify_permission: NotifyPermission,
+    /// Which usage limits were announced (`limit-announcements.json`).
+    pub(crate) announced: LimitAnnouncementStore,
+    /// Each tracked identity's ring windows as last shown: a window keeps
+    /// the reset time it had (`ring_windows::keeping_reset_times`).
+    pub(crate) kept_windows: BTreeMap<IdentityId, Vec<RingWindow>>,
     snapshot_clock: project::SnapshotClock,
     jobs: BTreeMap<JobId, PendingJob>,
     next_job: u64,
@@ -221,6 +228,21 @@ impl Core {
             website_url: cfg.website.clone(),
             ..CloudState::default()
         };
+        let announced = {
+            let bytes = read_support(&platform, support, PersistFile::Limits, &mut events);
+            let store = LimitAnnouncementStore::load(
+                bytes.as_deref(),
+                !cfg.flags.sealed,
+                platform.clock.now(),
+            );
+            if store.was_unreadable() {
+                events.push(HubEvent::Log(format!(
+                    "{} didn't parse; the announced limits start afresh",
+                    PersistFile::Limits.file_name()
+                )));
+            }
+            store
+        };
         let notify_permission = if cfg.flags.no_notifications {
             NotifyPermission::Unavailable
         } else {
@@ -250,6 +272,8 @@ impl Core {
             changed_folders: Vec::new(),
             window_names: BTreeMap::new(),
             notify_permission,
+            announced,
+            kept_windows: BTreeMap::new(),
             snapshot_clock: project::SnapshotClock::default(),
             jobs: BTreeMap::new(),
             next_job: 1,
@@ -685,6 +709,7 @@ impl Core {
             self.drive_usage(now);
             self.drive_sessions(now);
             self.drive_control(now);
+            self.drive_limits(now);
             self.drive_cloud(now);
         }
         // Calls waiting on lookups are answered on a stopped hub too.
@@ -794,6 +819,9 @@ impl Core {
         if let Some(bytes) = self.review_bytes_now(now) {
             self.save_if_newer(PersistFile::Review, bytes);
         }
+        if let Some(bytes) = self.announced.bytes_now() {
+            self.save_if_newer(PersistFile::Limits, bytes);
+        }
     }
 
     /// Writes `bytes` now unless they are what the file was last written
@@ -839,10 +867,41 @@ impl Core {
             .map(|a| {
                 (
                     a.identity_id.clone(),
-                    self.usage.ring_reading(&a.identity_id, now),
+                    self.with_kept_reset_times(
+                        &a.identity_id,
+                        self.usage.ring_reading(&a.identity_id, now),
+                        now,
+                    ),
                 )
             })
             .collect()
+    }
+
+    /// `reading` with one reset time per window: the one the ring showed
+    /// first, when a source reports the same window's reset a moment off.
+    fn with_kept_reset_times(
+        &self,
+        identity: &IdentityId,
+        reading: RingReading,
+        now: SystemTime,
+    ) -> RingReading {
+        let Some(previous) = self.kept_windows.get(identity) else {
+            return reading;
+        };
+        let RingReading::Reading {
+            usage,
+            status,
+            stale_after,
+        } = &reading
+        else {
+            return reading;
+        };
+        let kept = ring_windows::keeping_reset_times(ring_windows::windows(usage, now), previous);
+        RingReading::Reading {
+            usage: ring_windows::with_reset_times(usage, &kept),
+            status: *status,
+            stale_after: *stale_after,
+        }
     }
 
     fn setup_input(&self) -> SetupInput<'_> {

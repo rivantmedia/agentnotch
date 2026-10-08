@@ -994,3 +994,286 @@ fn a_banner_link_that_started_the_app_waits_for_the_launch_scan() {
     ));
     assert!(asked.elapsed() < Duration::from_secs(1));
 }
+
+// ---- a usage limit is announced once per account ----
+
+impl World {
+    /// A turn that fails on the account's usage limit; returns once the row
+    /// shows it.
+    fn hit_limit(&self, session: &str) {
+        self.send("UserPromptSubmit", session, json!({"prompt": "go"}));
+        self.send(
+            "StopFailure",
+            session,
+            json!({"stop_error": "rate_limit", "status": "waiting_for_input"}),
+        );
+        assert!(eventually(|| self.row(session).is_some_and(|r| r.failed)));
+        self.advance(Duration::from_secs(1));
+    }
+
+    /// A status line of `session` saying the 5-hour window is `used` percent
+    /// used, resetting in an hour.
+    fn status_line(&self, session: &str, used: u32) {
+        let resets = self.hub.handles.clock.now_ms() / 1000 + 3_600;
+        let line = json!({
+            "protocol": 1, "event": "StatusLine", "session_id": session,
+            "transcript_path": self.home.path(&format!(".claude/projects/proj/{session}.jsonl")),
+            "cwd": self.home.path("code/proj"), "config_dir_env": null, "pid": PID,
+            "status_line": {
+                "rate_limits": {"five_hour": {"used_percentage": used, "resets_at": resets}},
+                "model": {"id": "claude-opus", "display_name": "Opus"},
+                "version": "2.1.280",
+            },
+        });
+        let now = self.hub.handles.clock.now();
+        self.hub
+            .handles
+            .transport
+            .inject(serde_json::to_vec(&line).unwrap(), now);
+        self.hub.sync();
+    }
+
+    fn limit_toasts(&self) -> usize {
+        self.hub
+            .handles
+            .notifier
+            .posted()
+            .into_iter()
+            .filter(|t| t.kind == ToastKind::Limit)
+            .count()
+    }
+
+    /// Lets every burst the last events began close and be carried out.
+    fn quiet(&self) {
+        self.advance(Duration::from_secs(3));
+        self.hub.sync();
+    }
+
+    fn announcements(&self) -> Option<String> {
+        std::fs::read_to_string(self.hub.roots.support.join("limit-announcements.json")).ok()
+    }
+}
+
+/// The limit banner, the chime and the peek each come once per limit: not on
+/// the retry that fails again, nor for another session stopped by the same
+/// limit. The record is written to `limit-announcements.json`, and the banner
+/// is taken back when no session is stopped by the limit any more.
+#[test]
+fn a_usage_limit_is_announced_once_per_account() {
+    let w = world();
+    w.hit_limit("s1");
+    w.settle_burst();
+    assert_eq!(w.limit_toasts(), 1, "{:?}", w.hub.handles.notifier.posted());
+    assert_eq!(w.hub.handles.sounds.played(), vec![Chime::Finished]);
+    assert_eq!(w.peeks().len(), 1, "{:?}", w.events());
+    // Written after each claim, the second one a moment after the first.
+    assert!(
+        eventually(|| w.announcements().is_some_and(
+            |record| record.contains("\"notification\"") && record.contains("\"reaction\"")
+        )),
+        "the record is written: {:?}",
+        w.announcements()
+    );
+    let record = w.announcements().unwrap();
+    assert!(record.contains("\"window\":\"unknown\""), "{record}");
+
+    // The retry (a wake-up, a /loop tick) fails on the limit again.
+    w.hit_limit("s1");
+    w.quiet();
+    // Another session of the account is stopped by it too.
+    w.hit_limit("s2");
+    w.quiet();
+    assert_eq!(w.limit_toasts(), 1, "{:?}", w.hub.handles.notifier.posted());
+    assert_eq!(w.hub.handles.sounds.played(), vec![Chime::Finished]);
+    assert_eq!(w.peeks().len(), 1, "{:?}", w.events());
+
+    // No session is stopped by it any more: the banner goes.
+    for session in ["s1", "s2"] {
+        w.call(Call::DismissFailure {
+            session_id: session.into(),
+        });
+    }
+    assert!(eventually(|| w
+        .hub
+        .handles
+        .notifier
+        .withdrawn()
+        .iter()
+        .any(|(tag, _)| tag == "limit")));
+    // And hitting it again before the window resets is still the same limit.
+    w.hit_limit("s3");
+    w.quiet();
+    assert_eq!(w.limit_toasts(), 1);
+}
+
+/// A banner that macOS' counterpart would not show claims nothing: with
+/// Windows' notifications off the chime and peek announce the limit, and
+/// turned back on, the next session stopped by it still gets its banner (no
+/// card falls in for it on Windows), though never a second chime.
+#[test]
+fn a_limit_whose_banner_could_not_show_is_left_to_the_chime() {
+    let notifier = Arc::new(RecordingNotifier::default());
+    notifier.set_permission(NotifyPermission::DisabledForUser);
+    let mine = notifier.clone();
+    let w = world_with(move |platform| platform.notifier = mine);
+    w.hit_limit("s1");
+    w.settle_burst();
+    assert!(notifier.posted().is_empty(), "{:?}", notifier.posted());
+    assert_eq!(w.hub.handles.sounds.played(), vec![Chime::Finished]);
+    assert_eq!(w.peeks().len(), 1);
+
+    notifier.set_permission(NotifyPermission::Allowed);
+    w.hit_limit("s2");
+    w.quiet();
+    let limits = || {
+        notifier
+            .posted()
+            .into_iter()
+            .filter(|t| t.kind == ToastKind::Limit)
+            .count()
+    };
+    assert_eq!(limits(), 1, "{:?}", notifier.posted());
+    // The reaction was announced already.
+    assert_eq!(w.hub.handles.sounds.played(), vec![Chime::Finished]);
+    assert_eq!(w.peeks().len(), 1);
+}
+
+/// A relaunch doesn't announce the same limit again: the record comes back
+/// from `limit-announcements.json`.
+#[test]
+fn an_announced_limit_survives_a_relaunch() {
+    let first = world();
+    first.hit_limit("s1");
+    first.settle_burst();
+    assert_eq!(first.limit_toasts(), 1);
+    assert!(eventually(|| first
+        .announcements()
+        .is_some_and(|record| record.contains("\"notification\""))));
+    let record = first.announcements().unwrap();
+
+    let again = world_prepared(
+        |_| {},
+        |hub| {
+            std::fs::create_dir_all(&hub.roots.support).unwrap();
+            std::fs::write(hub.roots.support.join("limit-announcements.json"), &record).unwrap();
+        },
+    );
+    again.hit_limit("s1");
+    again.quiet();
+    assert_eq!(
+        again.limit_toasts(),
+        0,
+        "{:?}",
+        again.hub.handles.notifier.posted()
+    );
+    assert!(again.hub.handles.sounds.played().is_empty());
+}
+
+/// A session reopened with the failure read back from `review-state.json`
+/// shows it, and announces nothing: no banner, no chime, no peek.
+#[test]
+fn a_failure_restored_from_disk_announces_nothing() {
+    let failed_at = 1_800_000_000.0 - 3600.0;
+    let w = world_prepared(
+        |_| {},
+        |hub| {
+            std::fs::create_dir_all(&hub.roots.support).unwrap();
+            let file = format!(
+                r#"{{"version":2,"lastAliveAt":{alive},"sessions":{{"s1":{{"stopError":"Rate limited","stopErrorCode":"rate_limit","failedAt":{failed_at},"updatedAt":{failed_at}}}}}}}"#,
+                alive = failed_at + 60.0
+            );
+            std::fs::write(hub.roots.support.join("review-state.json"), file).unwrap();
+        },
+    );
+    w.send(
+        "SessionStart",
+        "s1",
+        json!({"source": "resume", "status": "waiting_for_input"}),
+    );
+    assert!(eventually(|| w.row("s1").is_some_and(|r| r.failed)));
+    w.quiet();
+    assert_eq!(w.limit_toasts(), 0, "{:?}", w.hub.handles.notifier.posted());
+    assert!(w.hub.handles.notifier.posted().is_empty());
+    assert!(w.hub.handles.sounds.played().is_empty());
+    assert!(w.peeks().is_empty());
+    assert!(w.announcements().is_none(), "nothing was announced");
+
+    // Tried again and failed again, live: that is news.
+    w.hit_limit("s1");
+    w.settle_burst();
+    assert_eq!(w.limit_toasts(), 1, "{:?}", w.hub.handles.notifier.posted());
+    assert_eq!(w.hub.handles.sounds.played(), vec![Chime::Finished]);
+}
+
+/// With the readings showing which window ran out, the limit is announced
+/// under it; the window back under its limit before it resets (an early
+/// reset) makes using it up again a new limit.
+#[test]
+fn a_limit_that_lifted_early_is_announced_again() {
+    let w = world();
+    w.send("UserPromptSubmit", "s1", json!({"prompt": "go"}));
+    w.status_line("s1", 100);
+    assert!(eventually(|| {
+        w.hub.sync();
+        w.shown()
+            .rings
+            .iter()
+            .any(|ring| ring.usage.windows.iter().any(|win| win.used >= 1.0))
+    }));
+    w.hit_limit("s1");
+    w.settle_burst();
+    assert_eq!(w.limit_toasts(), 1, "{:?}", w.hub.handles.notifier.posted());
+    assert!(eventually(|| w.announcements().is_some_and(
+        |record| record.contains("\"window\":\"session\"") && record.contains("\"notification\"")
+    )));
+    let chimes = w.hub.handles.sounds.played().len();
+    assert_eq!(chimes, 1);
+
+    // Still the same limit while the window stays used up.
+    w.hit_limit("s1");
+    w.quiet();
+    assert_eq!(w.limit_toasts(), 1);
+
+    // An early reset: a later status line reads the window far lower.
+    w.advance(Duration::from_secs(60));
+    w.status_line("s1", 20);
+    assert!(eventually(|| {
+        w.hub.sync();
+        w.announcements()
+            .is_some_and(|record| !record.contains("\"window\":\"session\""))
+    }));
+    w.hit_limit("s2");
+    w.quiet();
+    assert_eq!(w.limit_toasts(), 2, "{:?}", w.hub.handles.notifier.posted());
+    assert_eq!(w.hub.handles.sounds.played().len(), 2);
+}
+
+/// A turn fails on the limit before any reading says which window ran out;
+/// the reading that comes after names it, and the announcement then lasts
+/// until that window resets, not an hour.
+#[test]
+fn a_limit_announced_before_the_readings_learns_its_window() {
+    let w = world();
+    w.hit_limit("s1");
+    w.settle_burst();
+    assert!(eventually(|| {
+        w.announcements()
+            .is_some_and(|record| record.contains("\"window\":\"unknown\""))
+    }));
+    w.status_line("s1", 100);
+    assert!(
+        eventually(|| {
+            w.hub.sync();
+            w.announcements().is_some_and(|record| {
+                record.contains("\"window\":\"session\"") && record.contains("\"resetsAt\"")
+            })
+        }),
+        "{:?}",
+        w.announcements()
+    );
+    // Still one limit: nothing more is announced.
+    w.hit_limit("s2");
+    w.quiet();
+    assert_eq!(w.limit_toasts(), 1);
+    assert_eq!(w.hub.handles.sounds.played().len(), 1);
+}

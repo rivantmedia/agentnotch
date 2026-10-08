@@ -37,20 +37,22 @@ use super::core_state::{to_value, Core, Reply};
 use super::project::{self, RowExtras};
 use crate::attention::policy::{self, Burst, TransitionKind, BURST_WINDOW};
 use crate::control::focus::{self, FocusExtras};
+use crate::control::limits::Channel;
 use crate::control::notifications::{
     self, LimitBanners, LimitChange, LimitContext, LimitedSession,
 };
 use crate::control::panel::{self, AutoOpenWatch};
 use crate::control::{hosts, looking, messaging, reactions};
 use crate::model::{
-    AttentionTransition, HubSnapshot, RingId, SessionId, SessionState, SessionView,
+    AttentionTransition, HubSnapshot, IdentityId, LimitHit, RingId, SessionId, SessionState,
+    SessionView,
 };
 use crate::platform::{
     ConsoleInfo, FocusOutcome, Foreground, HostApp, HostKind, Liveness, Processes, TypeOutcome,
 };
 use crate::runtime_types::{
-    Input, Job, JobId, PanelState, ReactionContext, ReviewAction, RingReading, SessionInput,
-    ToastContext,
+    Input, Job, JobId, PanelState, PersistFile, ReactionContext, ReviewAction, RingReading,
+    SessionInput, ToastContext,
 };
 use crate::usage::ring_windows;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -857,11 +859,24 @@ impl Core {
             if let Some(toast) = notifications::toast_for(&tr, &ctx) {
                 self.platform.notifier.post(&toast);
             }
-            // Resolutions make no sound.
-            if matches!(
-                policy::kind_of(&tr),
-                Some(TransitionKind::NeedsInput | TransitionKind::ReadyForReview)
-            ) {
+            // Resolutions make no sound, and a limit already announced makes
+            // none again (a retry, a wake-up or a /loop tick that fails on
+            // it once more).
+            let limit_hit = tr
+                .session
+                .ring
+                .as_ref()
+                .filter(|_| tr.to.reason().is_some_and(notifications::is_rate_limit))
+                .and_then(|ring| self.ring_limit_hit(ring, now));
+            let repeated = policy::repeats_limit_reaction(&tr, limit_hit.as_ref(), |ring, hit| {
+                self.claim_limit(Channel::Reaction, ring, hit, now)
+            });
+            if !repeated
+                && matches!(
+                    policy::kind_of(&tr),
+                    Some(TransitionKind::NeedsInput | TransitionKind::ReadyForReview)
+                )
+            {
                 self.control_w.burst.begin(now);
                 self.control_w.deciding.push(Deciding {
                     tr,
@@ -931,6 +946,7 @@ impl Core {
             .map(|v| LimitedSession {
                 id: v.id.clone(),
                 title: v.public_title.clone(),
+                restored: v.stop_error_is_restored,
             })
             .collect();
         let label = snapshot
@@ -938,39 +954,146 @@ impl Core {
             .iter()
             .find(|r| r.ring_id == ring.as_str())
             .map(|r| r.label.clone());
+        // The window that ran out, the one the limit is announced under and
+        // whose reset the banner names.
+        let hit = self.ring_limit_hit(ring, now);
         let ctx = LimitContext {
             notify_needs_input: self.settings.notify_needs_input,
             permission: self.notify_permission,
             // Held back in full screen like every other banner.
             suppressed: self.cfg.flags.no_notifications || fg.is_some_and(|fg| fg.fullscreen),
             account_label: label.filter(|_| snapshot.rings.len() > 1),
-            limit_reset: self.limit_reset(ring, now),
+            limit_reset: notifications::reset_phrase(
+                hit.as_ref().and_then(|hit| hit.resets_at),
+                now,
+                notifications::local_utc_offset_seconds(now),
+            ),
         };
         match self.control_w.limits.update(ring, &limited, &ctx) {
-            LimitChange::Post(toast) => self.platform.notifier.post(&toast),
+            // Only a banner that will show claims the limit; once per limit,
+            // whichever announcement came first. With no banner (notifications
+            // off or not allowed, full screen) the reaction (chime and peek)
+            // is the limit's announcement: Windows has no card to fall back to.
+            LimitChange::Post(toast) => {
+                if self.claim_limit(Channel::Notification, ring, hit.as_ref(), now) {
+                    self.platform.notifier.post(&toast);
+                }
+            }
             LimitChange::Withdraw(tag, group) => self.platform.notifier.withdraw(&tag, &group),
             LimitChange::Nothing => {}
         }
     }
 
-    /// When the ring's spent window lifts, in the user's words.
-    fn limit_reset(&self, ring: &RingId, now: SystemTime) -> Option<String> {
-        let accounts = self.registry.accounts();
-        let account = accounts.iter().find(|a| &a.ring_id == ring)?;
-        let RingReading::Reading { usage, .. } = self.usage.ring_reading(&account.identity_id, now)
-        else {
+    /// The used-up window of the account `ring` shows (`announced_limit_hit`):
+    /// what its limit is announced under, and when it lifts.
+    fn ring_limit_hit(&self, ring: &RingId, now: SystemTime) -> Option<LimitHit> {
+        let identity = self
+            .registry
+            .identities()
+            .iter()
+            .find(|identity| &identity.ring_id == ring)?
+            .id
+            .clone();
+        let RingReading::Reading { usage, .. } = self.usage.ring_reading(&identity, now) else {
             return None;
         };
-        let resets_at = ring_windows::windows(&usage, now)
-            .into_iter()
-            .filter(|w| w.used_fraction >= 1.0)
-            .filter_map(|w| w.resets_at)
-            .max()?;
-        notifications::reset_phrase(
-            Some(resets_at),
+        usage.announced_limit_hit(now)
+    }
+
+    /// Whether `channel` may announce the limit of `ring` (`hit`: its used-up
+    /// window, when the readings show one): true the first time until the
+    /// window resets. Records it, in `limit-announcements.json`.
+    fn claim_limit(
+        &mut self,
+        channel: Channel,
+        ring: &RingId,
+        hit: Option<&LimitHit>,
+        now: SystemTime,
+    ) -> bool {
+        let granted = self.announced.claim(
+            channel,
+            ring.as_str(),
+            hit.map(|hit| &hit.window),
+            hit.and_then(|hit| hit.resets_at),
             now,
-            notifications::local_utc_offset_seconds(now),
-        )
+            &[],
+        );
+        self.save_limits();
+        granted
+    }
+
+    /// Writes `limit-announcements.json` when an announcement changed.
+    fn save_limits(&mut self) {
+        if let Some(bytes) = self.announced.take_bytes() {
+            self.persist(PersistFile::Limits, bytes);
+        }
+    }
+
+    /// After every input, while the hub runs: each account's ring keeps one
+    /// reset time per window (`ring_windows::keeping_reset_times`), a window
+    /// the readings show back under its limit before its reset ends its
+    /// announcement (an early reset, a reset credit: using it up again is a
+    /// new limit), and a limit announced before the readings named its window
+    /// learns it.
+    pub(crate) fn drive_limits(&mut self, now: SystemTime) {
+        let tracked: Vec<(IdentityId, RingId)> = self
+            .registry
+            .identities()
+            .iter()
+            .filter(|identity| !identity.is_hidden)
+            .map(|identity| (identity.id.clone(), identity.ring_id.clone()))
+            .collect();
+        let mut kept = BTreeMap::new();
+        for (identity, ring) in tracked {
+            let reading = self.usage.ring_reading(&identity, now);
+            let windows = match &reading {
+                RingReading::Reading { usage, .. } => ring_windows::windows(usage, now),
+                _ => Vec::new(),
+            };
+            let previous = self.kept_windows.remove(&identity).unwrap_or_default();
+            kept.insert(
+                identity,
+                ring_windows::keeping_reset_times(windows, &previous),
+            );
+            for window in ring_windows::lifted_limit_windows(&reading, now) {
+                self.announced.end(ring.as_str(), &window);
+            }
+        }
+        self.kept_windows = kept;
+        if self.announced.state().is_waiting_for_a_name(now) {
+            self.learn_limit_windows(now);
+        }
+        self.save_limits();
+    }
+
+    /// An announcement of a window not known yet takes the window the
+    /// readings now show used up on its ring, while a session there is
+    /// stopped by a rate limit.
+    fn learn_limit_windows(&mut self, now: SystemTime) {
+        let snapshot = self.snapshot_at(now, 0);
+        let views = self.session_views();
+        let rings: BTreeSet<String> = snapshot
+            .sessions
+            .iter()
+            .filter(|row| {
+                views
+                    .iter()
+                    .find(|view| view.id.as_str() == row.session_id)
+                    .is_some_and(|view| {
+                        view.state
+                            .reason()
+                            .is_some_and(notifications::is_rate_limit)
+                    })
+            })
+            .filter_map(|row| row.ring_id.clone())
+            .collect();
+        for ring in rings {
+            let ring = RingId::from(ring);
+            if let Some(hit) = self.ring_limit_hit(&ring, now) {
+                self.announced
+                    .learn(ring.as_str(), &hit.window, hit.resets_at, now);
+            }
+        }
     }
 
     /// Whether `fg` shows this session's own terminal (`None`: can't tell).

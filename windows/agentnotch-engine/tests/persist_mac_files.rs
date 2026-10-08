@@ -8,6 +8,7 @@ use agentnotch_engine::model::{UsageSource, UsageWindow};
 use agentnotch_engine::persist::accounts::AccountsFile;
 use agentnotch_engine::persist::hook_install::HookInstallFile;
 use agentnotch_engine::persist::json_equivalent;
+use agentnotch_engine::persist::limits::LimitAnnouncementsFile;
 use agentnotch_engine::persist::review::ReviewStateFile;
 use agentnotch_engine::persist::settings::SettingsFile;
 use agentnotch_engine::persist::usage::{PersistedAccountUsage, UsageStateFile};
@@ -186,4 +187,28 @@ fn hook_install_json() {
     );
     assert!(!record.files[1].status_line);
     assert_eq!(HookInstallFile::from_model(&record), file);
+}
+
+#[test]
+fn limit_announcements_json() {
+    let bytes = fixture("limit-announcements.json");
+    let file = LimitAnnouncementsFile::parse(&bytes).expect("parses");
+    assert_eq!(file.version, 1);
+    assert_eq!(file.incidents.len(), 2);
+    let session = &file.incidents["claude-acct-1a2b3c4d5e6f"][0];
+    assert_eq!(session.channels, ["notification", "reaction"]);
+    assert_eq!(
+        session.resets_at.map(|d| time::iso8601(d.0)).as_deref(),
+        Some("2026-09-21T16:23:20Z")
+    );
+    assert_equivalent(&bytes, &file.encode(), "limit-announcements.json");
+    // The control module reads and writes the same file.
+    let store = agentnotch_engine::control::limits::LimitAnnouncementStore::load(
+        Some(&bytes),
+        true,
+        time::parse_iso8601("2026-09-21T15:00:00Z").unwrap(),
+    );
+    assert!(!store.was_unreadable());
+    assert_eq!(store.state().incidents.len(), 2);
+    assert!(LimitAnnouncementsFile::parse(br#"{"incidents": 3}"#).is_none());
 }

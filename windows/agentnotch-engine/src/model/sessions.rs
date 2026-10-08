@@ -412,6 +412,9 @@ pub struct SessionView {
     /// The completion isn't worth an alert (a /loop tick, a turn that left
     /// Claude waiting to be woken): it stays in the review queue silently.
     pub completion_quiet: bool,
+    /// Its failed turn was read back from disk, not seen happen: shown, but
+    /// not news (`attention::news`).
+    pub stop_error_is_restored: bool,
     /// "1 workflow", "2 background agents" while the turn waits on them.
     pub background_wait_description: Option<String>,
     pub permission_mode: Option<String>,
@@ -477,6 +480,7 @@ impl SessionView {
             waiting_since: None,
             completion_pending_since: None,
             completion_quiet: false,
+            stop_error_is_restored: false,
             background_wait_description: None,
             permission_mode: None,
             context_window_size: None,

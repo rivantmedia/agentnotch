@@ -85,6 +85,7 @@ fn limited(ids: &[&str]) -> Vec<LimitedSession> {
         .map(|id| LimitedSession {
             id: sid(id),
             title: format!("Session {id}"),
+            restored: false,
         })
         .collect()
 }
@@ -653,6 +654,7 @@ fn limit_banners_follow_the_switches_but_keep_counting() {
     let one = vec![LimitedSession {
         id: sid("a"),
         title: "Two\n  lines ".into(),
+        restored: false,
     }];
     let LimitChange::Post(toast) = banners.update(&ring(RING), &one, &limit_ctx()) else {
         panic!()

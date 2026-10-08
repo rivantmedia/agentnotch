@@ -8,7 +8,12 @@
 //!   `failed`), the group the session id, so a newer banner replaces the
 //!   older and each is withdrawn once it no longer applies.
 //! - Sessions stopped by a usage limit share one banner per account ring
-//!   (tag `limit`, group the ring id): "Work: 3 sessions hit the limit".
+//!   (tag `limit`, group the ring id): "Work: 3 sessions hit the limit". It is
+//!   posted once per limit (`control::limits`: until the window resets, across
+//!   relaunches), only when it will show; a retry, wake-up or /loop tick that
+//!   fails again, another session stopped by the same limit, or a session
+//!   reopened with its old failure post nothing. Withdrawn while no session is
+//!   stopped by it.
 //! - Any other failed turn gets "<title> stopped" with what to do, never
 //!   "needs you": there is nothing to answer.
 //! - Private: a banner names the session by its public title (never the
@@ -552,6 +557,10 @@ pub fn toast_for(tr: &AttentionTransition, ctx: &ToastContext) -> Option<Toast> 
     let view = &tr.session;
     if tr.became_needs_you() && ctx.notify_needs_input {
         let reason = tr.to.reason()?;
+        // A failure read back from disk was announced when it happened.
+        if reason.is_error() && view.stop_error_is_restored {
+            return None;
+        }
         if is_rate_limit(reason) || looking {
             return None;
         }
@@ -686,6 +695,9 @@ pub fn account_subtitle(
 pub struct LimitedSession {
     pub id: SessionId,
     pub title: String,
+    /// Its failure was read back from disk, not seen happen: it doesn't make
+    /// the limit news (`SessionView::stop_error_is_restored`).
+    pub restored: bool,
 }
 
 /// What the limit banner of one ring needs besides its sessions.
@@ -744,8 +756,11 @@ pub enum LimitChange {
 }
 
 /// One limit banner per account ring, counting the sessions stopped by its
-/// limit. A shrinking count isn't posted again (that would show the banner
-/// again); zero withdraws it.
+/// limit. A session newly stopped by the limit (not one restored with an old
+/// failure) makes it due; a shrinking count is not due again; zero withdraws
+/// it. Whether the limit was announced already is the hub's to say before it
+/// posts (`control::limits`): once per limit until the window resets, however
+/// many sessions join, so a changed count never shows the banner again.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LimitBanners {
     /// The rate-limited sessions each ring's banner counted.
@@ -765,7 +780,8 @@ impl LimitBanners {
     pub fn concerns(tr: &AttentionTransition) -> bool {
         let was = tr.from.as_ref().is_some_and(state_is_rate_limit);
         let is = state_is_rate_limit(&tr.to);
-        (was && !is) || (is && tr.became_needs_you())
+        // A restored failure announced itself when it happened.
+        (was && !is) || (is && tr.became_needs_you() && !tr.session.stop_error_is_restored)
     }
 
     /// The rings whose banner counted any of these sessions (they ended).
@@ -791,7 +807,14 @@ impl LimitBanners {
             // Taking back a banner that was never posted does nothing.
             return LimitChange::Withdraw(tag(ToastKind::Limit).to_owned(), group(ring.as_str()));
         }
-        let joined = now.difference(&before).next().is_some();
+        let restored: BTreeSet<&SessionId> = limited
+            .iter()
+            .filter(|session| session.restored)
+            .map(|session| &session.id)
+            .collect();
+        let joined = now
+            .difference(&before)
+            .any(|session| !restored.contains(session));
         self.counted.insert(ring.clone(), now);
         if !joined
             || !ctx.notify_needs_input
