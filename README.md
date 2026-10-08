@@ -608,6 +608,18 @@ How the hooks work on Windows:
   why; usage then comes from Claude Code's own `get_usage` and `.claude.json`.
 - Sessions inside WSL aren't tracked yet.
 
+Everyday use is as on the Mac (the panel, the chat and its status line, alerts, cloud sync),
+with these differences:
+
+- **Usage limits are announced once per account**, as on the Mac: one notification from the
+  account and one chime and peek. Windows has no "limit reached" card. What was announced is
+  kept in `limit-announcements.json` in the app's state folder, so a relaunch doesn't
+  announce it again.
+- **Shared history.** Cloud sync's rule for a shared history applies when a folder's
+  `projects\` (or a project folder in it) is a junction or symbolic link, or when another known
+  folder reaches the same `projects\`. Folders are compared by their file identity, never by
+  how the path is spelled.
+
 ### Privacy (Windows)
 
 The rules in [Privacy](#privacy-what-it-reads-writes-and-runs) hold, with the Windows paths:

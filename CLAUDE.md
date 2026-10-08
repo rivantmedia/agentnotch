@@ -620,6 +620,16 @@ changing behaviour.
     upstream ships it, pinned by `verify-token-free.sh` (`GLM_CLAUDE_KEY_PIN`), and the only
     such read. Don't add another.
   - Dev switches: README "Development (Windows)" and Appendix C of the design.
+- **Parity with the Mac.** A behaviour change in `Packages/ClaudeControl` is unported on
+  Windows until the engine gets it too (DESIGN-WIN's closing list says what each port did).
+  1.0.2's are in: a usage limit announced once per ring and window (`control::limits`,
+  `<support>\limit-announcements.json` in the Mac format; Windows has no "limit reached" card,
+  so the banner and the chime and peek are its two channels), a failed turn restored from
+  `review-state.json` is no news (`stop_error_is_restored`), the chat follows a hookless
+  session's tasks and shows its status line (`SessionRow.chat_status`), and the cloud ledger's
+  shared-history rule (`backfill::is_shared`, by `SecureFiles::identity`'s volume and file
+  index; its real-link service tests run on Unix only, `agentnotch-win`'s `win_files.rs` proves
+  junctions).
 
 ## Handy dev switches
 
