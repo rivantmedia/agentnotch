@@ -20,6 +20,11 @@
 //!   30 s): the callback goes to the cloud; a banner's open and review
 //!   links, at most ten a minute, open the panel or review the completion
 //!   for sessions and rings the pages are shown, never answering anything.
+//! - A panic on `an-core` ends the engine as a crash ends the Mac app: the
+//!   held requests are released and the pipe stops, so every hook fails
+//!   open instead of waiting a day for an answer nobody will give, and each
+//!   call is answered at once. A stop and a start load the saved files
+//!   again. A panic in the glue's event sink is contained where it happens.
 //!
 //! Owner: WP7.
 
@@ -40,6 +45,7 @@ use crate::runtime_types::{Input, JobId};
 use agentnotch_proto::ControlStatus;
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use serde_json::Value;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
@@ -60,6 +66,9 @@ const SETTINGS_WRITE_WAIT: Duration = Duration::from_secs(2);
 /// How long a stop waits for the cloud thread to finish what it has out
 /// and save; past that it ends with the process.
 const CLOUD_STOP_WAIT: Duration = Duration::from_secs(3);
+/// Every call's answer once `an-core` has failed.
+pub const ENGINE_FAILED: &str =
+    "Agent Notch's engine stopped after an internal error. Quit and reopen Agent Notch.";
 
 /// The runtime's timings; tests shorten them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,6 +131,9 @@ struct Inner {
     idle: Mutex<Option<Core>>,
     /// `an-core` holds the core (set and cleared under `idle`'s lock).
     running: AtomicBool,
+    /// `an-core` panicked this run: calls are answered at once, until the
+    /// stop.
+    failed: AtomicBool,
     /// The threads of one run; also serialises start and stop.
     run: Mutex<Option<Running>>,
     /// The cloud service of this run (`an-core` holds it too).
@@ -131,7 +143,8 @@ struct Inner {
 }
 
 struct Running {
-    core: JoinHandle<Core>,
+    /// `None` back: the core panicked, and the next start loads the files.
+    core: JoinHandle<Option<Core>>,
     workers: Vec<JoinHandle<()>>,
     /// Dropped to end the workers.
     quit: Sender<()>,
@@ -162,6 +175,7 @@ impl Runtime {
                 publisher: Mutex::new(Publisher::new(options.coalesce)),
                 idle: Mutex::new(None),
                 running: AtomicBool::new(false),
+                failed: AtomicBool::new(false),
                 run: Mutex::new(None),
                 cloud: Mutex::new(None),
                 links: Mutex::new(DeepLinkGate::default()),
@@ -178,7 +192,9 @@ impl Inner {
         let sinks: Vec<Arc<EventSink>> = lock(&self.sinks).clone();
         for event in events {
             for sink in &sinks {
-                sink(event);
+                // A glue bug in one event never takes `an-core` down with
+                // it (the panic is already printed by the hook).
+                let _ = catch_unwind(AssertUnwindSafe(|| sink(event)));
             }
         }
     }
@@ -265,6 +281,30 @@ impl HubBackend for Runtime {
             return Ok(());
         }
         let mut idle = lock(&inner.idle);
+        // Every thread exists before anything listens: a pipe started for a
+        // core with no thread would hold each request with nobody to
+        // answer it.
+        let (quit, quit_rx) = crossbeam_channel::bounded::<()>(0);
+        let workers = inner
+            .lanes
+            .spawn_workers(&inner.ctx, &inner.tx, &quit_rx)
+            .map_err(|e| format!("the engine's workers didn't start: {e}"))?;
+        let (hand_over, handed) = crossbeam_channel::bounded::<(Core, Vec<HubEvent>)>(1);
+        let loop_inner = inner.clone();
+        let spawned = std::thread::Builder::new()
+            .name("an-core".into())
+            .spawn(move || {
+                let (core, first) = handed.recv().ok()?;
+                run_core(core, &loop_inner, first)
+            });
+        let core_thread = match spawned {
+            Ok(handle) => handle,
+            Err(e) => {
+                drop(quit);
+                join_within(workers, WORKER_JOIN_WAIT);
+                return Err(format!("the engine didn't start: {e}"));
+            }
+        };
         let mut core = idle.take().unwrap_or_else(|| inner.load_core());
         // The hook pipe's and the cloud's events come back through the queue.
         core.ingress_w.inputs = Some(inner.tx.clone());
@@ -274,36 +314,22 @@ impl HubBackend for Runtime {
         // projection.
         core.on_start();
         *lock(&inner.cloud) = core.cloud_w.handle.clone();
-        let (quit, quit_rx) = crossbeam_channel::bounded::<()>(0);
-        let workers = match inner.lanes.spawn_workers(&inner.ctx, &inner.tx, &quit_rx) {
-            Ok(workers) => workers,
-            Err(e) => {
-                core.cloud_on_stop();
-                inner.stop_cloud();
-                *idle = Some(core);
-                return Err(format!("the engine's workers didn't start: {e}"));
-            }
-        };
         // What the pages see from the first instant: `snapshot()` never
         // waits for `an-core`.
         let now = inner.platform.clock.now();
         let mono = inner.platform.clock.monotonic();
         let first = lock(&inner.publisher).publish(&mut core, now, mono, true);
-        let loop_inner = inner.clone();
-        let spawned = std::thread::Builder::new()
-            .name("an-core".into())
-            .spawn(move || core_loop(core, &loop_inner, first));
-        let core = match spawned {
-            Ok(handle) => handle,
-            Err(e) => {
-                drop(quit);
-                inner.stop_cloud();
-                return Err(format!("the engine didn't start: {e}"));
-            }
-        };
+        // `an-core` waits for this; it can't have gone.
+        if let Err(crossbeam_channel::SendError((mut core, _))) = hand_over.send((core, first)) {
+            core.stop();
+            inner.stop_cloud();
+            drop(quit);
+            *idle = Some(core);
+            return Err("the engine didn't start".into());
+        }
         inner.running.store(true, Ordering::SeqCst);
         *run = Some(Running {
-            core,
+            core: core_thread,
             workers,
             quit,
         });
@@ -320,6 +346,7 @@ impl HubBackend for Runtime {
         // answered on their own thread.
         let mut idle = lock(&inner.idle);
         inner.running.store(false, Ordering::SeqCst);
+        inner.failed.store(false, Ordering::SeqCst);
         // Children first: a probe in progress ends now (its job comes back
         // as failed) instead of holding its lane through the stop.
         inner.runner.kill_all();
@@ -329,7 +356,9 @@ impl HubBackend for Runtime {
         drop(running.quit);
         join_within(running.workers, WORKER_JOIN_WAIT);
         if core_stopped {
-            if let Ok(core) = running.core.join() {
+            // A core that panicked isn't kept: the next start reads the
+            // saved files again.
+            if let Ok(Some(core)) = running.core.join() {
                 *idle = Some(core);
             }
         } else {
@@ -355,6 +384,9 @@ impl HubBackend for Runtime {
             if let Some(answer) = inner.call_inline(call.clone()) {
                 return answer;
             }
+        }
+        if inner.failed.load(Ordering::SeqCst) {
+            return Err(CallError::failed(ENGINE_FAILED));
         }
         let (reply, answer) = crossbeam_channel::bounded(1);
         if inner.tx.send(Input::Call { call, reply }).is_err() {
@@ -515,44 +547,90 @@ impl Inner {
 
 // ---- an-core ----
 
-/// `an-core`: one input at a time, in order, until a stop; returns the core
-/// so a later start goes on from it.
-fn core_loop(mut core: Core, inner: &Inner, first: Vec<HubEvent>) -> Core {
+/// `an-core`'s thread: the loop, and what is left of the engine when it
+/// panics. Returns the core so a later start goes on from it.
+fn run_core(mut core: Core, inner: &Inner, first: Vec<HubEvent>) -> Option<Core> {
+    match catch_unwind(AssertUnwindSafe(|| core_loop(&mut core, inner, first))) {
+        Ok(()) => Some(core),
+        Err(_) => {
+            engine_failed(core, inner);
+            None
+        }
+    }
+}
+
+/// `an-core` panicked: as when a crash ends the Mac app, each held request
+/// is closed with no answer (its hook exits with no output and Claude
+/// Code's own prompt decides) and the pipe stops; then every call is
+/// answered at once until the stop. The core may be half changed, so
+/// nothing of it is saved or kept.
+fn engine_failed(mut core: Core, inner: &Inner) {
+    inner.failed.store(true, Ordering::SeqCst);
+    if catch_unwind(AssertUnwindSafe(|| core.ingress_on_stop())).is_err() {
+        // Stopping the transport closes every connection it holds.
+        let _ = catch_unwind(AssertUnwindSafe(|| inner.platform.transport.stop()));
+    }
+    let _ = catch_unwind(AssertUnwindSafe(move || drop(core)));
+    // Never the panic's text: it may quote what the engine was reading.
+    inner.emit(&[HubEvent::Log(
+        "the engine stopped after an internal error; the hook pipe is closed".into(),
+    )]);
+    loop {
+        match inner.rx.recv() {
+            Ok(Input::Stop { done }) => {
+                let _ = done.send(());
+                return;
+            }
+            Ok(Input::Call { reply, .. }) => {
+                let _ = reply.send(Err(CallError::failed(ENGINE_FAILED)));
+            }
+            // Nothing is typed without the core's check.
+            Ok(Input::TypeCheckpoint { reply, .. }) => {
+                let _ = reply.send(false);
+            }
+            Ok(_) => {}
+            Err(_) => return,
+        }
+    }
+}
+
+/// `an-core`: one input at a time, in order, until a stop.
+fn core_loop(core: &mut Core, inner: &Inner, first: Vec<HubEvent>) {
     let clock = inner.platform.clock.clone();
     let mut events = core.take_events();
     events.extend(first);
     inner.emit(&events);
     // Jobs a stop left unsent.
-    dispatch(&mut core, &inner.lanes);
+    dispatch(core, &inner.lanes);
     loop {
         let input = match core.backlog.pop_front() {
             Some(input) => Some(input),
-            None => match wait_time(&core, inner, clock.now(), clock.monotonic()) {
+            None => match wait_time(core, inner, clock.now(), clock.monotonic()) {
                 None => match inner.rx.recv() {
                     Ok(input) => Some(input),
-                    Err(_) => return core,
+                    Err(_) => return,
                 },
                 Some(wait) => match inner.rx.recv_timeout(wait) {
                     Ok(input) => Some(input),
                     Err(RecvTimeoutError::Timeout) => None,
-                    Err(RecvTimeoutError::Disconnected) => return core,
+                    Err(RecvTimeoutError::Disconnected) => return,
                 },
             },
         };
         let now = clock.now();
         match input {
             Some(Input::Stop { done }) => {
-                stop_core(&mut core, inner);
+                stop_core(core, inner);
                 let mut events = core.take_events();
                 events.extend(lock(&inner.publisher).publish(
-                    &mut core,
+                    core,
                     clock.now(),
                     clock.monotonic(),
                     true,
                 ));
                 inner.emit(&events);
                 let _ = done.send(());
-                return core;
+                return;
             }
             Some(input) => {
                 core.handle(input);
@@ -570,14 +648,9 @@ fn core_loop(mut core: Core, inner: &Inner, first: Vec<HubEvent>) -> Core {
             }
         }
         core.after_input();
-        dispatch(&mut core, &inner.lanes);
+        dispatch(core, &inner.lanes);
         let mut events = core.take_events();
-        events.extend(lock(&inner.publisher).publish(
-            &mut core,
-            clock.now(),
-            clock.monotonic(),
-            false,
-        ));
+        events.extend(lock(&inner.publisher).publish(core, clock.now(), clock.monotonic(), false));
         inner.emit(&events);
     }
 }

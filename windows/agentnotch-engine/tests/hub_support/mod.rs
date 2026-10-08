@@ -359,11 +359,13 @@ pub mod live {
     }
 
     /// The real file service, recording every write; the first
-    /// `panics` writes panic instead (a job body that panics).
+    /// `panics` writes panic instead (a job body that panics), and a
+    /// worker's (`an-io-*`) write of the file named in `refused` fails.
     #[derive(Default)]
     pub struct RecordingFiles {
         pub writes: Mutex<Vec<Write>>,
         pub panics: AtomicUsize,
+        pub refused: Mutex<Option<String>>,
     }
 
     impl RecordingFiles {
@@ -392,6 +394,16 @@ pub mod live {
             if panics > 0 {
                 self.panics.store(panics - 1, Ordering::SeqCst);
                 panic!("a disk that panics");
+            }
+            let on_worker = std::thread::current()
+                .name()
+                .is_some_and(|name| name.starts_with("an-io-"));
+            if on_worker
+                && lock(&self.refused)
+                    .as_deref()
+                    .is_some_and(|name| path.file_name().is_some_and(|n| n == name))
+            {
+                return Err(io::Error::other("a disk that refuses"));
             }
             lock(&self.writes).push(Write {
                 path: path.to_path_buf(),

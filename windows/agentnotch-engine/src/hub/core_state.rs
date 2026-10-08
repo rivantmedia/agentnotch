@@ -75,6 +75,10 @@ pub(crate) struct Core {
     settings_dirty: bool,
     /// The one settings write in flight: writes never overtake each other.
     settings_write: Option<JobId>,
+    /// The last settings write handed out failed (or a stop drained it
+    /// before it ran): the file is behind until a later one lands, so a
+    /// stop's save writes it.
+    settings_unsaved: bool,
     pub(crate) registry: AccountRegistry,
     pub(crate) hooks: HookManager,
     pub(crate) usage: UsageStore,
@@ -223,6 +227,7 @@ impl Core {
             settings_file,
             settings_dirty: false,
             settings_write: None,
+            settings_unsaved: false,
             registry,
             hooks,
             usage,
@@ -473,8 +478,12 @@ impl Core {
         match result {
             JobResult::Persisted(outcome) if self.settings_write == Some(id) => {
                 self.settings_write = None;
+                // Each write carries the whole file, so one that lands
+                // makes up for any that failed before it.
+                self.settings_unsaved = outcome.is_err();
                 if let Err(why) = outcome {
-                    // Written again with the next change (never in a loop).
+                    // Written again with the next change or at the stop
+                    // (never in a loop).
                     self.log(format!("settings not saved: {why}"));
                 }
             }
@@ -654,10 +663,13 @@ impl Core {
     /// Writes what is unsaved now, synchronously (a stop; the process may
     /// end right after).
     pub(crate) fn save_now(&mut self) {
-        if self.settings_dirty || self.settings_write.is_some() {
+        if self.settings_dirty || self.settings_write.is_some() || self.settings_unsaved {
             let bytes = self.settings_file.encode();
             match self.write_support_file(PersistFile::Settings, &bytes) {
-                Ok(()) => self.settings_dirty = false,
+                Ok(()) => {
+                    self.settings_dirty = false;
+                    self.settings_unsaved = false;
+                }
                 Err(why) => self.log(format!("settings not saved: {why}")),
             }
         }

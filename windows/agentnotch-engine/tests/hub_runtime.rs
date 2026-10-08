@@ -273,6 +273,45 @@ fn stop_saves_the_settings_now() {
     }
 }
 
+/// A settings write that failed is made by the stop's save: the file never
+/// keeps a choice the user changed (cloud sync turned off) only because a
+/// worker's write was refused or drained.
+#[test]
+fn a_settings_write_that_failed_is_made_at_the_stop() {
+    let hub = TestHub::started();
+    *hub.files.refused.lock().unwrap() = Some("control-settings.json".into());
+    hub.inputs.send(set("trayBadge", json!(false)));
+    assert!(
+        eventually(|| hub
+            .logs()
+            .iter()
+            .any(|line| line.starts_with("settings not saved"))),
+        "{:?}",
+        hub.logs()
+    );
+    assert_ne!(hub.settings_file()["trayBadge"], json!(false));
+    hub.hub.stop();
+    assert_eq!(hub.settings_file()["trayBadge"], json!(false));
+}
+
+/// A panic in one of the glue's event sinks is contained: `an-core` goes on
+/// applying inputs and answering calls.
+#[test]
+fn a_sink_that_panics_leaves_the_engine_running() {
+    let hub = TestHub::new();
+    hub.hub.on_event(Box::new(|event| {
+        if matches!(event, HubEvent::Log(line) if line.contains("boom")) {
+            panic!("a bug in the glue");
+        }
+    }));
+    hub.hub.start().unwrap();
+    // A refused setting logs its key: the sink panics there.
+    hub.inputs.send(set("boom", json!(true)));
+    hub.inputs.send(set("ringBadges", json!(false)));
+    assert!(!shown(&hub).ui.ring_badges);
+    assert!(hub.logs().iter().any(|line| line.contains("boom")));
+}
+
 // ---- calls ----
 
 /// A call `an-core` can't take within the bound is answered `busy`; the
