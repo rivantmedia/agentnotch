@@ -580,9 +580,9 @@ Windows-only code needs Windows, and CI type-checks it for `x86_64-pc-windows-ms
    the top of Settings › Claude Code (Settings opens on that pane until you answer) and of the
    sessions panel lists every `settings.json` it will edit:
    `%USERPROFILE%\.claude\settings.json` and those of the other folders Claude Code runs in.
-   **Turn on** writes the hook entries there and wraps the status line; **Not now** writes
-   nothing (sessions still show, from Claude Code's own session files, but without approvals
-   from the notch). Before every change it saves a backup (`settings.json.agentnotch-<time>.bak`,
+   **Turn on** writes the hook entries there and, where it can, the status line (below);
+   **Not now** writes nothing (sessions still show, from Claude Code's own session files, but
+   without approvals from the notch). Before every change it saves a backup (`settings.json.agentnotch-<time>.bak`,
    the five newest, and the file as it was before the first change as
    `settings.json.agentnotch.original.bak`). It keeps the file's line endings and byte order
    mark, and it refuses a file that doesn't parse or that another program holds open.
@@ -602,8 +602,9 @@ How the hooks work on Windows:
   instead. A folder that neither form can name shows "Can't be hooked here", and no hook of
   this app's stays there: an older Claude Code would run an exec-form entry without its
   arguments, through Git Bash.
-- **The status line** is wrapped only when Git Bash is installed and the command needs no
-  PowerShell or cmd (and has no Windows `\` paths). Otherwise it is left alone and Settings says
+- **The status line.** A folder with none gets this app's. One you set yourself is wrapped
+  (it keeps running, through Git Bash) only when Git Bash is installed and the command needs no
+  PowerShell or cmd and has no Windows `\` paths. Otherwise it is left alone and Settings says
   why; usage then comes from Claude Code's own `get_usage` and `.claude.json`.
 - Sessions inside WSL aren't tracked yet.
 
