@@ -309,6 +309,10 @@ impl Core {
                 to_value(&projection.snapshot)
             }
             Call::Settings => {
+                // The pane asks when it opens and when its window comes to
+                // the front: the user may have just been to Windows
+                // Settings (the Mac re-reads it whenever its pane appears).
+                self.refresh_notify_permission();
                 let now = self.platform.clock.now();
                 to_value(&self.project_settings(now))
             }
@@ -385,6 +389,18 @@ impl Core {
     }
 
     // ---- settings ----
+
+    /// Windows' banner switch for the app, read again: the user can turn it
+    /// on or off in Windows Settings at any time, and a copy from the start
+    /// would keep Settings' warning and the banner gate wrong until a
+    /// restart. A run with notifications off keeps `Unavailable`. A change
+    /// reaches `an:settings` through the next publish, which compares.
+    pub(crate) fn refresh_notify_permission(&mut self) {
+        if self.cfg.flags.no_notifications {
+            return;
+        }
+        self.notify_permission = self.platform.notifier.permission();
+    }
 
     /// Sets one setting: `from_page` holds it to the keys a page may set;
     /// the cloud thread's `Input::SetSetting` may set any. An unchanged
@@ -805,7 +821,7 @@ impl Core {
             pipe_name: &self.cfg.pipe_name,
             busy: self.jobs_in_flight_of_install(),
             refreshing: self.jobs_in_flight(Lane::Probe) > 0,
-            desktop_format: None,
+            desktop_format: self.usage_w.desktop_format,
             notify_permission: self.notify_permission,
             hotkey_ok: self.hotkey_ok,
             hotkey_message: self.hotkey_message.as_deref(),

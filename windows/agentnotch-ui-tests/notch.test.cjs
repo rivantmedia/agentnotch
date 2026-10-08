@@ -275,6 +275,28 @@ test('an:snapshot redraws the rings, and ignores what is not a snapshot', async 
   clean(page);
 });
 
+test('an older snapshot never replaces a newer one, whichever channel brings it', async () => {
+  // The start's `snapshot` reply is held back until a newer `an:snapshot` has been drawn.
+  let answer;
+  const page = await load({ replies: { snapshot: () => new Promise((resolve) => { answer = resolve; }) } });
+  assert.equal(typeof answer, 'function', 'the page asked for a snapshot');
+  page.emit('an:snapshot', snapshotWith((s) => {
+    s.generated_at_ms += 1000;
+    s.rings[0].usage.windows[0].used = 0.9;
+  }));
+  assert.equal(cellFor(page, PERSONAL).querySelector('.pct').textContent, '90%');
+  answer(snapshotWith((s) => { s.rings[0].usage.windows[0].used = 0.1; }));
+  await page.settle();
+  assert.equal(cellFor(page, PERSONAL).querySelector('.pct').textContent, '90%', 'the older reply is dropped');
+  // The same date again is a re-delivery of an unchanged snapshot, and is drawn.
+  page.emit('an:snapshot', snapshotWith((s) => {
+    s.generated_at_ms += 1000;
+    s.rings[0].usage.windows[0].used = 0.5;
+  }));
+  assert.equal(cellFor(page, PERSONAL).querySelector('.pct').textContent, '50%');
+  clean(page);
+});
+
 // ---- decorateCell: the activity layer ---------------------------------------------------------------------
 
 const activityMarkup = (page, id) => cellFor(page, id).querySelector('svg.activity').innerHTML;

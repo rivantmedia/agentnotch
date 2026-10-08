@@ -800,6 +800,9 @@ impl Core {
         if !self.live {
             return;
         }
+        // Read once per burst, before any banner is decided (the Mac asks
+        // before every post).
+        self.refresh_notify_permission();
         // Placed as the pages show them: a session listed nowhere (its
         // account hidden or forgotten) makes no noise.
         let snapshot = self.snapshot_at(now, 0);
@@ -868,7 +871,7 @@ impl Core {
             }
         }
         for ring in limit_rings {
-            self.update_limit_banner(&ring, &snapshot, now);
+            self.update_limit_banner(&ring, &snapshot, now, fg.as_ref());
         }
         if !self.control_w.deciding.is_empty() && self.control_w.visibility.is_none() {
             self.control_w.visibility = Some(self.schedule(Job::Visibility, None));
@@ -911,7 +914,13 @@ impl Core {
         )
     }
 
-    fn update_limit_banner(&mut self, ring: &RingId, snapshot: &HubSnapshot, now: SystemTime) {
+    fn update_limit_banner(
+        &mut self,
+        ring: &RingId,
+        snapshot: &HubSnapshot,
+        now: SystemTime,
+        fg: Option<&Foreground>,
+    ) {
         let views = self.session_views();
         let limited: Vec<LimitedSession> = snapshot
             .sessions
@@ -932,7 +941,8 @@ impl Core {
         let ctx = LimitContext {
             notify_needs_input: self.settings.notify_needs_input,
             permission: self.notify_permission,
-            suppressed: self.cfg.flags.no_notifications,
+            // Held back in full screen like every other banner.
+            suppressed: self.cfg.flags.no_notifications || fg.is_some_and(|fg| fg.fullscreen),
             account_label: label.filter(|_| snapshot.rings.len() > 1),
             limit_reset: self.limit_reset(ring, now),
         };

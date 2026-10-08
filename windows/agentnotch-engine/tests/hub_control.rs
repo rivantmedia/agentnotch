@@ -19,11 +19,11 @@ use agentnotch_engine::hub::{Call, HubEvent};
 use agentnotch_engine::model::{HubSnapshot, SessionRow};
 use agentnotch_engine::platform::{
     Chime, Clock, ConnId, ConsoleInfo, ConsoleInput, ConsoleTarget, FocusOutcome, FocusStep,
-    Foreground, HostApp, HostKind, Liveness, Platform, ProcessTable, Terminals, ToastKind,
-    TypeOutcome,
+    Foreground, HostApp, HostKind, Liveness, NotifyPermission, Platform, ProcessTable, Terminals,
+    ToastKind, TypeOutcome,
 };
 use agentnotch_engine::runtime_types::{Input, PanelState};
-use agentnotch_engine::testkit::{FakeConsole, FakeProcesses};
+use agentnotch_engine::testkit::{FakeConsole, FakeProcesses, RecordingNotifier};
 use hub_support::live::{eventually, TestHub};
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -670,6 +670,94 @@ fn no_banner_with_needs_you_banners_off() {
     w.settle_burst();
     assert!(w.hub.handles.notifier.posted().is_empty());
     assert_eq!(w.hub.handles.sounds.played(), vec![Chime::Blocked]);
+}
+
+/// Windows' banner switch is read again before banners are decided and
+/// whenever Settings asks: turned on in Windows Settings while the app runs,
+/// the next request posts its banner and Settings stops warning (the Mac
+/// asks before every post and when its pane appears).
+#[test]
+fn the_windows_banner_switch_is_read_again() {
+    let notifier = Arc::new(RecordingNotifier::default());
+    notifier.set_permission(NotifyPermission::DisabledForUser);
+    let mine = notifier.clone();
+    let w = world_with(move |platform| platform.notifier = mine);
+    let settings = w.call(Call::Settings);
+    assert_eq!(settings["notifications"]["permission"], "disabled_for_user");
+    assert_eq!(settings["notifications"]["permission_warning"], true);
+    w.ask("s1");
+    w.settle_burst();
+    assert!(notifier.posted().is_empty(), "{:?}", notifier.posted());
+
+    notifier.set_permission(NotifyPermission::Allowed);
+    w.ask("s2");
+    assert!(
+        eventually(|| notifier
+            .posted()
+            .iter()
+            .any(|t| t.group == notifications::group("s2"))),
+        "{:?}",
+        notifier.posted()
+    );
+    let settings = w.call(Call::Settings);
+    assert_eq!(settings["notifications"]["permission"], "allowed");
+    assert_eq!(settings["notifications"]["permission_warning"], false);
+
+    // Turned off again: the page that asks is told, through `an:settings`
+    // too.
+    notifier.set_permission(NotifyPermission::DisabledForApp);
+    w.call(Call::Settings);
+    assert!(eventually(|| {
+        w.advance(Duration::from_millis(100));
+        w.events().iter().rev().find_map(|e| match e {
+            HubEvent::Settings(s) => Some(s.notifications.permission == "disabled_for_app"),
+            _ => None,
+        }) == Some(true)
+    }));
+}
+
+/// A session stopped by its usage limit while a full-screen app is in front
+/// posts no limit banner, as no other banner is posted then; out of full
+/// screen the next one does.
+#[test]
+fn a_limit_banner_is_held_back_in_full_screen() {
+    let w = world();
+    let limits = || {
+        w.hub
+            .handles
+            .notifier
+            .posted()
+            .into_iter()
+            .filter(|t| t.kind == ToastKind::Limit)
+            .count()
+    };
+    let fg = |fullscreen: bool| Foreground {
+        pid: 77,
+        window: 0xBEEF,
+        title: "A game".into(),
+        fullscreen,
+    };
+    let limited = |session: &str| {
+        w.send("UserPromptSubmit", session, json!({"prompt": "go"}));
+        w.send(
+            "StopFailure",
+            session,
+            json!({"stop_error": "rate_limit", "status": "waiting_for_input"}),
+        );
+        assert!(eventually(|| w.row(session).is_some_and(|r| r.failed)));
+        w.advance(Duration::from_secs(1));
+    };
+    w.hub.handles.terminals.set_foreground(Some(fg(true)));
+    limited("s1");
+    assert_eq!(limits(), 0, "{:?}", w.hub.handles.notifier.posted());
+
+    w.hub.handles.terminals.set_foreground(Some(fg(false)));
+    limited("s2");
+    assert!(
+        eventually(|| limits() == 1),
+        "{:?}",
+        w.hub.handles.notifier.posted()
+    );
 }
 
 /// Auto-open on: the panel opens on the list with the session highlighted,

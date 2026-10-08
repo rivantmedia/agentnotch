@@ -1285,6 +1285,13 @@
       state.failure = C.callError(error);
       render();
     });
+    // The window stays open between visits, and Windows' banner switch can change meanwhile
+    // (Open… in Notifications sends the user there): asking again when the window comes to the
+    // front makes the hub read it afresh. A change comes back as `an:settings`, ordered with the
+    // hub's other events; this reply isn't, and could be older than one of them, so it is unused.
+    window.addEventListener('focus', function () {
+      C.call('settings', null).then(null, function () {});
+    });
     // The rebrand, and the second half of the pane (Usage, Cloud, Sessions and attention,
     // Notifications, Advanced: settings-sections.js fills `slots`), then a draw with them.
     C.load(base, ['rebrand.js', 'settings-sections.js'], function () {
