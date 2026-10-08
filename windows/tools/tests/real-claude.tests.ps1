@@ -217,6 +217,15 @@ Test-Case "the fake API's log: only the fake key, no Authorization header, a scr
     Assert-True (@(Test-FakeApiLog -Entries @(@{ method = 'POST'; path = '/v1/messages'; apiKey = 'ok'; reply = 'passive' }) -Name 'x') -match 'no scripted turn') 'no turn'
 }
 
+Test-Case 'the headless runs name the permission mode a Bash call asks in; the plan run names plan' {
+    # 2.1.285 starts in auto mode when none is named, and auto runs a `touch` with no PermissionRequest.
+    $headless = [string]${function:Invoke-HeadlessScenarios}
+    Assert-True ($headless -match "-ClaudeArgs @\('--permission-mode', 'default'\)") 'the headless run names default'
+    Assert-True ([string]${function:Invoke-PlanScenario} -match "'--permission-mode', 'plan'") 'the plan run names plan'
+    $driver = [string]${function:Start-ClaudeDriver}
+    Assert-True ($driver -match "AGENTNOTCH_HOOK_TRACE") 'the hook exe traces into the artifacts'
+}
+
 Test-Case 'cmdkey targets and terminal escapes' {
     $list = "`r`nCurrently stored credentials:`r`n`r`n    Target: LegacyGeneric:target=git:https://github.com`r`n    Type: Generic`r`n    Target: Domain:target=fileserver`r`n"
     Assert-Equal ((ConvertFrom-CmdkeyList -Text $list) -join '|') 'LegacyGeneric:target=git:https://github.com|Domain:target=fileserver' 'targets'

@@ -685,6 +685,10 @@ function Start-ClaudeDriver {
     # Left unset, `-p` makes it sdk-cli, and the engine ignores sdk-* sessions as the Mac does
     # (HS 4.3, SessionFilter): run 37331085715 waited for a session the app rightly never listed.
     $environment['CLAUDE_CODE_ENTRYPOINT'] = $script:HeadlessEntrypoint
+    # The app's hook exe says what it did (delivered, held, answered, no app) only with both
+    # variables (agentnotch-hook trace.rs); the trace is uploaded with the other artifacts.
+    $environment['AGENTNOTCH_DEV'] = '1'
+    $environment['AGENTNOTCH_HOOK_TRACE'] = Join-Path $script:ArtifactsDir "hook-trace-$Name.log"
     foreach ($key in $environment.Keys) { $psi.Environment[$key] = $environment[$key] }
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
@@ -712,7 +716,12 @@ function Wait-DriverSession {
         $null -ne $state -and $state['session_id']
     } 120 "Claude Code's session to start ($($Driver.Name))"
     $state = Read-DriverState $Driver
-    Write-RcLog "Claude Code ($($Driver.Name)): process $($state['pid']), session $($state['session_id'])"
+    $mode = '?'
+    if (Test-Path -LiteralPath $Driver.Events) {
+        $init = @(ConvertFrom-JsonLines -Text ([IO.File]::ReadAllText($Driver.Events)) | Where-Object { $_['type'] -eq 'system' -and $_['subtype'] -eq 'init' })
+        if ($init.Count) { $mode = [string]$init[0]['permissionMode'] }
+    }
+    Write-RcLog "Claude Code ($($Driver.Name)): process $($state['pid']), session $($state['session_id']), permission mode $mode"
     $state
 }
 
@@ -785,7 +794,11 @@ function Invoke-HeadlessScenarios {
     param([Parameter(Mandatory)][bool]$ExecForm)
     $api = Start-FakeApi -Scenario 'headless' -Name 'headless'
     $readingsBefore = [int](Get-ControlStatus)['readings']
-    $driver = Start-ClaudeDriver -Api $api -Name 'headless' -Prompts @(
+    # 2.1.285 starts in auto mode when no mode is named (runs 37331085715 and 37335586678: init
+    # said permissionMode auto, and the `touch` calls ran with no PermissionRequest at all). The
+    # VS Code panel these runs stand for starts in its own setting, "default" unless the user
+    # changed it, where a Bash call asks; so the run names that mode.
+    $driver = Start-ClaudeDriver -Api $api -Name 'headless' -ClaudeArgs @('--permission-mode', 'default') -Prompts @(
         '[allow] Create the first marker file with Bash.', '[deny] Create the second marker file with Bash.', '[question] Ask me which colour to use.')
     $state = Wait-DriverSession -Driver $driver
     Test-LiveSession -State $state
