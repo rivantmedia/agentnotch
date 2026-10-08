@@ -417,6 +417,51 @@ fn a_sign_out_holds_even_when_the_app_quits_during_a_pass() {
     assert!(!hub.roots.support.join("cloud-session.json").exists());
 }
 
+/// Summaries turned on while a pass holds the cloud thread, and the pass
+/// let go only once the quit has stopped `an-core` (the hook pipe is
+/// closed): the cloud writes the switch as it stops, after `an-core` took
+/// its last input, and the stop still saves it.
+#[test]
+fn a_switch_the_cloud_writes_as_the_app_quits_is_saved() {
+    let home = Home::new();
+    let hub = hub_with_accounts(&home);
+    sign_in(&hub);
+    cloud(&hub, CloudAction::SetSync, Some(true)).expect("queued");
+    assert!(eventually(
+        || hub.settings_file()["cloudSyncEnabled"] == json!(true)
+    ));
+    let fetched = agentnotch_engine::core::time::to_ms(hub.handles.clock.now());
+    home.write_json(
+        ".claude-work/.claude.json",
+        &home.login(BIIOS_UUID, BIIOS, Some(fetched as f64)),
+    );
+    assert!(eventually(|| {
+        hub.handles.clock.advance(Duration::from_secs(5));
+        hub.sync();
+        settings(&hub).cloud.pending_usage > 0
+    }));
+    let (entered, held) = crossbeam_channel::unbounded::<()>();
+    let transport = hub.handles.transport.clone();
+    hub.handles.http.set_handler(move |request| {
+        if path_of(request) == SYNC {
+            let _ = entered.send(());
+            let until = std::time::Instant::now() + Duration::from_secs(20);
+            while !transport.is_stopped() && std::time::Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        Ok(website_answer(request))
+    });
+    cloud(&hub, CloudAction::SyncNow, None).expect("queued");
+    held.recv_timeout(Duration::from_secs(10))
+        .expect("the pass sends its request");
+    cloud(&hub, CloudAction::SetSummaries, Some(true)).expect("queued");
+    assert_eq!(hub.settings_file()["cloudSummariesEnabled"], json!(false));
+    hub.hub.stop();
+    assert_eq!(hub.settings_file()["cloudSummariesEnabled"], json!(true));
+    assert_eq!(hub.settings_file()["cloudSyncEnabled"], json!(true));
+}
+
 fn ids(set: &std::collections::BTreeSet<String>) -> Vec<&str> {
     set.iter().map(String::as_str).collect()
 }

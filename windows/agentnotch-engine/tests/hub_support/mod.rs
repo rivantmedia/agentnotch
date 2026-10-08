@@ -360,12 +360,15 @@ pub mod live {
 
     /// The real file service, recording every write; the first
     /// `panics` writes panic instead (a job body that panics), and a
-    /// worker's (`an-io-*`) write of the file named in `refused` fails.
+    /// worker's (`an-io-*`) write of the file named in `refused` fails; a
+    /// read of the file named in `unreadable` is refused (another program
+    /// holding it without read sharing).
     #[derive(Default)]
     pub struct RecordingFiles {
         pub writes: Mutex<Vec<Write>>,
         pub panics: AtomicUsize,
         pub refused: Mutex<Option<String>>,
+        pub unreadable: Mutex<Option<String>>,
     }
 
     impl RecordingFiles {
@@ -430,6 +433,19 @@ pub mod live {
 
         fn is_private(&self, path: &Path) -> io::Result<bool> {
             StdSecureFiles.is_private(path)
+        }
+
+        fn read_file(&self, path: &Path) -> io::Result<Vec<u8>> {
+            if lock(&self.unreadable)
+                .as_deref()
+                .is_some_and(|name| path.file_name().is_some_and(|n| n == name))
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::ResourceBusy,
+                    "a file another program holds",
+                ));
+            }
+            std::fs::read(path)
         }
     }
 
@@ -575,10 +591,13 @@ pub mod live {
         }
     }
 
-    /// Polls `condition` every 5 ms for at most 5 s (threads at work; no
-    /// test waits on wall time otherwise).
+    /// Polls `condition` every 5 ms for at most 30 s (threads at work; no
+    /// test waits on wall time otherwise). Only ever asked for something
+    /// that happens, so the bound costs a passing test nothing; it is long
+    /// because a loaded CI runner (the whole suite's threads on two cores)
+    /// once took more than 5 s to settle a hook install.
     pub fn eventually(mut condition: impl FnMut() -> bool) -> bool {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             if condition() {
                 return true;

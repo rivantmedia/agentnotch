@@ -2042,7 +2042,14 @@ Windows specifics:
 | `typeReplies` | false | Windows addition: typing replies into a terminal is opt-in (§4.8) |
 
 Atomic, owner-only, version 1, unknown keys kept, bad values fall back per key. One writer:
-`an-core` (§1.2).
+`an-core` (§1.2). A file that doesn't parse is replaced by the next write; one that is there but
+can't be read (another program holds it without read sharing) is never written over: the run
+uses the defaults, reads it again on a backoff (2 s doubling to 60 s), and merges what the user
+changed meanwhile into it. A failed write is tried again on the same backoff. The cloud's
+off-switches and sign-out are saved by `an-core` when asked, before the call is queued. A stop
+runs in this order: `an-core` releases held requests and saves every store, the workers end,
+the cloud stops (its own files), then what the cloud sent as it stopped is applied to the
+stopped core and saved, before the process may end.
 
 ### 4.13 Sealed mode and dev switches (WP7 engine, WP9 glue)
 - `AGENTNOTCH_SAFE_MODE` seals (fails closed: any value except empty/0/false/no/off). Sealed:

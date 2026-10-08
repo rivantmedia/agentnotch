@@ -41,13 +41,18 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::Path;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 /// Where a call's answer goes.
 pub(crate) type Reply = Sender<Result<Value, CallError>>;
 
 /// Why calls still waiting are answered at a stop.
 const STOPPING: &str = "The app is stopping.";
+
+/// How long after a settings write (or read) failed it is tried again; the
+/// wait doubles each time it fails again, up to `SETTINGS_RETRY_MAX`.
+const SETTINGS_RETRY_FIRST: Duration = Duration::from_secs(2);
+const SETTINGS_RETRY_MAX: Duration = Duration::from_secs(60);
 
 /// A job handed to a lane and not back yet.
 pub(crate) struct PendingJob {
@@ -76,9 +81,18 @@ pub(crate) struct Core {
     /// The one settings write in flight: writes never overtake each other.
     settings_write: Option<JobId>,
     /// The last settings write handed out failed (or a stop drained it
-    /// before it ran): the file is behind until a later one lands, so a
-    /// stop's save writes it.
+    /// before it ran): the file is behind until a later one lands, so it is
+    /// tried again (`settings_retry`) and a stop's save writes it.
     settings_unsaved: bool,
+    /// `control-settings.json` is there but couldn't be read (another
+    /// program held it): the run goes on with the defaults, kept here to
+    /// tell what the user changed since, and nothing is written over the
+    /// file until a read succeeds and the two are merged.
+    settings_unread: Option<ControlSettings>,
+    /// When a failed settings write, or read, is tried again.
+    settings_retry: Option<SystemTime>,
+    /// The wait before the retry after that.
+    settings_backoff: Duration,
     pub(crate) registry: AccountRegistry,
     pub(crate) hooks: HookManager,
     pub(crate) usage: UsageStore,
@@ -133,30 +147,22 @@ impl Core {
     /// `control-settings.json` (the defaults when it is missing or doesn't
     /// parse), empty stores.
     pub(crate) fn load(cfg: HubConfig, platform: Platform) -> Core {
-        let path = cfg.roots.support.join(crate::persist::settings::FILE_NAME);
         let mut events = Vec::new();
-        let settings_file = match std::fs::read(&path) {
-            Ok(bytes) => SettingsFile::parse(&bytes).unwrap_or_else(|| {
-                events.push(HubEvent::Log(format!(
-                    "{} didn't parse; the defaults apply until a setting changes",
-                    crate::persist::settings::FILE_NAME
-                )));
-                SettingsFile::default()
-            }),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => SettingsFile::default(),
-            Err(e) => {
-                events.push(HubEvent::Log(format!(
-                    "{} unreadable ({:?}); the defaults apply",
-                    crate::persist::settings::FILE_NAME,
-                    e.kind()
-                )));
-                SettingsFile::default()
-            }
-        };
+        let (settings_file, settings_unread, settings_retry) =
+            match read_settings(&cfg, &platform, &mut events) {
+                SettingsRead::Read(file) => (file, None, None),
+                SettingsRead::Missing => (SettingsFile::default(), None, None),
+                SettingsRead::Unreadable => (
+                    SettingsFile::default(),
+                    Some(ControlSettings::default()),
+                    Some(platform.clock.now() + SETTINGS_RETRY_FIRST),
+                ),
+            };
         let settings = settings_file.settings();
         let mut persists = Persisting::default();
         let mut hooks = HookManager::configured(cfg.hook_exe.clone(), &cfg.flags);
-        if let Some(file) = read_support(&cfg.roots.support, PersistFile::HookInstall, &mut events)
+        let support = &cfg.roots.support;
+        if let Some(file) = read_support(&platform, support, PersistFile::HookInstall, &mut events)
             .and_then(|bytes| HookInstallFile::parse(&bytes))
         {
             hooks.set_record(file.to_model());
@@ -173,7 +179,7 @@ impl Core {
                 platform.files.clone(),
                 platform.processes.clone(),
             )));
-        if let Some(bytes) = read_support(&cfg.roots.support, PersistFile::Accounts, &mut events) {
+        if let Some(bytes) = read_support(&platform, support, PersistFile::Accounts, &mut events) {
             if !registry.load(&bytes) {
                 events.push(HubEvent::Log(format!(
                     "{} didn't parse; the accounts are found again",
@@ -201,9 +207,9 @@ impl Core {
             env_path,
             claude_binary_path: settings.claude_binary_path.as_ref().map(Into::into),
         });
-        let saved_usage = read_support(&cfg.roots.support, PersistFile::Usage, &mut events)
+        let saved_usage = read_support(&platform, support, PersistFile::Usage, &mut events)
             .and_then(|bytes| UsageStateFile::parse(&bytes));
-        let saved_review = read_support(&cfg.roots.support, PersistFile::Review, &mut events);
+        let saved_review = read_support(&platform, support, PersistFile::Review, &mut events);
         let sessions = session_store(
             cfg.roots.paths(),
             &platform,
@@ -228,6 +234,9 @@ impl Core {
             settings_dirty: false,
             settings_write: None,
             settings_unsaved: false,
+            settings_unread,
+            settings_retry,
+            settings_backoff: SETTINGS_RETRY_FIRST,
             registry,
             hooks,
             usage,
@@ -428,11 +437,29 @@ impl Core {
         self.usage_settings_changed(&old);
     }
 
-    /// Hands the settings write out when one is due and none is in flight.
+    /// Hands the settings write out when one is due and none is in flight:
+    /// after a change, or once a failed write's retry is due. While the file
+    /// couldn't be read, it is read again first (at the retry's time), and
+    /// nothing is written over it until that succeeds.
     fn schedule_settings_write(&mut self) {
-        if !self.settings_dirty || self.settings_write.is_some() {
+        if self.settings_write.is_some() {
             return;
         }
+        let now = self.platform.clock.now();
+        let retry_due = self.settings_retry.is_some_and(|at| at <= now);
+        if self.settings_unread.is_some() {
+            if !retry_due {
+                return;
+            }
+            if !self.reread_settings() {
+                self.retry_settings_later(now);
+                return;
+            }
+        }
+        if !(self.settings_dirty || (self.settings_unsaved && retry_due)) {
+            return;
+        }
+        self.settings_retry = None;
         self.settings_dirty = false;
         let bytes = self.settings_file.encode();
         let id = self.schedule(
@@ -443,6 +470,52 @@ impl Core {
             None,
         );
         self.settings_write = Some(id);
+    }
+
+    /// The next try after a failed settings write or read, each one waiting
+    /// twice as long as the one before (a file another program holds is
+    /// let go of in its own time; never a loop).
+    fn retry_settings_later(&mut self, now: SystemTime) {
+        self.settings_retry = Some(now + self.settings_backoff);
+        self.settings_backoff = (self.settings_backoff * 2).min(SETTINGS_RETRY_MAX);
+    }
+
+    /// The settings file is as the core has it: no retry is owed.
+    fn settings_saved(&mut self) {
+        self.settings_unsaved = false;
+        self.settings_retry = None;
+        self.settings_backoff = SETTINGS_RETRY_FIRST;
+    }
+
+    /// Reads a settings file that couldn't be read at load again (true:
+    /// read, or gone). What the user changed since load wins; every other
+    /// key, unknown ones included, comes back from the file.
+    fn reread_settings(&mut self) -> bool {
+        let Some(loaded) = self.settings_unread.clone() else {
+            return true;
+        };
+        let mut events = Vec::new();
+        let file = match read_settings(&self.cfg, &self.platform, &mut events) {
+            SettingsRead::Unreadable => return false,
+            SettingsRead::Missing => SettingsFile::default(),
+            SettingsRead::Read(file) => file,
+        };
+        self.events.extend(events);
+        self.settings_unread = None;
+        self.settings_saved();
+        let merged = merge_settings(&loaded, &self.settings, &file.settings());
+        // A write is owed only for what changed here; what came back from
+        // the file is in it already.
+        let dirty = self.settings_dirty;
+        self.settings_file = file;
+        self.replace_settings(merged);
+        self.settings_file.apply(&self.settings);
+        self.settings_dirty = dirty;
+        self.log(format!(
+            "{} read again; the saved settings apply",
+            crate::persist::settings::FILE_NAME
+        ));
+        true
     }
 
     /// The settings write in flight, if any (a stop waits for it, so the
@@ -478,13 +551,17 @@ impl Core {
         match result {
             JobResult::Persisted(outcome) if self.settings_write == Some(id) => {
                 self.settings_write = None;
-                // Each write carries the whole file, so one that lands
-                // makes up for any that failed before it.
-                self.settings_unsaved = outcome.is_err();
-                if let Err(why) = outcome {
-                    // Written again with the next change or at the stop
-                    // (never in a loop).
-                    self.log(format!("settings not saved: {why}"));
+                match outcome {
+                    // Each write carries the whole file, so one that lands
+                    // makes up for any that failed before it.
+                    Ok(()) => self.settings_saved(),
+                    Err(why) => {
+                        // Written again with the next change, at the
+                        // retry's time, or at the stop.
+                        self.settings_unsaved = true;
+                        self.retry_settings_later(now);
+                        self.log(format!("settings not saved: {why}"));
+                    }
                 }
             }
             JobResult::Persisted(outcome) => self.persisted(id, outcome),
@@ -626,6 +703,7 @@ impl Core {
             return None;
         }
         [
+            self.settings_retry,
             self.accounts_deadline(),
             self.usage_deadline(),
             self.hooks_deadline(),
@@ -663,12 +741,23 @@ impl Core {
     /// Writes what is unsaved now, synchronously (a stop; the process may
     /// end right after).
     pub(crate) fn save_now(&mut self) {
-        if self.settings_dirty || self.settings_write.is_some() || self.settings_unsaved {
+        let owed = |core: &Core| {
+            core.settings_dirty || core.settings_write.is_some() || core.settings_unsaved
+        };
+        if self.settings_unread.is_some() && !self.reread_settings() {
+            // Never the defaults over settings that are there.
+            if owed(self) {
+                self.log(format!(
+                    "settings not saved: {} still can't be read",
+                    crate::persist::settings::FILE_NAME
+                ));
+            }
+        } else if owed(self) {
             let bytes = self.settings_file.encode();
             match self.write_support_file(PersistFile::Settings, &bytes) {
                 Ok(()) => {
                     self.settings_dirty = false;
-                    self.settings_unsaved = false;
+                    self.settings_saved();
                 }
                 Err(why) => self.log(format!("settings not saved: {why}")),
             }
@@ -937,8 +1026,73 @@ fn phase_word(phase: &Phase) -> &'static str {
 
 /// One of the engine's files in `<support>`, as read at load: `None` when
 /// it isn't there (or can't be read, which is logged).
-fn read_support(support: &Path, file: PersistFile, events: &mut Vec<HubEvent>) -> Option<Vec<u8>> {
-    match std::fs::read(support.join(file.file_name())) {
+/// What reading `control-settings.json` gave.
+enum SettingsRead {
+    /// Read; a file that doesn't parse reads as the defaults (the next
+    /// write replaces it).
+    Read(SettingsFile),
+    Missing,
+    /// There, but refused (held without read sharing, or access denied for
+    /// a moment): not the same as broken.
+    Unreadable,
+}
+
+fn read_settings(cfg: &HubConfig, platform: &Platform, events: &mut Vec<HubEvent>) -> SettingsRead {
+    let name = crate::persist::settings::FILE_NAME;
+    match platform.files.read_file(&cfg.roots.support.join(name)) {
+        Ok(bytes) => SettingsRead::Read(SettingsFile::parse(&bytes).unwrap_or_else(|| {
+            events.push(HubEvent::Log(format!(
+                "{name} didn't parse; the defaults apply until a setting changes"
+            )));
+            SettingsFile::default()
+        })),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => SettingsRead::Missing,
+        Err(e) => {
+            events.push(HubEvent::Log(format!(
+                "{name} unreadable ({:?}); the defaults apply, and it is read again before anything is written over it",
+                e.kind()
+            )));
+            SettingsRead::Unreadable
+        }
+    }
+}
+
+/// The settings after a file that couldn't be read at load was read:
+/// `file`'s, except where the run changed one since (`loaded` → `now`).
+/// The device id is the file's when it has one: an id made meanwhile would
+/// make this PC a new device to the website.
+fn merge_settings(
+    loaded: &ControlSettings,
+    now: &ControlSettings,
+    file: &ControlSettings,
+) -> ControlSettings {
+    let (Ok(Value::Object(loaded)), Ok(Value::Object(changed)), Ok(Value::Object(mut merged))) = (
+        serde_json::to_value(loaded),
+        serde_json::to_value(now),
+        serde_json::to_value(file),
+    ) else {
+        return now.clone();
+    };
+    for (key, value) in changed {
+        if loaded.get(&key) != Some(&value) {
+            merged.insert(key, value);
+        }
+    }
+    let mut settings: ControlSettings =
+        serde_json::from_value(Value::Object(merged)).unwrap_or_else(|_| now.clone());
+    if file.cloud_device_id.is_some() {
+        settings.cloud_device_id = file.cloud_device_id.clone();
+    }
+    settings
+}
+
+fn read_support(
+    platform: &Platform,
+    support: &Path,
+    file: PersistFile,
+    events: &mut Vec<HubEvent>,
+) -> Option<Vec<u8>> {
+    match platform.files.read_file(&support.join(file.file_name())) {
         Ok(bytes) => Some(bytes),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => {

@@ -344,7 +344,7 @@ impl HubBackend for Runtime {
         };
         // Calls from here on wait for the core to come back, then are
         // answered on their own thread.
-        let mut idle = lock(&inner.idle);
+        let mut idle = Some(lock(&inner.idle));
         inner.running.store(false, Ordering::SeqCst);
         inner.failed.store(false, Ordering::SeqCst);
         // Children first: a probe in progress ends now (its job comes back
@@ -358,13 +358,13 @@ impl HubBackend for Runtime {
         if core_stopped {
             // A core that panicked isn't kept: the next start reads the
             // saved files again.
-            if let Ok(Some(core)) = running.core.join() {
-                *idle = Some(core);
+            if let (Ok(Some(core)), Some(idle)) = (running.core.join(), idle.as_mut()) {
+                **idle = Some(core);
             }
         } else {
             // The core stays with its thread; the next start reads the
             // saved files again.
-            drop(idle);
+            idle = None;
             inner.emit(&[HubEvent::Log(
                 "the engine didn't stop in time; it is left behind".into(),
             )]);
@@ -372,6 +372,16 @@ impl HubBackend for Runtime {
         // After the core: held requests are released before anything the
         // cloud has out is waited for.
         inner.stop_cloud();
+        // Last, what the cloud sent as it stopped (a switch it turned off,
+        // a refused session's sign-out): `an-core` has gone, so it is applied
+        // to the stopped core and saved here, before the process may end.
+        let events = idle
+            .as_mut()
+            .and_then(|idle| idle.as_mut())
+            .map(|core| inner.after_stop(core))
+            .unwrap_or_default();
+        drop(idle);
+        inner.emit(&events);
     }
 
     fn on_event(&self, sink: EventSink) {
@@ -530,6 +540,41 @@ impl Runtime {
 }
 
 impl Inner {
+    /// The end of a stop, with the core back: the settings the cloud's
+    /// stop sent, and calls that came in after `an-core` took the stop, are
+    /// applied to it and what they changed is saved now. Everything else
+    /// waits in order for the next start. Returns the events to emit once
+    /// the core's lock is let go.
+    fn after_stop(&self, core: &mut Core) -> Vec<HubEvent> {
+        let mut applied = false;
+        while let Ok(input) = self.rx.try_recv() {
+            match input {
+                Input::SetSetting { .. } | Input::Call { .. } => {
+                    core.handle(input);
+                    applied = true;
+                }
+                // Nothing is typed once the stop has begun.
+                Input::TypeCheckpoint { reply, .. } => {
+                    let _ = reply.send(false);
+                }
+                Input::Stop { done } => {
+                    let _ = done.send(());
+                }
+                other => core.backlog.push_back(other),
+            }
+        }
+        if !applied {
+            return core.take_events();
+        }
+        self.settle_inline(core);
+        core.save_now();
+        let mut events = core.take_events();
+        let now = self.platform.clock.now();
+        let mono = self.platform.clock.monotonic();
+        events.extend(lock(&self.publisher).publish(core, now, mono, true));
+        events
+    }
+
     /// Stops this run's cloud service, waiting a little for what it has out
     /// (its stores are saved as its thread ends).
     fn stop_cloud(&self) {
