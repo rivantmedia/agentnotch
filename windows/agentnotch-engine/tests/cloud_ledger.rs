@@ -1151,6 +1151,20 @@ fn whether_a_history_is_shared_is_kept_with_the_session() {
         reloaded.owners(b),
         vec![SessionOwner::new(None, F::ACCOUNT_KEY)]
     );
+    // An entry keeps what it was told first: a later answer changes nothing.
+    observe(
+        &reloaded,
+        vec![live(b).shared(true).build()],
+        &[b],
+        &[],
+        &[],
+        420.0,
+    );
+    assert_eq!(reloaded.shared_history(b), Some(false));
+    assert_eq!(
+        reloaded.owners(b),
+        vec![SessionOwner::new(None, F::ACCOUNT_KEY)]
+    );
 
     // A file written before the field: no `sharedHistory` anywhere in it.
     reloaded.save_now();
