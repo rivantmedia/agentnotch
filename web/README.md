@@ -351,14 +351,19 @@ Notes:
 
 ## Downloads
 
-`/download` offers the latest release of the Mac app from the repository in `RELEASES_REPO`
+`/download` offers the latest release of the app from the repository in `RELEASES_REPO`
 (`rivantmedia/agentnotch` unless set), which the repository's release workflow publishes. The
 latest release is the newest one that is neither a draft nor a prerelease. Each platform gets
 one file, picked by extension and by the words in its name, since GitHub renames uploads (a
 space becomes a dot): for the Mac the disk image, else the zip Sparkle updates from; for Windows
-an `.exe`, else an `.msi`; for Linux an `.AppImage`, else a `.deb` or `.rpm`. Sparkle's
-`appcast.xml`, signatures, checksums and anything named after upstream's Codenotch are never
-offered, and Windows and Linux read "Not available yet" until a release carries a file for them.
+the installer, `AgentNotch-<version>-Setup.exe` (another `.exe`, then an `.msi`, only without
+it); for Linux an `.AppImage`, else a `.deb` or `.rpm`. Sparkle's `appcast.xml`, the Windows
+update signature (`.exe.sig`) and feed (`latest.json`), Tauri's updater archives (`*.nsis.zip`),
+the hook program, checksums and anything named after upstream's Codenotch are never offered,
+and Windows and Linux read "Not available yet" until a release carries a file for them. Windows
+is labelled **Windows (preview)**: while a Windows installer is on offer the page also shows how
+to get past SmartScreen ("More info", then "Run anyway"), that Smart App Control blocks the
+unsigned app, and how to take the Claude Code hooks out when uninstalling.
 The rules are `src/lib/releases.ts`; the fetch is `src/server/releases.ts`.
 
 - **Caching.** The site asks GitHub's API for the 5 newest releases, and Next's Data Cache keeps

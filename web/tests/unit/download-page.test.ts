@@ -56,12 +56,12 @@ async function render(query: Record<string, string | string[]> = {}) {
   return renderToString(page).replace(/<!-- -->/g, "");
 }
 
-/** Each platform's card, by its heading. */
+/** Each platform's card, by its heading (the platform's name; "Windows (preview)" is "Windows"). */
 function cards(html: string): Record<string, string> {
   const found: Record<string, string> = {};
   for (const [card] of html.matchAll(/<li class="card[^"]*">[\s\S]*?<\/li>/g)) {
     const name = /<h3[^>]*>([^<]+)<\/h3>/.exec(card)?.[1];
-    if (name) found[name] = card;
+    if (name) found[name.replace(/ \(preview\)$/, "")] = card;
   }
   return found;
 }
@@ -179,7 +179,8 @@ describe("the download page", () => {
     const html = await render();
     const { Windows } = cards(html);
     expect(Windows).toContain('href="/download/windows"');
-    expect(Windows).toContain("Preview: Windows 10 or 11 (x64)");
+    expect(Windows).toMatch(/<h3[^>]*>Windows \(preview\)<\/h3>/);
+    expect(Windows).toContain("Windows 10 or 11 (x64) · not code-signed yet");
     expect(Windows).toContain("btn btn-primary");
     expect(html).toMatch(/Installing on Windows[\s\S]*?>Preview</);
     expect(html).toContain("isn&#x27;t code-signed yet");
@@ -195,7 +196,8 @@ describe("the download page", () => {
     let html = await render();
     expect(html).not.toContain("Installing on Windows");
     // The card still says what Windows will need.
-    expect(cards(html).Windows).toContain("Preview: Windows 10 or 11 (x64)");
+    expect(cards(html).Windows).toMatch(/<h3[^>]*>Windows \(preview\)<\/h3>/);
+    expect(cards(html).Windows).toContain("Windows 10 or 11 (x64)");
 
     getLatestRelease.mockResolvedValue({ kind: "none" });
     expect(await render()).not.toContain("Installing on Windows");

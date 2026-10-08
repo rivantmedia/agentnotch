@@ -573,15 +573,39 @@ Windows-only code needs Windows, and CI type-checks it for `x86_64-pc-windows-ms
 
 ### First use (Windows)
 
-The first start asks for the same consent as the Mac app: **Turn on** writes the hook entries
-into each tracked account's `settings.json` (`%USERPROFILE%\.claude\settings.json`, and the
-other folders a session runs in), and **Not now** writes nothing. Before every change it saves
-a backup (`settings.json.agentnotch-<time>.bak`, the five newest, and the file as it was before
-the first change as `settings.json.agentnotch.original.bak`), keeps the file's line endings and
-byte order mark, and refuses a file that doesn't parse. The hook is a small program,
-`agentnotch-hook.exe`, copied into `<config folder>\hooks\`; it talks only to this app's local
-pipe (`\\.\pipe\agentnotch-hook-<your SID>`, no network port) and always exits 0, so a missing
-or stopped app never blocks Claude Code.
+1. **Open Agent Notch** from the Start menu. The notch appears at the screen's edge, and the
+   tray icon's menu has **Settings**. Opening the app again while it runs brings Settings
+   forward.
+2. **Turn on Claude Code control.** It asks for the same consent as the Mac app. The card at
+   the top of Settings › Claude Code (Settings opens on that pane until you answer) and of the
+   sessions panel lists every `settings.json` it will edit:
+   `%USERPROFILE%\.claude\settings.json` and those of the other folders Claude Code runs in.
+   **Turn on** writes the hook entries there and wraps the status line; **Not now** writes
+   nothing (sessions still show, from Claude Code's own session files, but without approvals
+   from the notch). Before every change it saves a backup (`settings.json.agentnotch-<time>.bak`,
+   the five newest, and the file as it was before the first change as
+   `settings.json.agentnotch.original.bak`). It keeps the file's line endings and byte order
+   mark, and it refuses a file that doesn't parse or that another program holds open.
+3. **Restart Claude Code sessions that were already running**, as on the Mac.
+
+How the hooks work on Windows:
+
+- **The hook is a small program**, `agentnotch-hook.exe`, copied into `<config folder>\hooks\`.
+  It talks only to this app's local pipe (`\\.\pipe\agentnotch-hook-<your SID>`; no network
+  port; a pipe owned by anyone else, or by a low-integrity process, is refused). It always exits
+  0, so a missing or stopped app never blocks Claude Code.
+- **Two command forms.** Usually the entry is a plain command line,
+  `C:/Users/you/.claude/hooks/agentnotch-hook.exe hook`, which Git Bash and PowerShell both
+  run (with the folder's 8.3 short name when the path has a space or another character a shell
+  would read). When every Claude Code on the PC is 2.1.139 or later, VS Code's and Claude
+  Desktop's bundled copies included, it writes Claude Code's exec form (`command` plus `args`)
+  instead. A folder that neither form can name shows "Can't be hooked here", and no hook of
+  this app's stays there: an older Claude Code would run an exec-form entry without its
+  arguments, through Git Bash.
+- **The status line** is wrapped only when Git Bash is installed and the command needs no
+  PowerShell or cmd (and has no Windows `\` paths). Otherwise it is left alone and Settings says
+  why; usage then comes from Claude Code's own `get_usage` and `.claude.json`.
+- Sessions inside WSL aren't tracked yet.
 
 ### Privacy (Windows)
 
@@ -605,10 +629,12 @@ The rules in [Privacy](#privacy-what-it-reads-writes-and-runs) hold, with the Wi
 
 ### Uninstalling (Windows)
 
-Settings › Apps removes the program. Your Claude Code hooks are **kept** unless you tick
-**Delete the application data** in the uninstaller or pass `/REMOVEHOOKS` to it: an
-uninstall that ran by itself (a reinstall, an update) must never touch a `settings.json`. A
-hook left behind exits at once while the app is gone, so it does no harm. To take the hooks
+Settings › Apps removes the program; the uninstaller first asks a running Agent Notch to quit.
+Your Claude Code hooks are **kept** unless you tick **Delete the application data** in the
+uninstaller or pass `/REMOVEHOOKS` to it
+(`"%LOCALAPPDATA%\Agent Notch\uninstall.exe" /REMOVEHOOKS`): an uninstall that runs by
+itself (a reinstall, an update) must never touch a `settings.json`. A hook left behind exits
+at once while the app is gone, so it does no harm. To take the hooks
 out first, switch off Claude Code control (the hooks) in Settings (it restores each
 status line exactly), or run `"%LOCALAPPDATA%\Agent Notch\agentnotch.exe" uninstall-hooks`.
 Signed in to the website? **Sign out…** under *Cloud* first. **Delete the application data**
@@ -640,11 +666,25 @@ The same switches as above work, with these differences; the full table is Appen
   folder to run against a throwaway setup.
 - `AGENTNOTCH_DEV_BROWSER_LOG` (with `AGENTNOTCH_DEV=1`, never sealed) appends the sign-in's
   address to a file instead of opening a browser.
-- CI: `.github/workflows/agentnotch-windows.yml` builds the installer, runs the smoke test
+- Sealed only: `AGENTNOTCH_OPEN_PANEL_ON_LAUNCH`, `AGENTNOTCH_PANEL_SELF_TEST` (with
+  `AGENTNOTCH_SELF_TEST_OUT` and, for a scaled run, `AGENTNOTCH_SELF_TEST_SCALE=1.25`) and
+  `AGENTNOTCH_SNAPSHOT_CLAUDE=<dir>`; `windows\scripts\agentnotch-selftest.ps1` runs them.
+- **Command line.** `agentnotch.exe doctor` (what the app sees, whether it updates itself, and
+  a running copy's status), `inspect-accounts` (read-only), `install-hooks` (only after the
+  consent), `uninstall-hooks [--quiet]`, `control status|quit` (asks the running copy over its
+  pipe; exit 3 when none runs) and `autostart on|off`. Sealed, `uninstall-hooks` removes
+  nothing, and `inspect-accounts`, `install-hooks` and `control` are refused (exit 2).
+- CI: `.github/workflows/agentnotch-windows.yml` builds the installer and runs the smoke test
   (`windows/scripts/agentnotch-smoke.ps1`: install, sealed self-tests, the real hook program,
-  a fake website, updates, uninstall) and, in a job of its own, the pinned real Claude Code
-  against the installed app. `.github/workflows/claude-code-facts.yml` checks weekly what newer
-  Claude Code versions changed (it only reads their packages; it runs none of them).
+  a fake website, updates, uninstall). **The only place a real Claude Code ever runs** is that
+  workflow's `real-claude` job ("Real Claude Code (hermetic)",
+  `windows/scripts/smoke/real-claude.ps1`). It runs on a GitHub-hosted Windows runner and
+  refuses anywhere else, never for a release build. It installs Claude Code 2.1.285 from npm,
+  checked against its integrity hash, into a throwaway profile, with a fake API key, against a
+  fake Messages API on loopback, with the runner's firewall letting it reach nothing else. It
+  holds no secret and no login, and it runs against the app it just installed.
+  `.github/workflows/claude-code-facts.yml` checks weekly what newer Claude Code versions
+  changed (it only reads their packages; it runs none of them).
 
 ### Releases (Windows)
 
@@ -654,7 +694,9 @@ Windows goes out in the same release as the Mac, from the same *Release* workflo
 - **Six files.** `AgentNotch-<V>.dmg`, `AgentNotch-<V>.zip` and `appcast.xml` for the Mac, then
   `AgentNotch-<V>-Setup.exe` (the download), `AgentNotch-<V>-Setup.exe.sig` (its update
   signature) and `latest.json` (the Windows feed) for Windows. The website's `/download` page
-  offers the disk image and the installer, and never a signature, a feed or the Sparkle zip.
+  offers the disk image and the installer, under **Windows (preview)** with the SmartScreen
+  and Smart App Control steps, and never a signature or a feed. The release notes carry the
+  same Windows steps.
 - **Version.** `VERSION` and the `"version"` line of `windows/codenotch/tauri.conf.json` must
   be equal. `Scripts/bump-version.sh <V>` sets both (the release commit is its output);
   `Scripts/bump-version.sh --sync` copies `VERSION` into the Windows file, which is what a
@@ -748,16 +790,21 @@ Releases are published to this repository's
 - **Version.** The root `VERSION` file (one line, `major.minor.patch`; the first release is
   1.0.0) is the app's version. `Scripts/spm-build-app.sh` writes it as both
   `CFBundleShortVersionString` and `CFBundleVersion`, which is what Sparkle compares.
-  `project.yml`'s version numbers stay upstream's and only move with a merge.
-- **Releasing.** Raise `VERSION` and push the commit to `main`. A push to `main` that changes
+  `project.yml`'s version numbers stay upstream's and only move with a merge. The Windows
+  installer's version (`windows/codenotch/tauri.conf.json`) must equal it:
+  `Scripts/bump-version.sh <V>` sets both.
+- **Releasing.** Raise the version with `Scripts/bump-version.sh <V>` and push the commit to
+  `main`. A push to `main` that changes
   the update key (`Scripts/sparkle-public-ed-key.txt`) starts it too, which is how the first
   release goes out; on a version that is out already, that run does nothing. Runs wait their
   turn, one at a time in the order they started, and none is cancelled. The workflow runs the
   Fork workflow's checks first, then, on a macOS 26 runner with Xcode 26.6,
-  `Scripts/release-build.sh`. It creates the release `agentnotch-v<VERSION>`, titled
-  "Agent Notch <VERSION>", as a draft with three files: `AgentNotch-<VERSION>.dmg` (the
-  download), `AgentNotch-<VERSION>.zip` (the update) and `appcast.xml` (the feed). The notes
-  are the install steps plus GitHub's list of changes. Once every file is uploaded whole it
+  `Scripts/release-build.sh`, and, beside it, the Windows build (see
+  [Releases (Windows)](#releases-windows)). It creates the release `agentnotch-v<VERSION>`,
+  titled "Agent Notch <VERSION>", as a draft with the Mac's three files,
+  `AgentNotch-<VERSION>.dmg` (the download), `AgentNotch-<VERSION>.zip` (the update) and
+  `appcast.xml` (the feed), and Windows' three. The notes are the install steps plus GitHub's
+  list of changes. Once every file is uploaded whole it
   publishes the release as the latest, so `releases/latest/download/appcast.xml` never points
   at a release without its files. Tags start with `agentnotch-v` because upstream's `v1.x`
   tags are in every clone that fetches upstream.

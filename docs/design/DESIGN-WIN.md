@@ -1,8 +1,11 @@
 # Agent Notch for Windows: the binding design
 
-Status: binding spec for the implementers of the Windows port and for its documentation.
-Revision 2: amended after a feasibility review and a parity review; every point they raised is
-settled in the "Decisions log" at the end (F1–F27, P1–P25).
+Status: **implemented** (branch `windows-port`, released from 1.1.0 as "Windows (preview)").
+This was the binding spec for the implementers of the Windows port and for its documentation;
+where the implementation had to differ, the text below now says what the code does, and
+"What changed during implementation" at the very end lists those changes and where they are
+recorded. Revision 2: amended after a feasibility review and a parity review; every point they
+raised is settled in the "Decisions log" (F1–F27, P1–P25).
 Repo: `rivantmedia/agentnotch`. The port was built on branch `windows-port`. Upstream's Windows
 port lives in `windows/` (Rust + Tauri 2, upstream 642d329 = Codenotch 1.18.0, unmodified in the
 fork before this work).
@@ -53,7 +56,8 @@ honest fallback when Windows cannot match the Mac.
    "args": ["hook","--exec"]`) only when every Claude Code found on the PC, bundled copies
    included, is known and at least `EXEC_FORM_MIN`, a constant set only from committed bundle
    evidence (§4.3, §6.2 facts job). A folder where neither form is possible is shown as not
-   hookable; nothing is written there.
+   hookable; nothing of ours is added there, and exec-form entries an earlier pass wrote are
+   taken out (an older Claude Code runs them without their `args`, §4.3).
 4. **Upstream stays upstream.** `windows/codenotch` gets small tagged seams only (§2.5); all
    logic is in fork crates; the glue module `windows/codenotch/src/agentnotch/` holds no logic.
 5. **Engine crate** `agentnotch-engine`: platform-independent, no Tauri, no `windows*` crates, no
@@ -227,7 +231,14 @@ server.
   SECURITY_SQOS_PRESENT|SECURITY_IDENTIFICATION, NULL)`: the server may identify the client but
   never act as it (every client open sets these flags; a test pins it).
   `ERROR_FILE_NOT_FOUND` → the app is not running → exit 0 immediately, no output.
-  `ERROR_PIPE_BUSY` → `WaitNamedPipeW` for what is left of the budget, retry once, else exit 0.
+  `ERROR_PIPE_BUSY` → `WaitNamedPipeW` for what is left of the budget (`busy_wait_ms`: never 0,
+  which means "the server's default", never `INFINITE`), then open again, **as often as the
+  budget allows**; when it is spent, exit 0. Not "retry once": every waiting client wakes when
+  an instance comes free and only one gets it, and the hooks of parallel tool calls arrive
+  together, so a single retry lost hooks under a burst. `WaitNamedPipeW` failing with
+  `ERROR_FILE_NOT_FOUND` means the app went away meanwhile (no app, exit 0). The app's own
+  client (`agentnotch-win::pipe_server::client`: `control`, the doctor) follows the same rule
+  up to its deadline.
 - Server check: `GetSecurityInfo(pipe, SE_KERNEL_OBJECT, OWNER|DACL)`: the owner must be the
   hook's own user SID, the DACL must be protected and hold only allow ACEs for that SID and
   SYSTEM; else exit 0 without writing. This reads the pipe object, not the server process, so it
@@ -2311,8 +2322,10 @@ kept product phrases.
 Three layers, because no person runs the Windows app before users do:
 1. **Machine-checked layout invariants** in the sealed self-test (§7.4), on every edge and at
    100 %, 125 % and 150 % page scale (hosted runners are 1024×768 at 100 %, so the extra scales
-   are separate sealed runs with `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--force-device-scale-factor=1.25`
-   / `1.5`; window geometry at real 125 %, 150 % and mixed-DPI monitor layouts is covered by the
+   are separate sealed runs with the app's sealed-only `AGENTNOTCH_SELF_TEST_SCALE=1.25` / `1.5`,
+   which sets the pages' `ICoreWebView2Controller3::RasterizationScale` and places the panel as
+   a monitor at that scale would; WebView2 ignores `--force-device-scale-factor`, and a run
+   fails unless its pages report the scale asked for; window geometry at real 125 %, 150 % and mixed-DPI monitor layouts is covered by the
    engine's `geometry` vectors, §7.2): badges stay inside the ring pill and never overlap the % label
    on the flat edges (UI§3.3); every interactive element of the notch lies inside a hot rect;
    no text overflows its box (`scrollWidth > clientWidth` on any `[data-an-text]`) in the panel
@@ -2752,7 +2765,8 @@ before and after each run):
   smoke script asserts: every rect inside its monitor's work area, the tail offset inside the
   card's corners, `WS_EX_TOPMOST` set, `WS_EX_NOACTIVATE` set for the auto-open case, zero CSP
   violations and page errors, every invariant true, round trips OK. It runs three times: at
-  100 %, and with `--force-device-scale-factor=1.25` and `1.5` (§5.6).
+  100 %, and with `AGENTNOTCH_SELF_TEST_SCALE=1.25` and `1.5` (§5.6; `windows/scripts/agentnotch-selftest.ps1`
+  and the smoke test's phase 4 set it).
 - `AGENTNOTCH_SNAPSHOT_CLAUDE=<dir>`: renders fixture states (UI§10's inventory: panel every
   state, needs-you, busy, filtered, undo, banners, consent, empty; chat approval, plan, question,
   tasks, composer, terminal-only, no route; settings first run, full, cloud signed in/out; notch
@@ -3262,12 +3276,13 @@ source `tauri.conf.json`; the test file is not that file.)
 | `AGENTNOTCH_STATUSLINE_DEPTH` | hook exe (`statusline`) | set by the wrapper for the command it chains; when already present the wrapper chains nothing (loop guard, §4.3) |
 | `AGENTNOTCH_CI_ADMIN` | `win_admin.rs` | allows the tests that create a local user and spawn medium-integrity processes (§6.1) |
 | `FAKE_CLAUDE_VERSION`, `FAKE_CLAUDE_USAGE`, `FAKE_CLAUDE_LOG` | `fake-claude.exe` (tests, smoke) | its `--version` answer, its `get_usage` fixture, its call log (§2.2) |
-| `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` | WebView2 itself (not the app) | set only by the smoke test: `--remote-debugging-port=<p>` for the CDP driver, `--force-device-scale-factor=<s>` for the scaled self-test runs |
+| `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` | WebView2 itself (not the app) | set only by the smoke test: `--remote-debugging-port=<p>` for the CDP driver (never a scale: WebView2 ignores `--force-device-scale-factor`) |
 | `AGENTNOTCH_SOCKET` | app; hook only with `AGENTNOTCH_DEV=1` | pipe name override (`\\.\pipe\…`) |
 | `AGENTNOTCH_EXTRA_CONFIG_DIRS` | app | extra config folders, `;`-separated |
 | `AGENTNOTCH_WEB_URL` | app (not sealed) | sync website override (https, or http to localhost) |
 | `--dump-state` / `AGENTNOTCH_DUMP_STATE` | app | one line per session change into `run.log` |
 | `AGENTNOTCH_OPEN_PANEL_ON_LAUNCH`, `AGENTNOTCH_PANEL_SELF_TEST`, `AGENTNOTCH_SELF_TEST_OUT`, `AGENTNOTCH_SNAPSHOT_CLAUDE` | app, sealed only | §7.4 |
+| `AGENTNOTCH_SELF_TEST_SCALE` | app, sealed only, with `AGENTNOTCH_PANEL_SELF_TEST` | the page scale of a scaled self-test run (`1.25`, `1.5`): sets the pages' WebView2 `RasterizationScale` and places the panel as a monitor at that scale would (§5.6, §7.4) |
 | `AGENTNOTCH_CONTRACT_OUT`, `AGENTNOTCH_CONTRACT_RESPONSE`, `AGENTNOTCH_CONTRACT_APP` | engine tests, e2e script | §4.11 |
 | `USERPROFILE` | the engine's `home` (as Claude Code resolves it) | how the smoke test points the app at a temporary Claude setup |
 | `CLAUDE_PID`, `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_SESSION_ATTENDED`, `CLAUDE_CODE_ENTRYPOINT`, `WT_SESSION`, `TERM_PROGRAM` | hook exe | forwarded fields (§1.4) |
@@ -3371,3 +3386,71 @@ Questions that need the maintainer (everything else above is decided):
 - **Q2** as recommended: pin the Windows public key in the repo after 1.1.0 publishes.
 - **Ship sequence** (the maintainer chose "merge and release when green"): all CI green on
   `windows-port`, merge to `main`, a Release dry run on main, then the `VERSION` bump to 1.1.0.
+
+---
+
+## What changed during implementation
+
+The port is implemented as specified above, with these differences (the text above already says
+what the code does; this list is the record). The findings come from the work packages' progress
+logs and the two cross-cutting reviews, kept beside the checkout in `an-work/` (`wp/wp<N>-progress.md`,
+`wp/integration-progress.md`, `review/fixes.md`, `review/fixes2.md`); the commits named are on
+`windows-port`.
+
+- **Busy pipe (§1.4).** "Retry once" on `ERROR_PIPE_BUSY` lost hooks when parallel tool calls
+  fired together; every client now waits again for as long as its budget lasts (WP1's check,
+  3bf3581; wp1-progress, integration-progress "For the lead").
+- **Who may own the pipe (§1.4).** Besides owner and DACL, a client refuses a pipe whose
+  integrity label is below Medium, and the server refuses a client below Medium, so a
+  Low-integrity process of the same user can't squat the name (review, f910a35; review/fixes.md).
+- **Scaled self-test runs (§5.6, §7.4, App. C).** WebView2 ignores `--force-device-scale-factor`;
+  the 125 % and 150 % runs use the sealed-only `AGENTNOTCH_SELF_TEST_SCALE`, which sets
+  `RasterizationScale` (WP9, 539a9b4; the smoke test's phase 4 followed in 25fca72).
+- **Exec form (§4.3).** `EXEC_FORM_MIN` is derived from the committed facts file (the first
+  version after the last one without `hook_exec_form`: 2.1.139), so exec form is live wherever
+  every Claude Code seen is that new (integration f6800d5). The real-Claude job proved both
+  forms. A folder no form can name now has our exec-form entries taken out, because an older
+  Claude Code runs `command` without its `args` through Git Bash, where some paths exit 2; and a
+  `settings.json` another program holds is retried, then reported as in use, never as invalid
+  JSON (review, e59ff57; review/fixes.md).
+- **Typing a reply (§4.8).** Claude's start time comes only from the session (a reused pid can't
+  confirm itself, f5d4ac7). Terminal lookups wait at most 10 s, the core is asked again before
+  the first key, and Return is never pressed 20 s or more after the call (WP7's check, 5337871).
+- **Approvals of cut text (§4.7, §5.3).** A request or plan longer than the chat shows whole (200,000
+  characters) is marked as cut and offers only Deny / Keep planning and the terminal (review,
+  b1a3776).
+- **Stopping.** Every way of quitting stops the hub at `RunEvent::Exit` (stores saved,
+  held requests released), and a stop saves what the cloud sent last. A failed update launch
+  starts the hub again. A settings write that failed is retried, never over an unreadable file
+  (WP7's check, 5337871; hub review, f07f624, 1d6bb1f; review/fixes2.md).
+- **Links at a cold start (§4.10).** A banner link that started the app waits up to 5 s for the
+  launch's registry reads before it calls a session unknown (hub review, 1f18b2d).
+- **Sealed `control`.** A sealed copy refuses `control status|quit` (exit 2) and never reaches
+  the real copy's pipe (hub review, eb75637; §4.14).
+- **`open_settings {tab}`.** The tab is accepted and ignored: upstream's settings window opens
+  on the page it was last left on. The first launch still lands on Claude Code, because
+  `settings.js` shows that tab on the first snapshot that needs consent (WP9/WP10).
+- **The token-free check (§6.7)** also polices the glue's calls into upstream's dormant token,
+  watcher and doctor paths (review, ba6bc8a).
+- **Windows integration (WP6, §4.9).** These follow the Mac's walk on purpose but differ from it:
+  `screen_windows` keeps windows of unknown pids (they still cover what is under them) and drops
+  the desktop and taskbar classes. A failed console-helper run means "unknown", never "no
+  console". "Full screen" means covering the monitor without being maximized, or exactly the
+  monitor's rect (wp6-progress).
+- **Release (§6.4).** `release-tool` and `keys` run only when the release has Windows, so a
+  `skip_windows` release never waits on them, and `website` also needs `checks` (WP11, cb65b8b;
+  wp11-progress). The bridge release a key rotation would need (§6.4 item 6) is not built; the
+  README, CLAUDE.md and `release-make-keys.sh` say so.
+- **The hermetic real-Claude job (Q3)** pins Claude Code 2.1.285. Scenarios 1 to 4 run headless
+  with `--permission-mode default` (2.1.285 starts in auto mode otherwise). Scenario 5, the
+  status line, runs in a ConPTY because print mode never runs it (WP11, 90a62f1; WP7, a348193,
+  b5ee573).
+- **CI order.** The M1 step (sealed self-test and snapshots) runs after the smoke test, whose
+  preflight refuses a runner that already holds Agent Notch data (b7a491e).
+- **Every smoke-test gate is open** (`windows/scripts/smoke/gates.json`). Known flakes, each
+  green on a rerun, are listed in the integration log: hub_consent's waits (now bounded at
+  30 s), `fail_open`'s watchdog trace, and the real-Claude interactive scenario.
+- **Still open, for later releases:** Authenticode signing (the `windows-signing` environment
+  and its secrets); upstream's `report_dpr` correction loop at 125 %; paths over `MAX_PATH`
+  and volumes without 8.3 names (not proven on Windows); a light-taskbar variant of the tray
+  dot.

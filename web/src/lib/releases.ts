@@ -228,8 +228,11 @@ const NOT_INSTALLER_WORDS = new Set([
   "debug",
   "src",
   "source",
+  // agentnotch-hook.exe is a part of the installed app, never something to run on its own.
+  "hook",
 ]);
 const WINDOWS_WORDS = new Set(["win", "windows", "win32", "win64"]);
+const SETUP_WORDS = new Set(["setup", "installer", "install"]);
 const LINUX_WORDS = new Set(["linux"]);
 const MAC_WORDS = new Set(["mac", "macos", "darwin", "osx"]);
 
@@ -252,10 +255,13 @@ function assetKind(name: string): { platform: Platform; rank: number } | null {
 
   if (lower.endsWith(".dmg")) return { platform: "mac", rank: 0 };
   if (lower.endsWith(".pkg")) return { platform: "mac", rank: 1 };
-  if (lower.endsWith(".exe")) return { platform: "windows", rank: 0 };
-  if (lower.endsWith(".msi")) return { platform: "windows", rank: 1 };
+  // The release's Windows download is AgentNotch-<version>-Setup.exe (Tauri's NSIS installer);
+  // another .exe ranks after it, so an extra program added to a release by hand never wins.
+  if (lower.endsWith(".exe"))
+    return { platform: "windows", rank: says(SETUP_WORDS) ? 0 : 1 };
+  if (lower.endsWith(".msi")) return { platform: "windows", rank: 2 };
   if (lower.endsWith(".msix") || lower.endsWith(".appx"))
-    return { platform: "windows", rank: 2 };
+    return { platform: "windows", rank: 3 };
   if (lower.endsWith(".appimage")) return { platform: "linux", rank: 0 };
   if (lower.endsWith(".deb")) return { platform: "linux", rank: 1 };
   if (lower.endsWith(".rpm")) return { platform: "linux", rank: 2 };
@@ -265,7 +271,7 @@ function assetKind(name: string): { platform: Platform; rank: number } | null {
     return null;
   }
   if (lower.endsWith(".zip")) {
-    if (says(WINDOWS_WORDS)) return { platform: "windows", rank: 3 };
+    if (says(WINDOWS_WORDS)) return { platform: "windows", rank: 4 };
     if (says(LINUX_WORDS)) return { platform: "linux", rank: 4 };
     // The Mac app's Sparkle archive (AgentNotch-<version>.zip) names no platform. The disk
     // image beside it ranks first; the archive is a fallback.

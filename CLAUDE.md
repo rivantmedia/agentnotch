@@ -23,9 +23,12 @@ across several accounts**:
 - Works with the **Claude Parallel Profiles** VS Code extension (see below).
 - **Downloads and self-updates** from the fork's own GitHub Releases (rivantmedia/agentnotch):
   the release workflow (a push to main that changes `VERSION` or the update key) publishes
-  `AgentNotch-<V>.dmg`, the Sparkle zip and `appcast.xml`; release builds update themselves
-  through Sparkle (EdDSA-signed, the fork's feed only, never upstream's); the website's
-  `/download` page links the latest release.
+  `AgentNotch-<V>.dmg`, the Sparkle zip and `appcast.xml`, and (from 1.1.0, as
+  "Windows (preview)") `AgentNotch-<V>-Setup.exe`, its `.sig` and `latest.json`; release builds
+  update themselves (the Mac through Sparkle, EdDSA-signed, the fork's feed only, never
+  upstream's; Windows through Tauri's updater with a key derived from the same seed); the
+  website's `/download` page links the latest release.
+- A **Windows port** (preview) in `windows/`: see "Windows port (preview)".
 
 The app was called **Superpowered Codenotch** until it was renamed; the engine still treats
 hook entries, status line wrappers and backups under that name as its own (`AppIdentity.former*`,
@@ -70,7 +73,7 @@ These apply to every session and every agent working in this repo.
 | `project.yml`, `Makefile` | Upstream's xcodegen/Xcode path, kept working (the local package is wired into both). Not the fork's release path: `make appcast` stays refused (its recipe publishes upstream's hivinz.com feed). |
 | `web/` | The cloud sync website: Next.js (T3: tRPC, Prisma, Tailwind, TypeScript) on Supabase (Postgres, Auth with Google). Its own README covers setup and checks (`npm test`, `npm run typecheck`). `web/.env` holds real values and stays untracked; `.env.example` has placeholders. |
 | `web/contract/` | The **fixed** app⇄website API (`README.md` + JSON fixtures both sides test against: field names, key derivation, limits, error shape). Change a fixture only together with both sides. |
-| `web/src/app/download/` (`page.tsx`, `loading.tsx`, `[platform]/route.ts`), `web/src/lib/releases.ts`, `web/src/server/releases.ts` | The website's public download page. `lib/releases.ts` is pure (release pick, asset classifier: dmg > pkg > zip for Mac, future Windows/Linux names, never `codenotch`/appcast/signatures; `isReleaseDownloadUrl`; User-Agent platform); `server/releases.ts` fetches `GET /repos/<RELEASES_REPO>/releases?per_page=5` (default `rivantmedia/agentnotch`, optional `GITHUB_RELEASES_TOKEN`, recommended on Vercel, whose shared outbound addresses share GitHub's 60 unauthenticated requests an hour; 5-minute Next cache of 200s only; never throws). `/download/<mac\|windows\|linux>` 302s only to `https://github.com/<repo>/releases/download/…` (`private, no-store`). Tests never call GitHub. |
+| `web/src/app/download/` (`page.tsx`, `loading.tsx`, `[platform]/route.ts`), `web/src/lib/releases.ts`, `web/src/server/releases.ts` | The website's public download page. `lib/releases.ts` is pure (release pick, asset classifier: dmg > pkg > zip for Mac; for Windows `AgentNotch-<V>-Setup.exe` > another `.exe` > `.msi` > `.msix`; Linux names; never `codenotch`, appcast, `.sig`, `latest.json`, `*.nsis.zip`/`*.msi.zip` or the hook exe; `isReleaseDownloadUrl`; User-Agent platform); `page.tsx` titles the Windows card "Windows (preview)" and, while a Windows installer is on offer, shows the SmartScreen / Smart App Control steps; `server/releases.ts` fetches `GET /repos/<RELEASES_REPO>/releases?per_page=5` (default `rivantmedia/agentnotch`, optional `GITHUB_RELEASES_TOKEN`, recommended on Vercel, whose shared outbound addresses share GitHub's 60 unauthenticated requests an hour; 5-minute Next cache of 200s only; never throws). `/download/<mac\|windows\|linux>` 302s only to `https://github.com/<repo>/releases/download/…` (`private, no-store`). Tests never call GitHub. |
 | `windows/` | The **Windows port (preview)**: upstream's Tauri 2 crate `windows/codenotch` (edited only at listed seams) plus fork crates `agentnotch-{proto,engine,win,hook,release}` and the glue `windows/codenotch/src/agentnotch/` (holds no logic) with its UI in `windows/codenotch/ui/agentnotch/`. See "Windows port (preview)" below. Design: `docs/design/DESIGN-WIN.md`; porting notes beside it. |
 | `windows/scripts/`, `windows/tools/` | `agentnotch-build.ps1` (hook, app, NSIS installer, signing, `windows-release-info.env`), `agentnotch-smoke.ps1` and `smoke/` (installer smoke test and its Node helpers; `smoke/real-claude*` is the hermetic real-Claude-Code job), `check-claude-code-facts.mjs`, `tools/` (pinned `@tauri-apps/cli`, the PowerShell and Node tests, `release-harness/`: a mini Actions runner that runs `release.yml`'s shell steps against a fake `gh`). |
 | `.github/workflows/agentnotch-windows.yml`, `claude-code-facts.yml` | The reusable Windows workflow (build, smoke test, signing check, the `real-claude` job; `inputs.release` builds for a release and uploads the installer) and the weekly Claude Code facts check. |
@@ -405,14 +408,21 @@ Packages/ClaudeControl/Scripts/embed-scripts.sh [--check]
     `releases/latest/download/Codenotch.dmg` relatively.
 - **`release.yml`.**
   - Triggers: a push to main that changes `VERSION` or `Scripts/sparkle-public-ed-key.txt` (the
-    first release goes out on the key commit), or `workflow_dispatch` (inputs `dry_run` and
-    `rotate_update_key`, labelled "Publish although the update key changed…"). Top-level
-    `contents: read`. Concurrency group `release` with `queue: max` and no cancelling: runs
-    queue first in, first out, dry runs in the same group, because `fork.yml`'s group
-    (`Release-<ref>` inside a Release run) cancels in progress.
-  - Job `checks` is `fork.yml` (`workflow_call`). Job `release` runs only in
-    rivantmedia/agentnotch, on macos-26 with `Xcode_26.6`, with `contents: write` and
-    `environment: release`, whose only deployment branch is main and which holds every secret.
+    first release goes out on the key commit), or `workflow_dispatch` (inputs `dry_run`,
+    `rotate_update_key`, labelled "Publish although the update key changed…", and
+    `skip_windows`). Top-level `contents: read`. Concurrency group `release` with
+    `queue: max` and no cancelling: runs queue first in, first out, dry runs in the same group,
+    because `fork.yml`'s group (`Release-<ref>` inside a Release run) cancels in progress.
+  - Jobs: `checks` is `fork.yml` (`workflow_call`). `plan` (ubuntu, no secret, only in
+    rivantmedia/agentnotch) decides what a run publishes. `mac` (macos-26 with `Xcode_26.6`,
+    `environment: release`) runs `release-build.sh` exactly as before Windows existed.
+    `release-tool` builds `agentnotch-release` with no secret in reach. `keys` (`release`)
+    derives the Windows update key. `windows` calls `agentnotch-windows.yml` with
+    `release: true` and the public key (tests, installer, smoke test; no `real-claude` job).
+    `sign-windows` (`release`) signs the installer and writes `latest.json`. `publish`, the
+    only job with `contents: write`, runs no repository code. `website` refreshes `/download`'s
+    cache with an OIDC token and never fails the run. The `release` environment's only
+    deployment branch is main, and it holds every secret.
   - The plan step first fails any ref other than main, dry runs included. Then an already
     published version is a green skip (a key-only push on a released version lands here), and
     its own leftover draft is replaced. A foreign draft, the tag at another commit, a `VERSION`
@@ -423,12 +433,15 @@ Packages/ClaudeControl/Scripts/embed-scripts.sh [--check]
   - With no `SPARKLE_ED_PRIVATE_KEY` or no committed public key, it fails with setup steps in
     the run summary (the environment commands; a missing key file means pushing it to main,
     since a re-run checks out the same commit; a missing secret alone means re-running).
-  - Otherwise it runs `release-build.sh` and creates a draft with the three assets. The notes
-    carry install steps (Gatekeeper/`xattr` only when not notarized) and the updates line,
-    plus `--generate-notes` from the previous tag. It checks each uploaded size, then
-    publishes with `--draft=false --latest`, then gives a warning-only check that the live
-    feed serves V.
-  - A dry run uploads the artifact `AgentNotch-<V>-dry-run` and publishes nothing.
+  - Otherwise `publish` creates a draft with the six assets (three with `skip_windows`). The
+    notes carry the Mac install steps (Gatekeeper/`xattr` only when not notarized), the
+    updates line, the "Windows (preview)" steps (SmartScreen and Smart App Control only while
+    `AUTHENTICODE=unsigned`) and `--generate-notes` from the previous tag. It checks that the
+    draft holds exactly those files, each at its built size, then publishes with
+    `--draft=false --latest`, then gives a warning-only check that both live feeds serve V.
+  - A dry run uploads the artifact `AgentNotch-<V>-dry-run` (the six files) and publishes
+    nothing. Its Windows installer is a release build: it carries the real update key and the
+    feed.
 - **Secrets** (the maintainer makes them with `release-make-keys.sh`, never a session), all in
   the `release` environment; a repository-level copy reaches every branch and should be deleted:
   - `SPARKLE_ED_PRIVATE_KEY`: required; the base64 of the 32-byte seed.
@@ -452,8 +465,9 @@ Packages/ClaudeControl/Scripts/embed-scripts.sh [--check]
   - Sparkle keeps its settings as `SU*` keys in the app's defaults domain, and its downloads in
     `~/Library/Caches/com.rivantmedia.agentnotch/org.sparkle-project.Sparkle`. With the gate
     closed it makes no controller, so no feed request is sent.
-- **Website:** `/download` and `/download/<platform>` (see Layout). Windows and Linux read "Not
-  available yet" until a release carries a matching asset (Windows `.exe`, `.msi`,
+- **Website:** `/download` and `/download/<platform>` (see Layout). Windows is shown as
+  "Windows (preview)". Windows and Linux read "Not available yet" until a release carries a
+  matching asset (Windows `AgentNotch-<V>-Setup.exe`, else another `.exe`, `.msi`,
   `.msix`/`.appx`; Linux `.AppImage`, `.deb`, `.rpm`; or an archive whose name says the
   platform: `assetKind` in `web/src/lib/releases.ts`).
 
@@ -513,14 +527,27 @@ changing behaviour.
   `fork.yml`, as does `bash windows/tools/tests/bump-version.test.sh` (`bump-version.sh` in a
   temporary copy).
 - **Never run `claude`: the exception.** Real Claude Code runs only in the `real-claude` job
-  of `agentnotch-windows.yml`, on a GitHub-hosted Windows runner (`real-claude.ps1` refuses
-  anywhere else, a self-hosted runner included), never in a release build, in a temporary profile
-  (`USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `CLAUDE_CONFIG_DIR`), at a pinned version
-  (installed from npm with its integrity hash), with a fake API key, against a fake Messages API
-  on loopback, firewalled to loopback, with no secrets and no login token anywhere. Its result
-  is evidence for the hook forms and the exec-form version floor (`EXEC_FORM_MIN`). The Mac, every
-  test and every other job still never run `claude`; the smoke test pins its probe to
-  `fake-claude.exe`. The gate for the job is `windows/scripts/smoke/gates.json`.
+  ("Real Claude Code (hermetic)") of `.github/workflows/agentnotch-windows.yml`, driven by
+  `windows/scripts/smoke/real-claude.ps1`:
+  - on a GitHub-hosted Windows runner only: the script refuses unless it is on Windows with
+    `GITHUB_ACTIONS=true` and `RUNNER_ENVIRONMENT=github-hosted` (never a developer's PC or a
+    self-hosted runner), and the job never runs for a release build (`!inputs.release`);
+  - Claude Code 2.1.285 exactly (`$script:ClaudeCodeVersion`), installed from npm with
+    `--ignore-scripts` into a temporary prefix and checked against the win32-x64 package's
+    sha512 integrity;
+  - in a temporary profile (`USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `CLAUDE_CONFIG_DIR`),
+    with `ANTHROPIC_*`, `CLAUDE*` and the runner's tokens scrubbed from its environment;
+  - with the fake API key `fake-key-not-a-secret`, against the fake Messages API
+    (`smoke/fake-anthropic.mjs`) on loopback, and firewall rules that block its executables
+    from everything but loopback;
+  - with no secret and no login token anywhere; the script checks afterwards that no login
+    file appeared.
+  It drives the installed app (string and exec-form hook entries, `CLAUDE_PID`/`CLAUDE_CONFIG_DIR`,
+  `sessions\<pid>.json`, allow/deny/answers/plans from the panel, the status line in a ConPTY)
+  and is the evidence for the hook forms and `EXEC_FORM_MIN`. Its gate is `realClaude` in
+  `windows/scripts/smoke/gates.json`. The Mac, every test and every other job still never run
+  `claude`; the smoke test pins its probe to `fake-claude.exe`. Never run `real-claude.ps1`
+  anywhere but that job.
 - **Version.** `VERSION` and `windows/codenotch/tauri.conf.json`'s `"version"` must be equal
   (`check-seams.sh` and `agentnotch-build.ps1` check it). `Scripts/bump-version.sh <V>` sets both
   and prints what changed (exit 2 on a bad version or a missing line); the release commit is its
@@ -555,8 +582,10 @@ changing behaviour.
     Without them the build says `AUTHENTICODE=unsigned` in `windows-release-info.env` and the
     release notes carry the SmartScreen and Smart App Control steps. Never set these, as with
     every other secret.
-  - A build without `-UpdaterPubkey` (branch, PR, dry run's smoke build, a copy built from
-    source) carries no key and no endpoint and never updates; the doctor says so.
+  - A build without `-UpdaterPubkey` (every branch and PR build of `agentnotch-windows.yml`, a
+    copy built from source) carries no key and no endpoint and never updates; the doctor says
+    so. Only `release.yml`'s `windows` job (a dry run's too) passes the key: never run that
+    installer on a PC with a real install.
   - Never ship `windows-package.yml`'s output, as before.
 - **Windows facts the engine relies on.**
   - Accounts are config folders under `%USERPROFILE%` as on the Mac (`CLAUDE_CONFIG_DIR`, else
@@ -565,17 +594,24 @@ changing behaviour.
     `C:\Users\me\proj` is `C--Users-me-proj`, and the hook's `transcript_path` is preferred.
     `AGENTNOTCH_EXTRA_CONFIG_DIRS` splits on `;`.
   - Hook IPC is a named pipe, `\\.\pipe\agentnotch-hook-<SID>` (no TCP port; the official Windows
-    Codenotch's `127.0.0.1:48666` is not used), owner-only. State is `<support>` =
+    Codenotch's `127.0.0.1:48666` is not used), owner-only. Clients refuse a pipe whose owner,
+    DACL or integrity label (below Medium) isn't ours, and the server refuses a client below
+    Medium. A client that finds every instance busy waits again for as long as its budget
+    lasts (not "retry once": parallel tool calls' hooks arrive together). State is `<support>` =
     `%LOCALAPPDATA%\com.rivantmedia.agentnotch\Claude`; upstream's config is
     `%APPDATA%\Agent Notch`. The install dir is `%LOCALAPPDATA%\Agent Notch`.
   - Hook command forms: a string (`C:/Users/me/.claude/hooks/agentnotch-hook.exe hook`, unquoted,
     forward slashes, parses in Git Bash and PowerShell alike) or Claude Code's exec form
-    (`command` + `args`), written only when every Claude Code version seen is at least
-    `EXEC_FORM_MIN`. From `claude-code-facts.json` (committed; `claude-code-facts.yml` regenerates
-    it weekly as an artifact, and a person commits a changed one by hand): exec form exists from
-    2.1.139; older versions' hook-entry schema silently drops the unknown `args`, so the command
-    would run without its arguments (the design's HS§3.5 also has an unknown key making older
-    versions ignore a whole settings file). Either way one old or unknown copy keeps string form.
+    (`command` + `args`), written only when every Claude Code version seen (sessions, status
+    line, located binaries, and the folder names of VS Code-family and Claude Desktop bundled
+    copies) is known and at least `EXEC_FORM_MIN`. That is derived from the committed
+    `claude-code-facts.json` (`claude-code-facts.yml` regenerates it weekly as an artifact, and
+    a person commits a changed one by hand): the first version after the last one without exec
+    form, 2.1.139 today. **Older clients** drop the unknown `args` and run `command` through
+    Git Bash, where an unquoted path with `(`, `)`, `'`, `"` or a backtick is a syntax error
+    that exits 2 and blocks every tool call (and before 2.1.101 an unknown key made Claude Code
+    ignore the whole settings file, HS§3.5). So one old or unknown copy keeps string form, and
+    a folder no form can name has our exec-form entries taken out, never left.
   - Uninstalling removes hooks only on **Delete the application data** or `/REMOVEHOOKS`;
     an update or reinstall never touches a `settings.json`. The official Codenotch's hook entries
     are reported and removed only on request. Both apps can run side by side.

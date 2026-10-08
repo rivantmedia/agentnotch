@@ -37,7 +37,11 @@ const QUARANTINE_COMMAND =
   'xattr -dr com.apple.quarantine "/Applications/Agent Notch.app"';
 
 // What the Windows installer is built for (the installer needs no administrator).
-const WINDOWS_REQUIREMENTS = "Preview: Windows 10 or 11 (x64)";
+const WINDOWS_REQUIREMENTS = "Windows 10 or 11 (x64) · not code-signed yet";
+// The Windows app ships as a preview until people have used it (and it is code-signed).
+const CARD_TITLES: Partial<Record<Platform, string>> = {
+  windows: "Windows (preview)",
+};
 
 const NO_DOWNLOADS: Downloads = { mac: null, windows: null, linux: null };
 
@@ -314,6 +318,7 @@ function PlatformCard({
 }) {
   const asset = downloads[platform];
   const name = PLATFORM_NAMES[platform];
+  const title = CARD_TITLES[platform] ?? name;
   const about =
     platform === "mac"
       ? MAC_REQUIREMENTS
@@ -328,7 +333,7 @@ function PlatformCard({
       className={cx("card flex flex-col gap-3 p-5", yours && "border-accent")}
     >
       <div className="flex items-start justify-between gap-3">
-        <h3 className="font-semibold">{name}</h3>
+        <h3 className="font-semibold">{title}</h3>
         {yours ? <Badge tone="accent">Your computer</Badge> : null}
       </div>
       {about ? <p className="text-sm text-ink-2">{about}</p> : null}

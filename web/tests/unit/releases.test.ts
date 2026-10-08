@@ -97,6 +97,8 @@ describe("classifyAsset", () => {
       // The updater's own archive is no download, and must not pass as the Mac's zip.
       ["AgentNotch-1.1.0-Setup.nsis.zip", null],
       ["AgentNotch-1.1.0.msi.zip", null],
+      // A part of the installed app, never a download of its own.
+      ["agentnotch-hook.exe", null],
     ];
     for (const [name, platform] of cases) {
       expect(classifyAsset(name), name).toBe(platform);
@@ -206,6 +208,19 @@ describe("pickDownloads", () => {
     expect(downloads.mac).toBeNull();
     expect(downloads.windows?.name).toBe("AgentNotch-1.0.0-Setup.exe");
     expect(downloads.linux?.name).toBe("AgentNotch-1.0.0-x86_64.AppImage");
+  });
+
+  it("prefers the Setup installer to any other program on the release", () => {
+    const other = asset("AgentNotch-1.1.0-x64.exe");
+    const setup = asset("AgentNotch-1.1.0-Setup.exe");
+    const msi = asset("AgentNotch-1.1.0.msi");
+    expect(pickDownloads([other, msi, setup], REPO).windows?.name).toBe(
+      "AgentNotch-1.1.0-Setup.exe",
+    );
+    // Without a Setup installer, a plain .exe still comes before an .msi.
+    expect(pickDownloads([msi, other], REPO).windows?.name).toBe(
+      "AgentNotch-1.1.0-x64.exe",
+    );
   });
 
   it("offers the disk image and the installer from a release's six files", () => {
