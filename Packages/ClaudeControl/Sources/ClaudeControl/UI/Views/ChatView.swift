@@ -568,20 +568,24 @@ private struct ChatStatusRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 7) {
-            StatusRing(kind: line.glyph)
-                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
-            Text(line.text)
-                .claudeFont(.body)
-                .foregroundStyle(.ink(line.glyph == .error ? .critical : .secondary))
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            // The mark and its words read as one; Dismiss stays a button of
+            // its own, so reading the status never dismisses the failure.
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                StatusRing(kind: line.glyph)
+                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+                Text(line.text)
+                    .claudeFont(.body)
+                    .foregroundStyle(.ink(line.glyph == .error ? .critical : .secondary))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .accessibilityElement(children: .combine)
             if line.canDismiss {
                 Button("Dismiss", action: onDismiss)
                     .buttonStyle(.claude(.quiet, compact: true))
                     .help("Dismiss this failure (⌘R)")
             }
         }
-        .accessibilityElement(children: .combine)
     }
 }
 
