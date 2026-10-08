@@ -69,8 +69,13 @@ pub struct Incident {
 
 impl Incident {
     pub fn expires_at(&self) -> SystemTime {
-        self.resets_at
-            .unwrap_or_else(|| self.started_at + UNKNOWN_LIFETIME)
+        // Checked: a start dated at the very end of what the platform's
+        // `SystemTime` holds (a corrupt file) must not panic the hub.
+        self.resets_at.unwrap_or_else(|| {
+            self.started_at
+                .checked_add(UNKNOWN_LIFETIME)
+                .unwrap_or(self.started_at)
+        })
     }
 }
 

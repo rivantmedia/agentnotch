@@ -3473,7 +3473,7 @@ logs and the two cross-cutting reviews, kept beside the checkout in `an-work/` (
   announcement made before the readings which window ran out (`AccountUsage::announced_limit_hit`),
   and keeps one reset time per ring window (`ring_windows::keeping_reset_times`, applied to the
   ring readings). A failed turn restored from `review-state.json` carries
-  `stop_error_is_restored` (`SessionView`): it is shown, but `attention::news`, the tracker and
-  `toast_for` treat it as no news. Left out, with no counterpart on Windows: upstream's limit
+  `stop_error_is_restored` (`SessionView`): it is shown, but `attention::news`, the tracker,
+  `policy::kind_of` (no chime or peek) and `toast_for` treat it as no news. Left out, with no counterpart on Windows: upstream's limit
   watcher, its 100 % banner and "limit reached" card (seams LIM1/LIM2, `claimLimitAlert`), and
   the bridge's part.

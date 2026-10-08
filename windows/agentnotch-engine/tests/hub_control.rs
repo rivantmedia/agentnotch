@@ -1277,3 +1277,38 @@ fn a_limit_announced_before_the_readings_learns_its_window() {
     assert_eq!(w.limit_toasts(), 1);
     assert_eq!(w.hub.handles.sounds.played().len(), 1);
 }
+
+/// A later reading of the same window whose reset time is a few seconds off
+/// (two sources rounding it differently) shows the reset time the ring had:
+/// one window, one reset. A new window passes through.
+#[test]
+fn a_ring_window_keeps_the_reset_time_it_was_shown_with() {
+    let w = world();
+    let session_reset = || {
+        w.hub.sync();
+        w.shown()
+            .rings
+            .iter()
+            .flat_map(|ring| ring.usage.windows.clone())
+            .find(|win| win.id == "session")
+            .and_then(|win| win.resets_at)
+    };
+    w.send("UserPromptSubmit", "s1", json!({"prompt": "go"}));
+    let first = (w.hub.handles.clock.now_ms() / 1000 + 3_600) * 1000;
+    w.status_line("s1", 40);
+    assert!(eventually(|| session_reset() == Some(first)));
+
+    // Thirty seconds on, the same window read as resetting thirty seconds
+    // later.
+    w.advance(Duration::from_secs(30));
+    w.status_line("s1", 50);
+    assert!(eventually(|| {
+        w.hub.sync();
+        w.shown()
+            .rings
+            .iter()
+            .flat_map(|ring| ring.usage.windows.clone())
+            .any(|win| win.id == "session" && (win.used - 0.5).abs() < 1e-9)
+    }));
+    assert_eq!(session_reset(), Some(first));
+}

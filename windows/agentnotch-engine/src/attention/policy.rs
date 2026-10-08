@@ -40,7 +40,9 @@ fn is_attention(state: &SessionState) -> bool {
 /// The kind of `tr`, or `None` when it is none of the three (working to
 /// idle, say): such a transition makes no reaction at all.
 pub fn kind_of(tr: &AttentionTransition) -> Option<TransitionKind> {
-    if tr.became_needs_you() {
+    // A failure read back from disk was announced when it happened
+    // (`attention::news`): shown, never chimed or peeked at again.
+    if tr.became_needs_you() && !is_restored_failure(tr) {
         return Some(TransitionKind::NeedsInput);
     }
     if tr.became_ready_for_review() {
@@ -48,6 +50,12 @@ pub fn kind_of(tr: &AttentionTransition) -> Option<TransitionKind> {
     }
     let was_attention = tr.from.as_ref().is_some_and(is_attention);
     (was_attention && !is_attention(&tr.to)).then_some(TransitionKind::Resolved)
+}
+
+/// `tr` shows a failed turn read back from `review-state.json`
+/// (`SessionView::stop_error_is_restored`), not one seen happen.
+fn is_restored_failure(tr: &AttentionTransition) -> bool {
+    tr.session.stop_error_is_restored && tr.to.reason().is_some_and(|r| r.is_error())
 }
 
 /// A failed turn (rate limit, overload, sign-in): something to know about,

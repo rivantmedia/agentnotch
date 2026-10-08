@@ -18,7 +18,9 @@
 mod sessions_support;
 
 use agentnotch_engine::attention::news::{kinds_between_restoring, NewsKind};
-use agentnotch_engine::attention::policy::repeats_limit_reaction;
+use agentnotch_engine::attention::policy::{
+    decide, kind_of, repeats_limit_reaction, AutoOpenPolicy, PolicyContext, TransitionKind,
+};
 use agentnotch_engine::control::limits::{
     window_key, Channel, Incident, LimitAnnouncementStore, LimitAnnouncements, UNKNOWN_ABSORBS_FOR,
     UNKNOWN_LIFETIME, UNKNOWN_WINDOW,
@@ -379,6 +381,37 @@ fn expired_incidents_are_pruned() {
     );
     gate.prune(resets());
     assert!(gate.incidents.is_empty());
+}
+
+/// An incident dated at the very end of what `SystemTime` holds (a corrupt
+/// file) is kept or dropped, never a panic.
+#[test]
+fn an_incident_at_the_end_of_time_does_not_panic() {
+    let mut last = UNIX_EPOCH;
+    for step in (0..64).rev().map(|bit| Duration::from_secs(1u64 << bit)) {
+        if let Some(later) = last.checked_add(step) {
+            last = later;
+        }
+    }
+    let mut gate = LimitAnnouncements::default();
+    gate.incidents.insert(
+        "work".into(),
+        vec![Incident {
+            window: UNKNOWN_WINDOW.into(),
+            resets_at: None,
+            started_at: last,
+            channels: BTreeSet::from([Channel::Notification]),
+        }],
+    );
+    gate.prune(now());
+    assert!(!claim(
+        &mut gate,
+        Channel::Notification,
+        "work",
+        "session",
+        None,
+        now()
+    ));
 }
 
 #[test]
@@ -877,6 +910,44 @@ fn only_the_first_failure_of_a_limit_chimes() {
         ..placed("a", "work", SessionState::Working)
     };
     assert!(!repeats_limit_reaction(&resolved, None, |_, _| false));
+}
+
+/// A failure read back from disk makes no chime and no peek, even when the
+/// session showed something else before (a session gone and back between
+/// two looks): the Mac's hub takes its transitions from `AttentionNews`,
+/// which has no needs-input in it then.
+#[test]
+fn a_restored_failure_makes_no_reaction() {
+    let ctx = PolicyContext {
+        auto_open: AutoOpenPolicy::Never,
+        chimes: true,
+        peeks: true,
+        terminal_focused: false,
+        any_terminal_visible: false,
+        full_screen: false,
+        panel_open: false,
+        ring_shown: true,
+    };
+    for from in [
+        None,
+        Some(SessionState::ReadyForReview),
+        Some(SessionState::Working),
+    ] {
+        let live = transition(view("s", overloaded(), false), from.clone());
+        assert_eq!(kind_of(&live), Some(TransitionKind::NeedsInput));
+        assert!(!decide(&live, &ctx).is_empty());
+        let restored = transition(view("s", overloaded(), true), from.clone());
+        assert_ne!(
+            kind_of(&restored),
+            Some(TransitionKind::NeedsInput),
+            "{from:?}"
+        );
+        assert!(decide(&restored, &ctx).is_empty(), "{from:?}");
+    }
+    // Only failures: a restored session's question still chimes.
+    let question = SessionState::NeedsYou(NeedsInputReason::Question);
+    let asked = transition(view("s", question, true), None);
+    assert_eq!(kind_of(&asked), Some(TransitionKind::NeedsInput));
 }
 
 // ---- RingResetTimeTests ----
