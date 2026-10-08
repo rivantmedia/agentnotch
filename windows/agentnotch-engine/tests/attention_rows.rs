@@ -6,9 +6,9 @@
 //! by the node tests; the question parser is covered by sessions_record.
 
 use agentnotch_engine::attention::rows::{
-    accessibility_label, age_text, card_row, compact_detail, detail, duration_text, elapsed,
-    pending_view, plain_text, reset_phrase, session_row, spoken_state, state_word, task_summary,
-    RateLimitReset, ResetClock, RowContext, TERMINAL_WAIT,
+    accessibility_label, age_text, card_row, chat_status, compact_detail, detail, duration_text,
+    elapsed, pending_view, plain_text, reset_phrase, session_row, spoken_state, state_word,
+    task_summary, RateLimitReset, ResetClock, RowContext, TERMINAL_WAIT,
 };
 use agentnotch_engine::core::paths::{PathStyle, Paths};
 use agentnotch_engine::core::time::from_ms;
@@ -1525,4 +1525,89 @@ fn rows_built_from_the_snapshot_inputs_reproduce_the_snapshot() {
         }
     }
     assert!(mismatches.is_empty(), "{}", mismatches.join("\n"));
+}
+
+// ---- the chat's status line (ChatTrackingTests) ----
+
+fn finished() -> Session {
+    let mut finished = session(Phase::WaitingForInput, None, None, None, None);
+    finished.completed_at = Some(ago(300));
+    finished.last_assistant_message = Some("Done.".into());
+    finished
+}
+
+fn status_of(
+    session: &Session,
+    rate_limit: Option<&RateLimitReset>,
+) -> Option<agentnotch_engine::model::ui::ChatStatusLine> {
+    let mut ctx = RowContext::new(now());
+    ctx.rate_limit = rate_limit;
+    chat_status(&view_of(session), &ctx)
+}
+
+#[test]
+fn the_status_line_says_what_the_row_says_for_a_failed_turn() {
+    let mut failed = finished();
+    failed.set_needs_input(Some(rate_limited()), ago(300));
+    let reset = RateLimitReset {
+        window: "5-hour limit".into(),
+        resets_at: now() + Duration::from_secs(47 * 60),
+    };
+
+    let line = status_of(&failed, Some(&reset)).expect("a failure has a line");
+    let row = detail(&view_of(&failed), Some(&reset), now(), clock());
+    assert_eq!(line.text, plain_text(&row));
+    assert_eq!(line.text, "Rate limited · 5-hour limit resets in 47m");
+    assert_eq!(line.glyph, "error");
+    assert!(line.can_dismiss);
+
+    let bare = status_of(&failed, None).unwrap();
+    assert_eq!(bare.text, "Rate limited");
+
+    // The row carries the very same line.
+    let mut ctx = RowContext::new(now());
+    ctx.rate_limit = Some(&reset);
+    assert_eq!(session_row(&view_of(&failed), &ctx).chat_status, Some(line));
+}
+
+#[test]
+fn the_status_line_for_review_and_idle() {
+    let review = status_of(&finished(), None).unwrap();
+    assert_eq!(review.glyph, "review");
+    assert_eq!(review.text, "Ready for review · finished 5m ago");
+    assert!(!review.can_dismiss);
+
+    let mut reviewed = finished();
+    reviewed.reviewed_at = Some(ago(60));
+    reviewed.last_activity = ago(3_600);
+    let idle = status_of(&reviewed, None).unwrap();
+    assert_eq!(idle.glyph, "idle");
+    assert_eq!(idle.text, "Idle · last active 1h ago");
+    assert!(!idle.can_dismiss);
+}
+
+#[test]
+fn the_status_line_is_not_shown_while_working_or_waiting_on_an_answer() {
+    let working = session(Phase::Processing, None, None, None, None);
+    assert_eq!(status_of(&working, None), None);
+
+    let dialog = session(
+        Phase::Processing,
+        Some(NeedsInputReason::Dialog {
+            detail: "worker permission".into(),
+        }),
+        None,
+        None,
+        None,
+    );
+    assert_eq!(status_of(&dialog, None), None);
+
+    let permission = session(
+        approval("Bash", json!({"command": "ls"}), vec![], 10),
+        None,
+        None,
+        None,
+        None,
+    );
+    assert_eq!(status_of(&permission, None), None);
 }

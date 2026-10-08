@@ -1,7 +1,7 @@
 // The chat screen of the sessions panel (DESIGN-WIN §5.3, UI§6; ChatView.swift, ChatSessionHeader.swift):
 // the header (back, title, account, task summary and its board, context, show terminal), the
 // transcript (user and assistant text, thinking, tool calls with their results, images, the
-// working indicator) and the one bottom bar (a request's answers, a terminal-only note, or the
+// working indicator or, once Claude has stopped, the one status line) and the one bottom bar (a request's answers, a terminal-only note, or the
 // composer with its per-session drafts).
 //
 // The contract with panel.js: on a `session:<id>` route it calls `mount(host, ctx)` once with the
@@ -37,7 +37,9 @@
   var BOARD_ROW_PX = 19;
   var DATA_URL_MAX = 3 * 1024 * 1024;
   var IMAGE_URL = /^data:image\/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+={0,2}$/;
-  var LIMITS = { name: 120, summary: 400, title: 300, label: 200, media: 60, working: 200 };
+  var LIMITS = { name: 120, summary: 400, title: 300, label: 200, media: 60, working: 200, status: 500 };
+  /** The marks the engine's status line names (`agentnotchCommon.glyphKind`'s states Claude has stopped in). */
+  var STATUS_GLYPHS = { error: 1, review: 1, idle: 1 };
   var STATUSES = { running: 1, waiting_for_approval: 1, success: 1, error: 1, interrupted: 1 };
 
   /** The open chat, or null. */
@@ -129,6 +131,7 @@
       loading: true,
       error: null,
       moreAsked: false,
+      statusKey: '',
       expanded: Object.create(null),
       images: Object.create(null),
       cache: Object.create(null),
@@ -373,10 +376,52 @@
       '<span class="an-working-t" data-an-text data-an-clip>' + C.esc(S.working) + '</span></div>';
   }
 
+  /**
+   * The line under the last message once Claude has stopped (ChatStatusLine.swift): the failure with
+   * its reset time, "Ready for review · finished 5m ago", "Idle · last active 1h ago". The engine
+   * words it from the session's row (`chat_status`) and sends none while the session works or waits
+   * on an answer, so the row and the chat never disagree. Never beside the working indicator, and
+   * not for a session that has gone.
+   */
+  function statusLine() {
+    if (!S || S.ended || (S.working && !S.ended)) return null;
+    var row = rowNow();
+    var s = row && row.chat_status;
+    if (!s || typeof s !== 'object' || !STATUS_GLYPHS[s.glyph]) return null;
+    var words = clip(C.oneLine(str(s.text)), LIMITS.status);
+    if (!words) return null;
+    return { glyph: s.glyph, text: words, canDismiss: s.can_dismiss === true && s.glyph === 'error' };
+  }
+
+  function statusKey(line) {
+    return line ? line.glyph + '|' + (line.canDismiss ? 1 : 0) + '|' + line.text : '';
+  }
+
+  /**
+   * The mark and its words read as one element for a screen reader; Dismiss stays a button of its own,
+   * so reading the status never dismisses the failure. The words wrap rather than clip: the panel
+   * can be narrow.
+   */
+  function statusHtml(line) {
+    return '<div class="an-status' + (line.glyph === 'error' ? ' an-status-err' : '') + '" data-key="status">' +
+      '<span class="an-status-read" role="img" aria-label="' + attr(line.text) + '">' +
+      C.statusRing(line.glyph, { cls: 'an-status-mark' }) +
+      '<span class="an-status-t" data-an-text>' + C.esc(line.text) + '</span></span>' +
+      (line.canDismiss
+        ? '<button type="button" class="an-btn an-btn-quiet an-compact an-status-dismiss" data-an-chat="dismiss" title="Dismiss this failure (Ctrl+R)">Dismiss</button>'
+        : '') +
+      '</div>';
+  }
+
   function listHtml() {
     if (S.loading) return placeholderHtml('loading', 'Loading the conversation…');
     var showWorking = !!S.working && !S.ended;
-    if (!S.order.length && !showWorking) return placeholderHtml('empty', S.error || 'No messages yet');
+    var status = statusLine();
+    // "Idle · last active…" alone would read as a broken chat; a failure is worth showing even
+    // with nothing above it.
+    if (!S.order.length && !showWorking && !(status && status.glyph === 'error')) {
+      return placeholderHtml('empty', S.error || 'No messages yet');
+    }
     var out = '';
     if (S.hasEarlier > 0) {
       var n = Math.min(S.hasEarlier, PAGE_SIZE);
@@ -385,6 +430,7 @@
     }
     S.order.forEach(function (id) { out += itemHtml(id); });
     if (showWorking) out += workingHtml();
+    else if (status) out += statusHtml(status);
     return out;
   }
 
@@ -1069,6 +1115,7 @@
     var first = S.order.length ? S.order[0] : null;
     var prepended = follow && S.firstId !== null && first !== S.firstId && S.order.indexOf(S.firstId) > 0;
     C.morph(els.list, listHtml());
+    S.statusKey = statusKey(statusLine());
     if (follow && prepended && !stick) scroll.scrollTop = top + (scroll.scrollHeight - before);
     else if (follow && stick) scroll.scrollTop = scroll.scrollHeight;
     S.firstId = first;
@@ -1108,6 +1155,12 @@
     if (id && id !== S.requestId) S.boardOpen = false;
     S.requestId = id;
     drawHeader();
+    // The status line follows the row (a failure arrives, "5m ago" turns "6m ago"); the transcript
+    // is drawn again only when its words changed.
+    if (!S.loading && statusKey(statusLine()) !== S.statusKey) {
+      draw(true);
+      return;
+    }
     drawBar();
     reportSize();
   }
@@ -1178,6 +1231,7 @@
       case 'toggle-tasks': setBoard(!S.boardOpen); break;
       case 'image': loadImage(id); break;
       case 'earlier': askEarlier(); break;
+      case 'dismiss': C.call('dismiss_failure', { session_id: S.sessionId }).catch(fail('dismiss_failure')); break;
       case 'q-option': pickOption(Number(control.getAttribute('data-q')), Number(control.getAttribute('data-o'))); break;
       case 'q-other': pickOther(Number(control.getAttribute('data-q'))); break;
       case 'q-submit': submitQuestions(); break;

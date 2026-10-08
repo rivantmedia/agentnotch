@@ -339,6 +339,9 @@ impl SessionStore {
                         session.phase = Phase::Processing;
                         if !session.is_hook_backed() {
                             session.turn_started_at = Some(changed_at);
+                            // Show its task progress now, not at the next
+                            // recheck.
+                            self.schedule_sync(&session.id.clone(), now);
                         }
                     }
                 }

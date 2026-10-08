@@ -180,16 +180,13 @@ impl SessionStore {
             session.subagent_state = SubagentState::new();
             session.tasks.reset();
             session.chat.clear_history(now);
-            if self.needs_task_reconstruction.contains(&id) {
-                self.reconstruction.insert(id.clone(), TaskList::new());
-            }
+            self.transcript_tasks.remove(&id);
         }
         let reconstructing = self.needs_task_reconstruction.contains(&id);
+        let transcript_tasks = self.transcript_tasks.entry(id.clone()).or_default();
         for entry in &delta.entries {
             session.fold.apply(entry);
-            if reconstructing {
-                fold_task(self.reconstruction.entry(id.clone()).or_default(), entry);
-            }
+            fold_task(transcript_tasks, entry);
         }
         if session.transcript_path.is_none() {
             session.transcript_path = Some(delta.path.to_string_lossy().into_owned());
@@ -206,8 +203,8 @@ impl SessionStore {
             if reconstructing {
                 // History from the transcript, then everything hooks
                 // reported since.
-                if let Some(rebuilt) = self.reconstruction.remove(&id) {
-                    session.tasks = session.tasks.merged_into_reconstructed(&rebuilt);
+                if let Some(rebuilt) = self.transcript_tasks.get(&id) {
+                    session.tasks = session.tasks.merged_into_reconstructed(rebuilt);
                 }
                 self.needs_task_reconstruction.remove(&id);
                 review_restored_state(&mut session, &turn, now);
@@ -221,6 +218,17 @@ impl SessionStore {
             session.tool_tracker = ToolTracker::new();
             session.subagent_state = SubagentState::new();
             session.tasks.reset();
+        }
+        // No hook reports this session, so the transcript is its only source
+        // of tasks: follow it on every sync (merging would keep the old
+        // statuses) and, after a /clear, start from its new list. A session
+        // being rebuilt took its list above.
+        if !reconstructing && !session.is_hook_backed() {
+            if let Some(list) = self.transcript_tasks.get(&id) {
+                if session.tasks != *list {
+                    session.tasks = list.clone();
+                }
+            }
         }
         // Tools shown as running whose result the transcript now has: they
         // finished (possibly approved in the terminal).

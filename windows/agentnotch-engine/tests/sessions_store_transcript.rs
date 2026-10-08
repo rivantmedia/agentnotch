@@ -17,8 +17,8 @@
 
 mod sessions_support;
 
-use agentnotch_engine::model::{ChatBody, SessionId, SessionState};
-use agentnotch_engine::runtime_types::{Job, Release};
+use agentnotch_engine::model::{ChatBody, HookEvent, SessionId, SessionState};
+use agentnotch_engine::runtime_types::{Job, Release, SessionInput};
 use agentnotch_engine::sessions::background::WaitTiming;
 use agentnotch_engine::sessions::chat::{RETAINED_ITEMS, SUCCESS};
 use agentnotch_engine::sessions::completion::CompletionTiming;
@@ -1013,6 +1013,186 @@ fn no_completion_is_inferred_on_a_first_run_or_from_old_work() {
     assert_eq!(later.state(), SessionState::Idle);
 }
 
+// ---- the task list of a session no hook reports (ChatTrackingTests) ----
+
+fn task_create(id: &str, task_id: &str, subject: &str, active_form: &str, at: u64) -> Vec<Value> {
+    vec![
+        tool_use(
+            id,
+            "TaskCreate",
+            json!({"subject": subject, "activeForm": active_form}),
+            before(at),
+        ),
+        tool_result(
+            id,
+            &format!("Task #{task_id} created successfully: {subject}"),
+            before(at - 1),
+            Some(json!({"task": {"id": task_id, "subject": subject}})),
+        ),
+    ]
+}
+
+fn task_update(id: &str, task_id: &str, status: &str, at: u64) -> Value {
+    tool_use(
+        id,
+        "TaskUpdate",
+        json!({"taskId": task_id, "status": status}),
+        before(at),
+    )
+}
+
+fn subjects(h: &Harness) -> Vec<String> {
+    h.session()
+        .unwrap()
+        .tasks
+        .items()
+        .iter()
+        .map(|task| task.subject.clone())
+        .collect()
+}
+
+#[test]
+fn a_session_no_hook_reports_follows_its_transcripts_tasks() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut h, path) = reading(dir.path());
+    let folder = Harness::folder_of(dir.path());
+    write_lines(&path, &task_create("c1", "1", "Plan", "Planning", 50));
+    h.registry_entries(&folder, false, vec![registry_entry("s1", 77, "busy", t0())]);
+    h.sync();
+    let first = h.session().unwrap();
+    assert!(!first.is_hook_backed());
+    assert_eq!(first.tasks.total_count(), 1);
+    assert_eq!(first.tasks.completed_count(), 0);
+
+    // Later: the first task is done and a second appears. Nothing but the
+    // transcript says so. (The second is created before the first is
+    // completed: a task added once the whole list is done starts a new list.)
+    h.registry_entries(
+        &folder,
+        false,
+        vec![registry_entry("s1", 77, "idle", t0() + secs(5))],
+    );
+    h.sync();
+    let mut more = task_create("c2", "2", "Build", "Building", 40);
+    more.push(task_update("u1", "1", "completed", 30));
+    more.push(task_update("u2", "2", "in_progress", 29));
+    append_lines(&path, &more);
+    // The registry going busy again asks for the read itself, so the
+    // progress shows now and not at the next recheck.
+    h.registry_entries(
+        &folder,
+        false,
+        vec![registry_entry("s1", 77, "busy", t0() + secs(10))],
+    );
+    h.sync();
+    let later = h.session().unwrap();
+    assert_eq!(later.tasks.total_count(), 2);
+    assert_eq!(later.tasks.completed_count(), 1);
+    assert_eq!(later.tasks.active_item().unwrap().subject, "Build");
+}
+
+#[test]
+fn a_cleared_session_starts_its_task_list_over() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut h, path) = reading(dir.path());
+    let folder = Harness::folder_of(dir.path());
+    let mut old = task_create("c1", "1", "Old one", "Old one", 50);
+    old.extend(task_create("c2", "2", "Old two", "Old two", 48));
+    write_lines(&path, &old);
+    h.registry_entries(&folder, false, vec![registry_entry("s1", 77, "busy", t0())]);
+    h.sync();
+    assert_eq!(subjects(&h), ["Old one", "Old two"]);
+
+    let mut cleared = vec![user(
+        "<command-name>/clear</command-name>",
+        before(40),
+        json!({}),
+    )];
+    cleared.extend(task_create("c3", "1", "Fresh", "Fresh", 38));
+    append_lines(&path, &cleared);
+    h.registry_entries(
+        &folder,
+        false,
+        vec![registry_entry("s1", 77, "idle", t0() + secs(5))],
+    );
+    h.sync();
+    h.registry_entries(
+        &folder,
+        false,
+        vec![registry_entry("s1", 77, "busy", t0() + secs(10))],
+    );
+    h.sync();
+    assert_eq!(subjects(&h), ["Fresh"]);
+}
+
+#[test]
+fn hooks_keep_their_task_list_when_the_transcript_is_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut h, path) = reading(dir.path());
+    write_lines(&path, &[user("go", before(60), json!({}))]);
+    prompt(&mut h);
+    // The first read of a session rebuilds its history; this one is past it.
+    h.sync();
+    assert_eq!(h.reads_of("s1.jsonl"), 1);
+    let task_hook =
+        |h: &mut Harness, name: &str, status: &str, id: &str, input: Value, task: Option<&str>| {
+            let mut event = HookEvent::new("s1", name, h.now);
+            event.status = status.into();
+            event.cwd = "/tmp/proj".into();
+            event.transcript_path = Some(h.transcript.clone());
+            event.entrypoint = Some("cli".into());
+            event.tool = Some(
+                if name == "PreToolUse" && input.get("taskId").is_some() {
+                    "TaskUpdate"
+                } else {
+                    "TaskCreate"
+                }
+                .into(),
+            );
+            event.tool_input = input.as_object().cloned();
+            event.tool_use_id = Some(id.into());
+            event.task_id = task.map(str::to_owned);
+            event.task_subject = task.map(|_| "Plan".to_owned());
+            let ctx = h.ctx.clone();
+            h.apply(SessionInput::Hook { event, ctx });
+        };
+    task_hook(
+        &mut h,
+        "PreToolUse",
+        "running_tool",
+        "t1",
+        json!({"subject": "Plan"}),
+        None,
+    );
+    task_hook(
+        &mut h,
+        "PostToolUse",
+        "processing",
+        "t1",
+        json!({"subject": "Plan"}),
+        Some("1"),
+    );
+    task_hook(
+        &mut h,
+        "PreToolUse",
+        "running_tool",
+        "t2",
+        json!({"taskId": "1", "status": "completed"}),
+        None,
+    );
+    let before_read = h.session().unwrap().tasks.clone();
+    assert!(h.session().unwrap().is_hook_backed());
+    assert_eq!(before_read.completed_count(), 1);
+
+    // A read that still has the task pending (written late).
+    append_lines(&path, &task_create("x", "1", "Plan", "Plan", 50));
+    resync(&mut h);
+    assert_eq!(h.reads_of("s1.jsonl"), 2);
+    let after = h.session().unwrap();
+    assert_eq!(after.tasks, before_read);
+    assert_eq!(after.tasks.completed_count(), 1);
+}
+
 // ---- the chat, as the panel sees it ----
 
 #[test]
@@ -1090,6 +1270,55 @@ fn chat_open_marks_reviewed_and_yields_a_reset_then_patches_of_only_the_changed_
 
     // Nothing changed since: nothing is sent.
     assert!(h.store.take_chat_updates().is_empty());
+}
+
+/// ChatTrackingTests.aChatOpenedAgainFollowsTheSessionAgain: the Mac's chat
+/// view had to register itself again when it reappeared; the page's chat
+/// asks `chat_open` on every visit, so a chat that went away and came back
+/// is a fresh one that follows the session.
+#[test]
+fn a_chat_opened_again_follows_the_session_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut h, path) = reading(dir.path());
+    write_lines(&path, &[assistant_text("one", before(30))]);
+    prompt(&mut h);
+    h.sync();
+    let opened = h.store.open_chat(&s1(), h.now);
+    h.run_jobs(opened.jobs);
+    let first = h.store.take_chat_updates();
+    assert_eq!(first.last().unwrap().order.len(), 1);
+
+    // The panel closes: nothing follows the session now.
+    h.store.close_chat(&s1());
+    assert!(!h.store.has_open_chats());
+    append_lines(&path, &[assistant_text("x", before(20))]);
+    resync(&mut h);
+    assert!(h.store.take_chat_updates().is_empty());
+
+    // It opens again and gets everything, as a reset...
+    let reopened = h.store.open_chat(&s1(), h.now);
+    h.run_jobs(reopened.jobs);
+    let reset = h.store.take_chat_updates();
+    assert!(reset[0].reset);
+    assert_eq!(reset.last().unwrap().order.len(), 2);
+    // ...opening again while open changes nothing it hasn't sent.
+    let again = h.store.open_chat(&s1(), h.now);
+    h.run_jobs(again.jobs);
+    assert_eq!(h.store.take_chat_updates().last().unwrap().order.len(), 2);
+
+    // and follows the transcript from there.
+    append_lines(
+        &path,
+        &[
+            assistant_text("two", before(10)),
+            assistant_text("three", before(9)),
+        ],
+    );
+    resync(&mut h);
+    let patch = h.store.take_chat_updates();
+    assert_eq!(patch.len(), 1);
+    assert!(!patch[0].reset);
+    assert_eq!(patch[0].order.len(), 4);
 }
 
 #[test]

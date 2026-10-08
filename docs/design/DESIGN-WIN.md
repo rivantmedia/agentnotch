@@ -1521,7 +1521,9 @@ pub struct SessionRow { pub session_id: String, pub ring_id: Option<String>, pub
     pub tasks: Option<TaskProgress>, pub context_pct: Option<f64>, pub background_count: u32,
     pub pending: Option<PendingRequestView>, pub focus_label: Option<String> /* "Show terminal"|"Show in editor" */,
     pub can_message: bool, pub reviewable: bool, pub a11y: String,
+    pub chat_status: Option<ChatStatusLine>, // the chat's one line once Claude has stopped (1.0.2; below)
     pub card: CardRow }                 // the notch hover card's row (UI§3.5), a port of ClaudeHostProjections.activityRow
+pub struct ChatStatusLine { pub glyph: String /* error|review|idle */, pub text: String, pub can_dismiss: bool }
 pub struct CardRow { pub name: String /* "<hostApp> · <project>" or the title */, pub detail: Option<String> /* "3/7 … · ctx 42%" */,
     pub state: String /* needs_you|failed|review|working|idle */, pub waiting_for: Option<String>, pub since_ms: u64 }
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -1790,7 +1792,7 @@ Claude runs elevated (`Processes::elevated`, `None` counted as "unknown").
   `applyPhase`, `applyLifecycle`, `applyNeedsInput`, turn completion (4 s / 90 s / registry),
   `BackgroundWork` (awaited types, 10 s grace, 30 min cap), quiet completions, registry
   reconciliation, `inferCompletion`, task progress (TaskCreate/TaskUpdate/TodoWrite +
-  transcript reconstruction), context % (status line first, estimator else), titles, the
+  transcript reconstruction; a session no hook reports follows the transcript's list on every sync), context % (status line first, estimator else), titles, the
   3 s periodic check, the review store (v2, atomic, owner-only, 1 s debounce for marks, 30 s
   heartbeat, 7-day prune). All pure: `SessionStore::apply(input, now)`.
 - Windows specifics: transcripts opened with default Rust share modes (read/write/delete);
@@ -3477,3 +3479,17 @@ logs and the two cross-cutting reviews, kept beside the checkout in `an-work/` (
   `policy::kind_of` (no chime or peek) and `toast_for` treat it as no news. Left out, with no counterpart on Windows: upstream's limit
   watcher, its 100 % banner and "limit reached" card (seams LIM1/LIM2, `claimLimitAlert`), and
   the bridge's part.
+- **Parity with 1.0.2: the chat (814fbfe, 750ba33, c313351).** A session no hook reports takes its
+  task list from the transcript on every sync, not only the first: the store folds every line
+  read into `transcript_tasks` (the Mac parser's whole-transcript list; it replaced
+  `reconstruction`, which was folded only while a session was being rebuilt) and replaces the
+  list of a hookless session when it differs, so a /clear starts it over; hook-backed sessions
+  keep theirs. The registry going busy asks for a read at once. The chat's one status line
+  (failed with its reset time, "Ready for review · finished 5m ago", "Idle · last active 1h
+  ago") is worded in `attention/rows.rs` (`chat_status`) from the row's own words and travels in
+  the snapshot as `SessionRow.chat_status` (null while the session works or waits on an answer),
+  so it follows the row's labels; `chat.js` draws it under the last message, never beside the
+  working indicator, with the mark and words as one `role="img"` element and Dismiss its own
+  button (the row's `dismiss_failure`). An empty chat keeps "No messages yet" unless the session
+  failed. Nothing to port for "re-register a reopened chat": the page asks `chat_open` on every
+  visit and the engine makes a fresh watch (`a_chat_opened_again_follows_the_session_again`).

@@ -162,8 +162,25 @@ pub struct SessionRow {
     pub can_message: bool,
     pub reviewable: bool,
     pub a11y: String,
+    /// What the chat shows under its last message when Claude is not working
+    /// (ChatStatusLine.swift); `None` while it works or waits on an answer.
+    /// Absent from a payload made before it existed.
+    #[serde(default)]
+    pub chat_status: Option<ChatStatusLine>,
     /// The notch hover card's row (UI§3.5), a port of `activityRow`.
     pub card: CardRow,
+}
+
+/// The one line a chat shows under its last message once Claude has stopped:
+/// the turn failed, it is ready for review, or the session is idle. It speaks
+/// with the row's words, so the row and the chat never disagree.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChatStatusLine {
+    /// The row's mark: `error` | `review` | `idle` (`agentnotchCommon.glyphKind`).
+    pub glyph: String,
+    pub text: String,
+    /// A failed turn can be dismissed from the chat as from the row.
+    pub can_dismiss: bool,
 }
 
 /// A hover-card row.
