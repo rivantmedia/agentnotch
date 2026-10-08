@@ -19,7 +19,8 @@ use agentnotch_engine::hub::{Call, HubEvent};
 use agentnotch_engine::model::{HubSnapshot, SessionRow};
 use agentnotch_engine::platform::{
     Chime, Clock, ConnId, ConsoleInfo, ConsoleInput, ConsoleTarget, FocusOutcome, FocusStep,
-    Foreground, HostApp, HostKind, Liveness, Platform, ToastKind, TypeOutcome,
+    Foreground, HostApp, HostKind, Liveness, Platform, ProcessTable, Terminals, ToastKind,
+    TypeOutcome,
 };
 use agentnotch_engine::runtime_types::{Input, PanelState};
 use agentnotch_engine::testkit::{FakeConsole, FakeProcesses};
@@ -465,6 +466,114 @@ fn a_reply_sent_while_claude_works_is_held_then_refused() {
         json!({"outcome": "refused", "reason": "Claude is working: send when it's done"})
     );
     assert!(w.hub.handles.console.typed().is_empty());
+}
+
+/// A console lookup that waits until the test lets it go (`an-ui` held by
+/// a terminal that doesn't answer).
+struct HangingConsoles {
+    inner: Arc<dyn Terminals>,
+    open: Arc<(Mutex<bool>, std::sync::Condvar)>,
+}
+
+impl Terminals for HangingConsoles {
+    fn classify_host(&self, claude_pid: u32, table: &ProcessTable) -> HostApp {
+        self.inner.classify_host(claude_pid, table)
+    }
+    fn console_info(&self, claude_pid: u32) -> ConsoleInfo {
+        let (open, changed) = &*self.open;
+        let mut is_open = open.lock().unwrap();
+        while !*is_open {
+            is_open = changed.wait(is_open).unwrap();
+        }
+        drop(is_open);
+        self.inner.console_info(claude_pid)
+    }
+    fn run_focus(&self, step: &FocusStep) -> FocusOutcome {
+        self.inner.run_focus(step)
+    }
+    fn foreground(&self) -> Option<Foreground> {
+        self.inner.foreground()
+    }
+    fn window_title(&self, window: u64) -> Option<String> {
+        self.inner.window_title(window)
+    }
+    fn wt_tab_titles(&self, window: u64) -> Option<Vec<(String, bool)>> {
+        self.inner.wt_tab_titles(window)
+    }
+    fn any_terminal_visible(&self) -> bool {
+        self.inner.any_terminal_visible()
+    }
+    fn watch_foreground(&self, sink: crossbeam_channel::Sender<Foreground>) {
+        self.inner.watch_foreground(sink)
+    }
+}
+
+/// A reply whose terminal doesn't answer the lookups is refused within 10 s,
+/// well inside the call's 25 s, and is not typed when the lookup comes back
+/// later: the page gave up on it, and the user may send it again.
+#[test]
+fn a_reply_whose_terminal_hangs_is_refused_in_time_and_never_typed_later() {
+    let open: Arc<(Mutex<bool>, std::sync::Condvar)> = Arc::default();
+    let gate = open.clone();
+    let w = world_with(move |platform| {
+        let inner = platform.terminals.clone();
+        platform.terminals = Arc::new(HangingConsoles { inner, open: gate });
+    });
+    w.set("typeReplies", json!(true));
+    w.finished("s1");
+    let hub = w.hub.hub.clone();
+    let sending = std::thread::spawn(move || {
+        hub.call(Call::SendMessage {
+            session_id: "s1".into(),
+            text: "go on".into(),
+        })
+    });
+    w.advance(Duration::from_secs(9));
+    assert!(!sending.is_finished(), "waits for the lookups first");
+    let mut more = Duration::ZERO;
+    while !sending.is_finished() {
+        assert!(more < Duration::from_secs(10), "still waiting 19 s on");
+        w.advance(Duration::from_millis(500));
+        more += Duration::from_millis(500);
+        let deadline = std::time::Instant::now() + Duration::from_millis(200);
+        while !sending.is_finished() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    let sent = sending.join().unwrap().unwrap();
+    assert_eq!(
+        sent,
+        json!({"outcome": "refused", "reason": "The terminal didn't answer in time"})
+    );
+    // The terminal answers at last: nothing is typed for the refused call.
+    let (lock, changed) = &*open;
+    *lock.lock().unwrap() = true;
+    changed.notify_all();
+    w.advance(Duration::from_secs(1));
+    assert!(w.hub.handles.console.typed().is_empty());
+}
+
+/// Return is never pressed 20 s or more after the call: by then the page
+/// may have been told `busy` and the user may have sent the reply again.
+#[test]
+fn a_reply_is_not_submitted_once_its_call_may_have_given_up() {
+    let gap: Gap = Arc::default();
+    let recorder = Arc::new(FakeConsole::default());
+    let (inner, slot) = (recorder.clone(), gap.clone());
+    let w = world_with(move |platform| {
+        platform.console = Arc::new(GapConsole { inner, gap: slot });
+    });
+    w.set("typeReplies", json!(true));
+    w.finished("s1");
+    let clock = w.hub.handles.clock.clone();
+    *gap.lock().unwrap() = Some(Box::new(move || {
+        clock.advance(Duration::from_secs(21));
+    }));
+    let sent = w.send_message("s1", "go on");
+    assert_eq!(sent["outcome"], "typed_not_submitted", "{sent}");
+    let typed = recorder.typed();
+    assert_eq!(typed.len(), 1, "{typed:?}");
+    assert!(!typed[0].2, "Return was pressed");
 }
 
 // ---- the jump ----

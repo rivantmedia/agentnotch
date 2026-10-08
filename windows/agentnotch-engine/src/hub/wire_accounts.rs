@@ -203,12 +203,27 @@ impl Core {
     /// `reveal_target`: a folder the engine knows, never a path a page
     /// supplies. `config_dir` takes a folder or an account; `backup` a
     /// folder (or an account's main folder), whose newest settings.json
-    /// backup it names.
+    /// backup it names; `session_cwd` a session the engine knows, whose
+    /// working folder (where it started) it names.
     pub(crate) fn reveal_target_call(
         &self,
         kind: RevealKind,
         id: &str,
     ) -> Result<Value, CallError> {
+        if kind == RevealKind::SessionCwd {
+            let cwd = self
+                .session_views()
+                .into_iter()
+                .find(|view| view.id.as_str() == id)
+                .map(|view| view.cwd)
+                .filter(|cwd| cwd.is_absolute());
+            return match cwd {
+                Some(cwd) => to_value(&PathReply {
+                    path: cwd.to_string_lossy().into_owned(),
+                }),
+                None => Err(CallError::not_found("That session isn't known.")),
+            };
+        }
         let folder = self
             .registry
             .folder(id)
@@ -227,6 +242,7 @@ impl Core {
                 .folder_status(&folder)
                 .newest_backup
                 .map(|path| path.to_string_lossy().into_owned()),
+            // Answered above.
             RevealKind::SessionCwd => None,
         };
         match path {

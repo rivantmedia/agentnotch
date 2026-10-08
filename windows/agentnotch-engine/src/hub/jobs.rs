@@ -42,6 +42,9 @@ pub const IO_WORKERS: usize = 3;
 /// Why a job queued at a stop was answered without running.
 pub const STOPPED_BEFORE_RUNNING: &str = "The app stopped before this ran.";
 
+/// Why a reply was not typed: `an-core`'s check before the first key said no.
+pub const NOT_TYPED: &str = "The session changed before the reply could be typed";
+
 /// What a job body may use.
 #[derive(Clone)]
 pub struct JobContext {
@@ -54,8 +57,9 @@ pub struct JobContext {
     pub sealed: bool,
 }
 
-/// Runs `job` with its package's body. `checkpoint` is asked between typing
-/// a reply and pressing Return (`Job::Type`): `an-core`'s fresh check.
+/// Runs `job` with its package's body. `checkpoint` is `an-core`'s fresh
+/// check of a reply (`Job::Type`): asked before the first key and again
+/// between the text and Return.
 pub fn run(job: &Job, ctx: &JobContext, checkpoint: &mut dyn FnMut() -> bool) -> JobResult {
     let p = &ctx.platform;
     let now = p.clock.now();
@@ -161,6 +165,12 @@ pub fn run(job: &Job, ctx: &JobContext, checkpoint: &mut dyn FnMut() -> bool) ->
             p.terminals.run_focus(step)
         })),
         Job::Type { target, text, .. } => {
+            // `an-core`'s check before the first key too: a reply that waited
+            // for this lane while the session changed, or past the time its
+            // call was answered, is never typed at all.
+            if !checkpoint() {
+                return JobResult::Typed(TypeOutcome::Refused(NOT_TYPED.into()));
+            }
             JobResult::Typed(p.console.type_text(target, text, checkpoint))
         }
         Job::Visibility => JobResult::Visible {

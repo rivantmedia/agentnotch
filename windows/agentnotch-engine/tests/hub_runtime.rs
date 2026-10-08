@@ -327,9 +327,10 @@ fn a_hub_never_started_answers_calls() {
     assert!(!status.sealed);
 }
 
-/// What isn't wired yet says so honestly instead of pretending.
+/// A session's folder is named only for a session the engine knows; a page
+/// never names a path itself.
 #[test]
-fn calls_not_wired_yet_fail_honestly() {
+fn an_unknown_sessions_folder_is_not_revealed() {
     let hub = TestHub::started();
     let error = hub
         .hub
@@ -338,8 +339,7 @@ fn calls_not_wired_yet_fail_honestly() {
             id: "s-1".into(),
         })
         .unwrap_err();
-    assert_eq!(error.code, "failed");
-    assert!(error.message.contains("reveal_target"), "{}", error.message);
+    assert_eq!(error.code, "not_found", "{}", error.message);
 }
 
 /// The glue's own calls are taken (the hot key's report shows in Settings).
@@ -500,6 +500,44 @@ fn console_info_needs_the_same_process() {
         JobResult::Console(info) => assert!(info.error.is_some()),
         other => panic!("{other:?}"),
     }
+}
+
+/// `an-core`'s check is asked before the first key too: a reply it no
+/// longer allows (the session changed while the job waited for its lane) is
+/// never typed at all.
+#[test]
+fn a_reply_the_check_refuses_is_never_typed() {
+    let dir = tempfile::tempdir().unwrap();
+    let (platform, handles) = testkit::platform(dir.path());
+    let ctx = JobContext {
+        roots: handles.roots.clone(),
+        platform,
+        base_env: Vec::new(),
+        sealed: false,
+    };
+    let job = Job::Type {
+        session: "s1".into(),
+        target: agentnotch_engine::platform::ConsoleTarget {
+            claude_pid: 4242,
+            claude_started: std::time::UNIX_EPOCH,
+            expected_window: None,
+            allowed_shells: Vec::new(),
+        },
+        text: "go on".into(),
+    };
+    let mut asked = 0;
+    let result = jobs::run_guarded(&job, &ctx, &mut || {
+        asked += 1;
+        false
+    });
+    assert_eq!(
+        result,
+        JobResult::Typed(agentnotch_engine::platform::TypeOutcome::Refused(
+            jobs::NOT_TYPED.into()
+        ))
+    );
+    assert_eq!(asked, 1);
+    assert!(handles.console.typed().is_empty());
 }
 
 /// A stop ends every child at once and starts no new one until the hub

@@ -13,10 +13,15 @@
 //!   panel.
 //! - `send_message` is refused while typing replies is off. A reply waits
 //!   (checked again every 250 ms, for up to 10 s) while Claude is busy, is
-//!   typed on `an-ui`, and between the text and Return `an-core` checks the
-//!   session again on its state then (`Input::TypeCheckpoint`): a request
-//!   that appeared in the gap means Return is never pressed, so our Return
-//!   can't confirm a dialog the user never saw.
+//!   typed on `an-ui`, and before the first key and again between the text
+//!   and Return `an-core` checks the session on its state then
+//!   (`Input::TypeCheckpoint`): a request that appeared in the gap means
+//!   Return is never pressed, so our Return can't confirm a dialog the user
+//!   never saw.
+//! - A call never outlives the page's wait: one still waiting on the
+//!   session's lookups after 10 s is answered without them, and Return is
+//!   never pressed 20 s or more after `send_message` was called (the call is
+//!   answered `busy` at 25 s, and the user may send the reply again).
 //! - Attention transitions (after the store's silent launch baseline) post
 //!   and withdraw banners at once; chime, peek and auto-open are decided per
 //!   burst once a visibility scan (`Job::Visibility`) says whether a terminal
@@ -65,6 +70,20 @@ const HOST_RETRY: Duration = Duration::from_secs(30);
 /// `PanelClose`'s reason after a jump.
 const REASON_JUMP: &str = "jump";
 
+/// How long a call waits for its session's host and console to be looked
+/// up. `an-ui` may be held by a hung terminal; the call is answered well
+/// inside its 25 s instead of being carried out after the page gave up on
+/// it (a reply typed then would be typed again when the user retries).
+pub(crate) const LOOKUP_WAIT: Duration = Duration::from_secs(10);
+
+/// Return is pressed only this soon after `send_message` was called: never
+/// after the call has been answered `busy` (25 s), when the user may
+/// already have sent the reply again.
+pub(crate) const SUBMIT_WITHIN: Duration = Duration::from_secs(20);
+
+/// Why a call waiting on the lookups was answered without them.
+pub(crate) const TERMINAL_SLOW: &str = "The terminal didn't answer in time";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum LookupKind {
     Host,
@@ -76,6 +95,7 @@ enum Waiter {
     Focus {
         session: SessionId,
         reply: Reply,
+        since: SystemTime,
     },
     Send {
         session: SessionId,
@@ -89,6 +109,7 @@ enum Waiter {
     Route {
         session: SessionId,
         reply: Reply,
+        since: SystemTime,
     },
 }
 
@@ -100,6 +121,21 @@ impl Waiter {
             | Waiter::Route { reply, .. } => reply,
         }
     }
+
+    /// When the call was taken.
+    fn since(&self) -> SystemTime {
+        match self {
+            Waiter::Focus { since, .. }
+            | Waiter::Send { since, .. }
+            | Waiter::Route { since, .. } => *since,
+        }
+    }
+}
+
+/// The call has waited on the lookups as long as it may.
+fn lookups_overdue(since: SystemTime, now: SystemTime) -> bool {
+    now.duration_since(since)
+        .is_ok_and(|waited| waited >= LOOKUP_WAIT)
 }
 
 /// A transition of the open burst, waiting for the visibility scan.
@@ -125,7 +161,8 @@ pub(crate) struct ControlWiring {
     first_window: HashMap<ProcKey, u64>,
     lookups: HashMap<JobId, (ProcKey, LookupKind)>,
     waiters: Vec<Waiter>,
-    typing: HashMap<JobId, SessionId>,
+    /// Replies being typed: the session, and when the call was taken.
+    typing: HashMap<JobId, (SessionId, SystemTime)>,
     focusing: HashMap<JobId, (SessionId, HostApp)>,
     burst: Burst,
     deciding: Vec<Deciding>,
@@ -302,10 +339,12 @@ impl Core {
     /// `focus {session_id}` → `{outcome, reason?}`, answered when the jump
     /// is done.
     pub(crate) fn focus_call(&mut self, session: SessionId, reply: Reply) {
-        self.control_w
-            .waiters
-            .push(Waiter::Focus { session, reply });
         let now = self.platform.clock.now();
+        self.control_w.waiters.push(Waiter::Focus {
+            session,
+            reply,
+            since: now,
+        });
         self.resolve_waiters(now);
     }
 
@@ -337,10 +376,12 @@ impl Core {
         if !self.settings.type_replies {
             return send_route(reply, Err(messaging::TYPING_OFF.into()));
         }
-        self.control_w
-            .waiters
-            .push(Waiter::Route { session, reply });
         let now = self.platform.clock.now();
+        self.control_w.waiters.push(Waiter::Route {
+            session,
+            reply,
+            since: now,
+        });
         self.resolve_waiters(now);
     }
 
@@ -364,7 +405,11 @@ impl Core {
         now: SystemTime,
     ) -> Option<Waiter> {
         match waiter {
-            Waiter::Focus { session, reply } => {
+            Waiter::Focus {
+                session,
+                reply,
+                since,
+            } => {
                 let Some(view) = views.iter().find(|v| v.id == session) else {
                     let (word, reason) =
                         focus::outcome_reply(&FocusOutcome::NotFound, &unknown_host());
@@ -372,7 +417,19 @@ impl Core {
                     return None;
                 };
                 let (host, info) = match self.facts(view, now) {
-                    Facts::Waiting => return Some(Waiter::Focus { session, reply }),
+                    Facts::Waiting if lookups_overdue(since, now) => {
+                        let outcome = FocusOutcome::Failed(TERMINAL_SLOW.into());
+                        let (word, reason) = focus::outcome_reply(&outcome, &unknown_host());
+                        send_outcome(reply, word, reason);
+                        return None;
+                    }
+                    Facts::Waiting => {
+                        return Some(Waiter::Focus {
+                            session,
+                            reply,
+                            since,
+                        })
+                    }
                     Facts::None => (unknown_host(), ConsoleInfo::default()),
                     Facts::Ready(host, info) => (host, info),
                 };
@@ -391,7 +448,11 @@ impl Core {
                 self.control_w.focusing.insert(id, (session, host));
                 None
             }
-            Waiter::Route { session, reply } => {
+            Waiter::Route {
+                session,
+                reply,
+                since,
+            } => {
                 let sealed = self.cfg.flags.sealed;
                 let type_replies = self.settings.type_replies;
                 let view = views.iter().find(|v| v.id == session);
@@ -404,7 +465,16 @@ impl Core {
                         &unknown_host(),
                     ),
                     Some(view) => match self.facts(view, now) {
-                        Facts::Waiting => return Some(Waiter::Route { session, reply }),
+                        Facts::Waiting if lookups_overdue(since, now) => {
+                            Err(TERMINAL_SLOW.to_owned())
+                        }
+                        Facts::Waiting => {
+                            return Some(Waiter::Route {
+                                session,
+                                reply,
+                                since,
+                            })
+                        }
                         Facts::None => messaging::availability(
                             type_replies,
                             sealed,
@@ -436,6 +506,10 @@ impl Core {
                     return None;
                 };
                 let (host, info) = match self.facts(view, now) {
+                    Facts::Waiting if lookups_overdue(since, now) => {
+                        refused(reply, TERMINAL_SLOW);
+                        return None;
+                    }
                     Facts::Waiting => {
                         return Some(Waiter::Send {
                             session,
@@ -481,7 +555,7 @@ impl Core {
                                     },
                                     Some(reply),
                                 );
-                                self.control_w.typing.insert(id, session);
+                                self.control_w.typing.insert(id, (session, since));
                             }
                         }
                         None
@@ -625,9 +699,18 @@ impl Core {
     /// request of any agent, a dialog, a busy turn or a lost console means
     /// no Return.
     pub(crate) fn control_checkpoint(&mut self, job: JobId) -> bool {
-        let Some(session) = self.control_w.typing.get(&job).cloned() else {
+        let Some((session, since)) = self.control_w.typing.get(&job).cloned() else {
             return false;
         };
+        // A reply the page may have given up on (the call answered `busy`)
+        // is never submitted: the user may have sent it again.
+        let now = self.platform.clock.now();
+        if now
+            .duration_since(since)
+            .is_ok_and(|waited| waited >= SUBMIT_WITHIN)
+        {
+            return false;
+        }
         if !self.settings.type_replies {
             return false;
         }
@@ -1027,13 +1110,19 @@ impl Core {
             .opened_at()
             .filter(|_| w.burst.pending() == 0)
             .map(|at| at + BURST_WINDOW);
+        // A busy session's next look, and when a call stops waiting on the
+        // lookups.
         let sends = w
             .waiters
             .iter()
-            .filter_map(|waiter| match waiter {
-                Waiter::Send { next_check, .. } => *next_check,
-                _ => None,
+            .flat_map(|waiter| {
+                let next_check = match waiter {
+                    Waiter::Send { next_check, .. } => *next_check,
+                    _ => None,
+                };
+                [next_check, Some(waiter.since() + LOOKUP_WAIT)]
             })
+            .flatten()
             .min();
         let auto = w
             .auto_open

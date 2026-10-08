@@ -15,7 +15,7 @@ mod hub_support;
 
 use accounts_support::{Home, BIIOS, BIIOS_UUID, PARAS, PARAS_UUID};
 use agentnotch_engine::hub::runtime::RuntimeOptions;
-use agentnotch_engine::hub::{Call, HubEvent};
+use agentnotch_engine::hub::{Call, HubEvent, RevealKind};
 use agentnotch_engine::model::{Answer, HubSnapshot, SessionRow};
 use agentnotch_engine::platform::{Clock, ConnId};
 use agentnotch_proto::{ControlResponse, KEEP_PLANNING_REASON};
@@ -392,6 +392,26 @@ fn a_session_whose_process_is_gone_releases_its_requests() {
     assert!(eventually(|| w.row("s1").is_none()));
     assert_eq!(w.status().held, 0);
     assert_eq!(w.response(conn), None);
+}
+
+/// `reveal_target {session_cwd}` names the folder a known session started
+/// in (the page's "Show in Explorer"), and nothing for an id it doesn't know.
+#[test]
+fn a_known_sessions_folder_is_revealed() {
+    let w = world();
+    w.send("UserPromptSubmit", "s1", json!({"prompt": "go"}));
+    assert!(eventually(|| w.row("s1").is_some()));
+    let reveal = |id: &str| {
+        w.hub.hub.call(Call::RevealTarget {
+            kind: RevealKind::SessionCwd,
+            id: id.into(),
+        })
+    };
+    assert_eq!(
+        reveal("s1").unwrap(),
+        json!({ "path": w.home.path("code/proj") })
+    );
+    assert_eq!(reveal("s2").unwrap_err().code, "not_found");
 }
 
 /// The session's end releases its requests (SessionEnd).

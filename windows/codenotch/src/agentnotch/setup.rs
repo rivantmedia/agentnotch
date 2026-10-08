@@ -12,6 +12,7 @@
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use agentnotch_engine::hub::{Hub, HubConfig};
 use agentnotch_engine::platform::{Platform, Roots};
@@ -62,6 +63,7 @@ fn start(app: &AppHandle) -> Result<(), String> {
         hub.stop();
         return Err("a hub was already running".into());
     }
+    stop_at_exit(app, &hub);
     // Upstream's code reads Claude's usage from AppState: fill it before the notch's first
     // reading arrives, from the hub's launch-time discovery.
     emit::publish_usage(app, &hub.upstream_usage());
@@ -77,6 +79,42 @@ fn start(app: &AppHandle) -> Result<(), String> {
     hotkey::start(app, &hub);
     selftest::start(app);
     Ok(())
+}
+
+/// How long the app's exit waits for the hub to stop; past this the process ends with it.
+const EXIT_STOP_WAIT: Duration = Duration::from_secs(5);
+
+/// Upstream's own Quit (the tray, the notch's menu, Settings) ends the app with `app.exit(0)`,
+/// which raises `RunEvent::Exit` before `run` returns: the hub is stopped there, so it saves what
+/// is still to be written (review marks, usage, settings), ends its children and lets every held
+/// request go, as at every other exit. (The updater exits without that event; `update.rs` stops
+/// the hub itself, and a second stop does nothing.) A plugin added at run time, because the run
+/// loop is upstream's. The stop runs off the main thread, which only waits for it: the hub's
+/// last events are dropped (`emit::quitting`), so none of them waits on the main thread.
+fn stop_at_exit(app: &AppHandle, hub: &Hub) {
+    let hub = hub.clone();
+    let plugin = tauri::plugin::Builder::<tauri::Wry>::new("agentnotch-exit")
+        .on_event(move |_, event| {
+            if !matches!(event, tauri::RunEvent::Exit) {
+                return;
+            }
+            emit::quitting();
+            let hub = hub.clone();
+            let (stopped, wait) = std::sync::mpsc::channel();
+            let stopper = std::thread::Builder::new()
+                .name("an-exit".into())
+                .spawn(move || {
+                    hub.stop();
+                    let _ = stopped.send(());
+                });
+            if stopper.is_ok() {
+                let _ = wait.recv_timeout(EXIT_STOP_WAIT);
+            }
+        })
+        .build();
+    if let Err(e) = app.plugin(plugin) {
+        super::log(&format!("the hub isn't stopped at exit: {e}"));
+    }
 }
 
 /// The hub's configuration for this process. `app_version` is Tauri's (= `VERSION`) when the app

@@ -111,14 +111,20 @@ impl Core {
     }
 
     /// A device id for the website: the saved one, else a new one, kept in
-    /// the settings (and in the file the next write makes).
+    /// the settings (and in the file the next write makes: turning sync on
+    /// is one). With sync already on (a file that lost its id) the id is
+    /// written now, as nothing may be sent under an id that wasn't saved.
     fn mint_device_id(&mut self) {
         if self.settings.cloud_device_id.is_some() {
             return;
         }
         let mut next = self.settings.clone();
         next.device_id();
-        self.adopt_settings_quietly(next);
+        if next.cloud_sync_enabled {
+            self.replace_settings(next);
+        } else {
+            self.adopt_settings_quietly(next);
+        }
     }
 
     /// What the service runs with, from the settings now.

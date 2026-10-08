@@ -348,9 +348,7 @@ impl Core {
             Call::AcknowledgeScope => self.acknowledge_scope_call(),
             Call::Account { action } => self.account_call(action),
             Call::LaunchCommand { account_id } => self.launch_command_call(&account_id),
-            Call::RevealTarget { kind, id } if kind != super::api::RevealKind::SessionCwd => {
-                self.reveal_target_call(kind, &id)
-            }
+            Call::RevealTarget { kind, id } => self.reveal_target_call(kind, &id),
             Call::Answer {
                 session_id,
                 tool_use_id,
@@ -377,11 +375,6 @@ impl Core {
             } => self.chat_image_call(&session_id, &image_id),
             Call::Cloud { action, on } => self.cloud_call(action, on),
             Call::CloudUrl { target } => self.cloud_url_call(target),
-            // Wired by the next sub-tasks (see the module doc).
-            other => Err(CallError::failed(format!(
-                "{} isn't available in this build yet.",
-                method_name(&other)
-            ))),
         };
         let _ = reply.send(answer);
     }
@@ -509,10 +502,10 @@ impl Core {
                 full_screen,
             } => self.visible_read(id, any_terminal, full_screen, now),
         }
+        // A call whose job came back with nothing to answer it (a result its
+        // wiring no longer expected) is still answered, never left to time out.
         if let Some(reply) = reply {
-            let _ = reply.send(Err(CallError::failed(
-                "That isn't available in this build yet.",
-            )));
+            let _ = reply.send(Err(CallError::failed("That didn't finish. Try again.")));
         }
     }
 
@@ -957,12 +950,4 @@ pub(crate) fn consent_word(consent: Option<bool>) -> &'static str {
 
 pub(crate) fn to_value<T: serde::Serialize>(value: &T) -> Result<Value, CallError> {
     serde_json::to_value(value).map_err(|e| CallError::failed(e.to_string()))
-}
-
-/// A call's method name, as the pages spell it.
-fn method_name(call: &Call) -> String {
-    serde_json::to_value(call)
-        .ok()
-        .and_then(|v| v.get("method").and_then(Value::as_str).map(str::to_owned))
-        .unwrap_or_else(|| "That".into())
 }

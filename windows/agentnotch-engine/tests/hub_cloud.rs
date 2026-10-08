@@ -174,6 +174,30 @@ fn the_cloud_threads_switch_is_written_by_an_core_and_republished() {
     assert_eq!(hub.settings_file()["cloudDeviceId"], json!(device));
 }
 
+/// Sync already on in a settings file that lost its device id (edited by
+/// hand): the id minted at start is written at once, so nothing is ever sent
+/// under an id that wasn't saved.
+#[test]
+fn a_device_id_minted_while_sync_is_on_is_saved_at_once() {
+    let hub = TestHub::with_config(
+        RuntimeOptions::default(),
+        |cfg| cfg.website = Some(AuthFixture::WEBSITE.into()),
+        |_| {},
+    );
+    std::fs::create_dir_all(&hub.roots.support).unwrap();
+    std::fs::write(hub.settings_path(), br#"{"cloudSyncEnabled": true}"#).unwrap();
+    hub.hub.start().expect("the hub starts");
+    assert!(eventually(
+        || hub.settings_file()["cloudDeviceId"].is_string()
+    ));
+    let device = hub.settings_file()["cloudDeviceId"].clone();
+    assert!(
+        uuid::Uuid::parse_str(device.as_str().unwrap()).is_ok(),
+        "{device}"
+    );
+    assert_eq!(hub.settings_file()["cloudSyncEnabled"], json!(true));
+}
+
 /// A switch call without its value is refused; cancelling with no sign-in
 /// waiting does nothing; a link the website hasn't given is `not_found`.
 #[test]
