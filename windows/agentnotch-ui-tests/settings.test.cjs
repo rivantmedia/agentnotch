@@ -20,6 +20,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const audit = require('./lib/audit.cjs');
+const dom = require('./lib/dom.cjs');
 const harness = require('./lib/harness.cjs');
 const scripts = require('./lib/scripts.cjs');
 
@@ -176,6 +177,30 @@ test('a load asks for the settings and nothing else; the tab opens on the pane o
   assert.equal(first.$('#pane-claude').hidden, false);
   assert.equal(first.$('#tab-claude').getAttribute('aria-selected'), 'true');
   clean(first);
+});
+
+test('the window coming to the front asks again; what changed comes as an:settings, never from the reply', async () => {
+  const off = (s) => {
+    s.notifications.permission = 'disabled_for_user';
+    s.notifications.permission_text = 'Off in Windows Settings';
+    s.notifications.permission_warning = true;
+  };
+  const page = await open(off);
+  const permission = () => text(region(page, 'notifications').querySelector('[data-key="permission"] [data-key="text"]'));
+  assert.equal(permission(), 'Off in Windows Settings');
+  // The user turned banners on in Windows Settings; the hub, asked again, publishes the change.
+  page.emit('an:settings', settingsWith((s) => {
+    s.notifications.permission = 'allowed';
+    s.notifications.permission_text = 'Allowed';
+    s.notifications.permission_warning = false;
+  }));
+  assert.equal(permission(), 'Allowed');
+  // The reply here is older than that event (the fixture still says off): it must not win.
+  page.window.dispatchEvent(new dom.Event('focus'));
+  await page.settle();
+  assert.deepEqual(page.hub.calls.map((c) => c.method), ['settings']);
+  assert.equal(permission(), 'Allowed');
+  clean(page);
 });
 
 test('the sections stand in the Mac\'s order; settings-sections.js draws the second half', async () => {

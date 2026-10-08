@@ -16,7 +16,7 @@ use super::api::{CallError, ComingReply, UsageRefreshTrigger};
 use super::core_state::{to_value, Core, Reply};
 use super::project;
 use crate::core::settings::ControlSettings;
-use crate::model::{DesktopReading, IdentityId};
+use crate::model::{DesktopCacheFormat, DesktopReading, IdentityId};
 use crate::persist::usage::UsageStateFile;
 use crate::runtime_types::{
     ClaudeJsonRead, Job, JobId, PersistFile, ProbeResult, RefreshReason, UsageObservation,
@@ -43,6 +43,10 @@ pub(crate) struct UsageWiring {
     probe_job: Option<JobId>,
     /// When a refresh waiting on Claude Desktop's cache decides anyway.
     probe_check_at: Option<SystemTime>,
+    /// The format the last read found Claude Desktop's cache in, for
+    /// Settings' caption (design §4.6): `None` while the setting is off or
+    /// no read has come back since it went on.
+    pub(crate) desktop_format: Option<DesktopCacheFormat>,
     /// `refresh_usage` calls, answered when the running cycle's reads are in.
     refreshes: Vec<(Refresh, Reply)>,
 }
@@ -69,6 +73,7 @@ impl UsageWiring {
             desktop_jobs: BTreeMap::new(),
             probe_job: None,
             probe_check_at: None,
+            desktop_format: None,
             refreshes: Vec::new(),
         }
     }
@@ -120,6 +125,8 @@ impl Core {
         if old.reads_desktop_usage_cache != new.reads_desktop_usage_cache {
             self.usage
                 .set_reads_desktop(new.reads_desktop_usage_cache && !self.cfg.flags.sealed);
+            // What an earlier read found says nothing about the cache now.
+            self.usage_w.desktop_format = None;
         }
         if old.claude_binary_path != new.claude_binary_path {
             self.usage
@@ -251,6 +258,13 @@ impl Core {
         let Some(identity) = self.usage_w.desktop_jobs.remove(&id) else {
             return;
         };
+        // A read that was in flight when the setting went off says nothing
+        // Settings shows; a failed read leaves the last format standing.
+        if self.settings.reads_desktop_usage_cache {
+            if let Some(format) = cache_format_of(&reading) {
+                self.usage_w.desktop_format = Some(format);
+            }
+        }
         let observation = self.usage.accept_desktop(&identity, &reading, now);
         self.usage_observed(observation);
         // A refresh that waited for this read decides now.
@@ -344,5 +358,16 @@ impl Core {
             let now = self.platform.clock.now();
             self.start_cycle(now);
         }
+    }
+}
+
+/// The cache format a read found: a reading came from a readable cache,
+/// and `read_desktop_cache` names the format of one it couldn't use.
+fn cache_format_of(reading: &DesktopReading) -> Option<DesktopCacheFormat> {
+    match reading {
+        DesktopReading::Reading { .. } => Some(DesktopCacheFormat::Simple),
+        DesktopReading::NotFound { format } => Some(*format),
+        DesktopReading::UnsupportedFormat => Some(DesktopCacheFormat::Blockfile),
+        DesktopReading::Unavailable(_) => None,
     }
 }

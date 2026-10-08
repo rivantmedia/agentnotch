@@ -17,11 +17,12 @@ mod hub_support;
 use accounts_support::{Home, BIIOS, BIIOS_UUID, PARAS, PARAS_UUID};
 use agentnotch_engine::core::time::iso8601;
 use agentnotch_engine::hub::runtime::RuntimeOptions;
-use agentnotch_engine::hub::{Call, UsageRefreshTrigger};
+use agentnotch_engine::hub::{Call, HubEvent, UsageRefreshTrigger};
 use agentnotch_engine::model::HubSnapshot;
 use agentnotch_engine::platform::{CommandRunner, CommandSpec, Platform, RunningCommand};
 use agentnotch_engine::testkit::runner::Conversation;
 use agentnotch_engine::testkit::{snapshot_dir, ScriptedRunner, TEST_START_MS};
+use agentnotch_engine::usage::desktop::UNSUPPORTED_FORMAT_TEXT;
 use agentnotch_engine::usage::probe::{arguments, INITIALIZE_REQUEST_ID, USAGE_REQUEST_ID};
 use hub_support::live::{eventually, TestHub};
 use serde_json::{json, Value};
@@ -250,6 +251,61 @@ fn the_probe_interval_setting_is_followed() {
         .expect("a page may set it");
     let value = hub.hub.call(Call::Settings).expect("the settings");
     assert_eq!(value["usage"]["desktop_cache"], json!(false));
+}
+
+/// A Claude Desktop cache in Chromium's blockfile format can't be read:
+/// once a read has looked, Settings says so (design §4.6, R3) in
+/// `an:settings` and in its answer; with the switch off it says nothing of
+/// the format again.
+#[test]
+fn a_blockfile_desktop_cache_is_said_in_settings() {
+    let home = Home::new();
+    build(&home);
+    write_settings(&home, &json!({"usageProbeIntervalMinutes": 0}));
+    let cache = home.roots.claude_desktop[0]
+        .join("Cache")
+        .join("Cache_Data");
+    std::fs::create_dir_all(&cache).unwrap();
+    for name in ["index", "data_0", "data_1", "data_2", "data_3"] {
+        std::fs::write(cache.join(name), b"").unwrap();
+    }
+    let hub = hub_over(&home, |_| {});
+    hub.hub.start().expect("the hub starts");
+    let settings = |hub: &TestHub| hub.hub.call(Call::Settings).expect("the settings");
+    assert!(
+        eventually(|| {
+            hub.handles.clock.advance(Duration::from_secs(21));
+            hub.sync();
+            settings(&hub)["usage"]["desktop_format"] == json!("blockfile")
+        }),
+        "{}",
+        settings(&hub)["usage"]
+    );
+    assert_eq!(
+        settings(&hub)["usage"]["desktop_caption"],
+        json!(UNSUPPORTED_FORMAT_TEXT)
+    );
+    assert!(eventually(|| {
+        hub.handles.clock.advance(Duration::from_millis(100));
+        hub.sync();
+        hub.events().iter().any(|(_, event)| match event {
+            HubEvent::Settings(s) => s.usage.desktop_format.as_deref() == Some("blockfile"),
+            _ => false,
+        })
+    }));
+
+    hub.hub
+        .call(Call::SetSetting {
+            key: "readsDesktopUsageCache".into(),
+            value: json!(false),
+        })
+        .expect("a page may set it");
+    let value = settings(&hub);
+    assert_eq!(value["usage"]["desktop_format"], Value::Null);
+    assert_ne!(
+        value["usage"]["desktop_caption"],
+        json!(UNSUPPORTED_FORMAT_TEXT)
+    );
 }
 
 #[test]

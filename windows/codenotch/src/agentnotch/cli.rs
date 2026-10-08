@@ -13,7 +13,8 @@
 //! one of these commands, refused without running anything.
 //!
 //! Sealed (`AGENTNOTCH_SAFE_MODE`), the commands that would read or write the real Claude
-//! folders (`inspect-accounts`, `install-hooks`, `uninstall-hooks`) do neither and say so; the
+//! folders (`inspect-accounts`, `install-hooks`, `uninstall-hooks`) do neither and say so;
+//! `control` is refused (a sealed app serves no pipe, so only a real copy could answer it); the
 //! doctor asks the sealed hub.
 
 use std::io::Write;
@@ -39,7 +40,8 @@ const COMMANDS: [&str; 6] = [
 ];
 
 /// The exit code of a command that was refused with nothing run: a command line naming a command
-/// and a link at once, `install-hooks` without the consent, a Claude folder's command sealed.
+/// and a link at once, `install-hooks` without the consent, a Claude folder's command or
+/// `control` sealed.
 const REFUSED: i32 = 2;
 /// `control status|quit` (and nothing else) when no copy of the app is running.
 const NO_INSTANCE: i32 = 3;
@@ -70,7 +72,7 @@ pub fn run(args: &[String]) -> Option<i32> {
     let quiet = command == "uninstall-hooks" && rest.contains(&"--quiet");
     let sealed = super::sealed();
     let outcome = panic::catch_unwind(AssertUnwindSafe(|| match command {
-        _ if sealed && touches_claude_folders(command) => sealed_answer(command),
+        _ if sealed && answered_when_sealed(command) => sealed_answer(command),
         "doctor" => doctor(&rest),
         "inspect-accounts" => inspect_accounts(),
         "install-hooks" => install_hooks(),
@@ -101,9 +103,19 @@ fn touches_claude_folders(command: &str) -> bool {
     )
 }
 
+/// The commands a sealed run answers itself, with nothing run: those that reach the Claude
+/// folders, and `control`. A sealed hub serves no pipe (§4.13), so the only copy a sealed
+/// `control` could reach is the user's real one: `control quit` from a shell that still has
+/// `AGENTNOTCH_SAFE_MODE` set would end it, and `control status` would report its accounts.
+fn answered_when_sealed(command: &str) -> bool {
+    touches_claude_folders(command) || command == "control"
+}
+
 /// What one of those answers in a sealed run, with nothing read or written. A sealed run never
 /// installs hooks, so there are none of its own to remove: `uninstall-hooks` is done (0, which
-/// the uninstaller's `--quiet` needs anyway); the other two are refused.
+/// the uninstaller's `--quiet` needs anyway); the others are refused. `control` is refused, not
+/// "no instance running" (3): a sealed copy may well be running, and a script must not read 3
+/// as "nothing to stop".
 fn sealed_answer(command: &str) -> (i32, String) {
     match command {
         "uninstall-hooks" => (
@@ -113,6 +125,10 @@ fn sealed_answer(command: &str) -> (i32, String) {
         "install-hooks" => (
             REFUSED,
             "Sealed: a sealed run installs no hooks (it touches no Claude folder).".into(),
+        ),
+        "control" => (
+            REFUSED,
+            "Sealed: a sealed run talks to no running copy (a sealed app serves no pipe).".into(),
         ),
         _ => (
             REFUSED,
@@ -397,18 +413,19 @@ mod tests {
     fn a_sealed_run_never_reaches_the_claude_folders_from_the_command_line() {
         for command in ["inspect-accounts", "install-hooks", "uninstall-hooks"] {
             assert!(super::touches_claude_folders(command), "{command}");
+            assert!(super::answered_when_sealed(command), "{command}");
             let (_, text) = super::sealed_answer(command);
             assert!(text.starts_with("Sealed: "), "{text}");
         }
-        // The doctor asks the sealed hub; control and autostart are no Claude folder's.
-        for command in ["doctor", "control", "autostart"] {
-            assert!(!super::touches_claude_folders(command), "{command}");
+        // The doctor asks the sealed hub (and skips the pipe); autostart is upstream's Run
+        // value, no Claude folder's and no running copy's.
+        for command in ["doctor", "autostart"] {
+            assert!(!super::answered_when_sealed(command), "{command}");
         }
         for command in COMMANDS {
             assert!(
-                super::touches_claude_folders(command)
-                    || ["doctor", "control", "autostart"].contains(&command),
-                "{command} must say whether it reaches the Claude folders"
+                super::answered_when_sealed(command) || ["doctor", "autostart"].contains(&command),
+                "{command} must say whether a sealed run may run it"
             );
         }
         // Nothing installed, nothing to remove: done, as the uninstaller's --quiet needs.
@@ -416,6 +433,17 @@ mod tests {
         // Never "installed" or an account list made up: refused, with nothing done.
         assert_eq!(super::sealed_answer("install-hooks").0, super::REFUSED);
         assert_eq!(super::sealed_answer("inspect-accounts").0, super::REFUSED);
+    }
+
+    // A sealed hub serves no pipe (§4.13): the only copy a sealed `control` could reach is the
+    // user's real one, which `quit` would end. Refused (2), never "no instance running" (3).
+    #[test]
+    fn a_sealed_run_never_talks_to_a_running_copy() {
+        assert!(!super::touches_claude_folders("control"));
+        assert!(super::answered_when_sealed("control"));
+        let (code, text) = super::sealed_answer("control");
+        assert_eq!(code, super::REFUSED);
+        assert!(text.starts_with("Sealed: "), "{text}");
     }
 
     fn status() -> ControlStatus {

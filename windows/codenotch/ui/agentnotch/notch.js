@@ -48,6 +48,8 @@
   var started = false;
   var state = {
     snapshot: null,
+    /** `generated_at_ms` of `snapshot`. */
+    at: 0,
     peek: null,
     lastPeek: null,
     panel: null,
@@ -620,8 +622,13 @@
 
   function applySnapshot(snapshot) {
     if (!snapshot || !Array.isArray(snapshot.rings) || !Array.isArray(snapshot.sessions)) return;
+    // The start's `snapshot` reply and `an:snapshot` travel on two channels nothing orders, so
+    // an older one can arrive last; the hub's dates only grow (an equal one is a re-delivery).
+    var at = Number(snapshot.generated_at_ms) || 0;
+    if (state.snapshot && at < state.at) return;
     var held = holdsOpen();
     state.snapshot = snapshot;
+    state.at = at;
     settlePresses(snapshot);
     scheduleSuccessSettle(snapshot);
     callUpstream('renderRing');

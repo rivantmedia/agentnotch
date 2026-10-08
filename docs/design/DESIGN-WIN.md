@@ -2090,7 +2090,7 @@ object and the text from `<data>\<cmd>.log`:
 | `inspect-accounts` | read-only account inspection (AU§16): accounts, rings, run/store folders, install targets, freshest cached usage (only `accountUuid`/`fetchedAtMs`) | 0 |
 | `install-hooks` | refuses without consent (2); with consent, one pass now | 0/1/2 |
 | `uninstall-hooks [--quiet]` | §4.3 | 0 (quiet always 0) |
-| `control status\|quit` | sends a control frame; prints the answer | 0, or 3 when no instance |
+| `control status\|quit` | sends a control frame; prints the answer. Sealed: refused with nothing sent (a sealed app serves no pipe, so only a real copy could answer) | 0, or 3 when no instance; 2 sealed |
 | `autostart on\|off` | upstream's (Run value `Agent Notch`) | 0/1 |
 
 Doctor lines (stable prefixes for CI greps; values never contain tokens, prompts or file bodies):
