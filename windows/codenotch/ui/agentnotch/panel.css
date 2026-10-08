@@ -513,6 +513,13 @@ button.an-tool-head { cursor: pointer; }
 .an-working { display: flex; align-items: center; gap: 7px; font-size: var(--an-fs-body); color: var(--an-text-2); }
 .an-working .an-ring { color: var(--an-working); }
 .an-working-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; unicode-bidi: isolate; }
+/* the status line once Claude has stopped (ChatStatusRow): the mark and its words, Dismiss beside them; the words wrap */
+.an-status { display: flex; align-items: flex-start; gap: 7px; font-size: var(--an-fs-body); line-height: 1.35; color: var(--an-text-2); }
+.an-status-read { display: flex; align-items: flex-start; gap: 7px; flex: 1 1 auto; min-width: 0; }
+.an-status-mark { flex: none; margin-top: calc((1.35em - var(--an-ring)) / 2); }
+.an-status-t { min-width: 0; overflow-wrap: anywhere; unicode-bidi: isolate; }
+.an-status-dismiss { flex: none; }
+.an-status-err .an-status-t { color: var(--an-critical); }
 .an-ph { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 36px 0; font-size: var(--an-fs-body); color: var(--an-text-2); text-align: center; }
 .an-ph .an-ring { --an-ring: 12px; }
 .an-earlier { align-self: center; }

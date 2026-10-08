@@ -68,9 +68,13 @@ pub struct SessionStore {
     /// them.
     pub(super) recently_ended: BTreeMap<SessionId, SystemTime>,
     /// Sessions first seen mid-flight whose task list is rebuilt from the
-    /// transcript, and the list rebuilt so far.
+    /// transcript.
     pub(super) needs_task_reconstruction: BTreeSet<SessionId>,
-    pub(super) reconstruction: BTreeMap<SessionId, TaskList>,
+    /// The task list as each session's transcript has it so far, folded from
+    /// every line read (the Mac parser's whole-transcript list). A session
+    /// first seen mid-flight takes it as its history; one no hook reports
+    /// takes it as its list on every sync.
+    pub(super) transcript_tasks: BTreeMap<SessionId, TaskList>,
     /// Sessions whose transcript is read again, and when (the 100 ms
     /// debounce). One read job per session is out at a time; a request that
     /// comes meanwhile is asked again when the job is back.
@@ -142,7 +146,7 @@ impl SessionStore {
             sessions: BTreeMap::new(),
             recently_ended: BTreeMap::new(),
             needs_task_reconstruction: BTreeSet::new(),
-            reconstruction: BTreeMap::new(),
+            transcript_tasks: BTreeMap::new(),
             sync_due: BTreeMap::new(),
             sync_in_flight: BTreeSet::new(),
             sync_again: BTreeSet::new(),
@@ -866,7 +870,7 @@ impl SessionStore {
         });
         self.recently_ended.insert(id.clone(), now);
         self.needs_task_reconstruction.remove(id);
-        self.reconstruction.remove(id);
+        self.transcript_tasks.remove(id);
         self.sync_due.remove(id);
         self.sync_in_flight.remove(id);
         self.sync_again.remove(id);

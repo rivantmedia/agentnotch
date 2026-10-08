@@ -16,7 +16,9 @@
 
 use crate::control::text::{collapse_whitespace, collapsed, format_tool_name};
 use crate::core::time::{from_ms, to_ms};
-use crate::model::ui::{CardRow, PendingRequestView, RowDetail, SessionRow, UpstreamWindow};
+use crate::model::ui::{
+    CardRow, ChatStatusLine, PendingRequestView, RowDetail, SessionRow, UpstreamWindow,
+};
 use crate::model::{
     Bucket, NeedsInputReason, PendingRequest, PermissionContext, Phase, RequestKind, SessionState,
     SessionView, TaskProgress,
@@ -676,7 +678,50 @@ pub fn session_row(view: &SessionView, ctx: &RowContext<'_>) -> SessionRow {
         can_message: ctx.can_message,
         reviewable: view.state.bucket() == Bucket::ReadyForReview,
         a11y: accessibility_label(view, ctx.account_label, ctx.rate_limit, ctx.now, ctx.clock),
+        chat_status: chat_status(view, ctx),
         card: card_row(view, ctx),
+    }
+}
+
+// ---- the chat's status line ----
+
+/// The line a chat shows under its last message when Claude is not working
+/// (ChatStatusLine.swift): the failure with its reset time, "Ready for
+/// review · finished 5m ago", "Idle · last active 1h ago". `None` while the
+/// session works (the chat's working indicator says so, and the words must not
+/// appear twice) and while it needs an answer (the chat's bottom bar shows the
+/// request, question, plan or terminal-only dialog with its own words).
+pub fn chat_status(view: &SessionView, ctx: &RowContext<'_>) -> Option<ChatStatusLine> {
+    let join = |lead: &str, rest: Option<String>| match rest {
+        Some(rest) => format!("{lead} · {rest}"),
+        None => lead.to_owned(),
+    };
+    let elapsed = elapsed(view, ctx.now);
+    match &view.state {
+        SessionState::NeedsYou(_) | SessionState::Working => None,
+        SessionState::Failed(_) => Some(ChatStatusLine {
+            glyph: "error".to_owned(),
+            // What happened and, for a rate limit, when it lifts: the row's
+            // second line.
+            text: plain_text(&detail(view, ctx.rate_limit, ctx.now, ctx.clock)),
+            can_dismiss: true,
+        }),
+        SessionState::ReadyForReview => Some(ChatStatusLine {
+            glyph: "review".to_owned(),
+            text: join(
+                spoken_state(&view.state),
+                elapsed.map(|age| format!("finished {age}")),
+            ),
+            can_dismiss: false,
+        }),
+        SessionState::Idle => Some(ChatStatusLine {
+            glyph: "idle".to_owned(),
+            text: join(
+                spoken_state(&view.state),
+                elapsed.map(|age| format!("last active {age}")),
+            ),
+            can_dismiss: false,
+        }),
     }
 }
 

@@ -386,6 +386,128 @@ test('loading, empty, working and ended', async () => {
   clean(page);
 });
 
+// ---- the status line (ChatStatusLine.swift, ChatStatusRow) ---------------------------------------------
+
+const FAILED = { glyph: 'error', text: 'Rate limited · 5-hour limit resets in 47m', can_dismiss: true };
+const REVIEW = { glyph: 'review', text: 'Ready for review · finished 5m ago', can_dismiss: false };
+const IDLE = { glyph: 'idle', text: 'Idle · last active 1h ago', can_dismiss: false };
+const withStatus = (status) => ({ edit: (s) => { s.sessions.find((r) => r.session_id === ID).chat_status = status; } });
+const statusEl = (page) => listEl(page).children.find((el) => el.getAttribute('data-key') === 'status');
+
+test('a stopped session ends its chat with the row\'s words: a failure with its reset time, review, idle', async () => {
+  for (const [status, mark] of [[FAILED, 'error'], [REVIEW, 'review'], [IDLE, 'idle']]) {
+    const page = await openChat(withStatus(status));
+    const el = statusEl(page);
+    assert.ok(el, 'the status line is there: ' + status.glyph);
+    assert.equal(listEl(page).children[listEl(page).children.length - 1], el, 'under the last message');
+    assert.equal(text(el.querySelector('.an-status-t')), status.text);
+    assert.ok(el.querySelector('.an-ring-' + mark), 'the row\'s mark for the state');
+    assert.equal(page.$$('#an-chat-list .an-working').length, 0);
+    clean(page);
+  }
+});
+
+test('the mark and the words read as one element; Dismiss is a button of its own, only for a failure', async () => {
+  const failed = await openChat(withStatus(FAILED));
+  const read = statusEl(failed).querySelector('.an-status-read');
+  assert.equal(read.getAttribute('role'), 'img');
+  assert.equal(read.getAttribute('aria-label'), FAILED.text);
+  assert.ok(read.querySelector('svg') && read.querySelector('.an-status-t'), 'the mark and the words are inside it');
+  const buttons = failed.$$('#an-chat-list .an-status button');
+  assert.equal(buttons.length, 1);
+  assert.equal(buttons[0].textContent.trim(), 'Dismiss');
+  assert.equal(read.contains(buttons[0]), false, 'reading the status never dismisses the failure');
+  assert.equal(failed.$$('#an-chat-list .an-status-t button').length, 0);
+  assert.ok(failed.$('.an-status-err'), 'the words of a failure are in the critical ink');
+  failed.hub.clear();
+  failed.click(buttons[0]);
+  assert.deepEqual(calls(failed, 'dismiss_failure'), [{ session_id: ID }]);
+  assert.deepEqual(calls(failed, 'mark_reviewed'), []);
+  clean(failed);
+
+  for (const status of [REVIEW, IDLE]) {
+    const page = await openChat(withStatus(status));
+    assert.equal(page.$$('#an-chat-list .an-status button').length, 0, 'nothing to dismiss');
+    assert.equal(statusEl(page).querySelector('.an-status-read').getAttribute('aria-label'), status.text);
+    assert.equal(statusEl(page).classList.contains('an-status-err'), false);
+  }
+  // only a failure can be dismissed, whatever the payload says
+  const odd = await openChat(withStatus({ glyph: 'idle', text: 'Idle', can_dismiss: true }));
+  assert.equal(odd.$$('#an-chat-list .an-status button').length, 0);
+});
+
+test('an empty chat keeps "No messages yet" unless the session failed', async () => {
+  for (const status of [REVIEW, IDLE, null]) {
+    const page = await openChat(Object.assign(withStatus(status), { chat: false }));
+    page.emit('an:chat', patch(1, [], { reset: true, order: [] }));
+    assert.equal(text(listEl(page)), 'No messages yet', 'a line like "Idle · last active…" alone would read as a broken chat');
+    assert.equal(statusEl(page), undefined);
+    clean(page);
+  }
+  const failed = await openChat(Object.assign(withStatus(FAILED), { chat: false }));
+  failed.emit('an:chat', patch(1, [], { reset: true, order: [] }));
+  assert.equal(parts(statusEl(failed)), FAILED.text + ' Dismiss', 'a failure shows with nothing above it');
+  assert.equal(listEl(failed).children.length, 1);
+  assert.equal(failed.$$('#an-chat-list .an-ph').length, 0);
+  clean(failed);
+});
+
+test('the status line never shares the transcript with the working indicator, and a session that has gone shows none', async () => {
+  const page = await openChat(Object.assign(withStatus(IDLE), { chat: false }));
+  page.emit('an:chat', patch(1, [user('u', 'Go')], { reset: true, order: ['u'], working: 'Thinking…' }));
+  assert.equal(statusEl(page), undefined, 'the working indicator says it');
+  assert.ok(page.$('.an-working'));
+  page.emit('an:chat', patch(2, [], { order: ['u'], working: null }));
+  assert.ok(statusEl(page));
+  assert.equal(page.$('.an-working'), null);
+  page.emit('an:chat', patch(3, [], { order: ['u'], ended: true }));
+  assert.equal(statusEl(page), undefined, 'an ended chat says nothing of a session that is gone');
+  clean(page);
+});
+
+test('the status line follows the row: a new snapshot redraws it, an unchanged one leaves it alone', async () => {
+  const page = await openChat(withStatus(REVIEW));
+  const before = statusEl(page);
+  const snapshot = (status) => {
+    const s = harness.fixture('snapshot.json');
+    s.sessions.find((r) => r.session_id === ID).chat_status = status;
+    s.generated_at_ms += 10;
+    return s;
+  };
+  page.emit('an:snapshot', snapshot(REVIEW));
+  assert.equal(statusEl(page), before, 'the same words: the same element');
+  page.emit('an:snapshot', snapshot(Object.assign({}, REVIEW, { text: 'Ready for review · finished 6m ago' })));
+  assert.equal(text(statusEl(page).querySelector('.an-status-t')), 'Ready for review · finished 6m ago');
+  page.emit('an:snapshot', snapshot(FAILED));
+  assert.equal(text(statusEl(page).querySelector('.an-status-t')), FAILED.text);
+  assert.equal(page.$$('#an-chat-list .an-status button').length, 1);
+  page.emit('an:snapshot', snapshot(null));
+  assert.equal(statusEl(page), undefined, 'the session works again: no line');
+  // a row without the field (an older engine) has none either
+  const old = snapshot(null);
+  delete old.sessions.find((r) => r.session_id === ID).chat_status;
+  old.generated_at_ms += 10;
+  page.emit('an:snapshot', old);
+  assert.equal(statusEl(page), undefined);
+  clean(page);
+});
+
+test('hostile strings in the status line draw as text; a long one is bounded and wraps', async () => {
+  for (const evil of audit.HOSTILE) {
+    const page = await openChat(withStatus({ glyph: 'error', text: evil, can_dismiss: true }));
+    assert.deepEqual(audit.problems(listEl(page)), [], evil.slice(0, 30));
+    assert.deepEqual(page.errors.map(String), []);
+  }
+  const long = await openChat(withStatus({ glyph: 'error', text: 'W'.repeat(10000) + ' ' + 'x'.repeat(10000), can_dismiss: true }));
+  assert.ok(text(statusEl(long).querySelector('.an-status-t')).length <= 500);
+  assert.ok(statusEl(long).querySelector('.an-status-read').getAttribute('aria-label').length <= 500);
+  const unknown = await openChat(withStatus({ glyph: '<img src=x>', text: 'x', can_dismiss: true }));
+  assert.equal(statusEl(unknown), undefined, 'a mark the page does not know draws nothing');
+  const empty = await openChat(withStatus({ glyph: 'idle', text: '   ', can_dismiss: false }));
+  assert.equal(statusEl(empty), undefined);
+  clean(long);
+});
+
 // ---- earlier messages and scrolling ---------------------------------------------------------------------
 
 test('has_earlier shows "Show N earlier messages" (at most a page); a click asks for them once', async () => {
@@ -820,6 +942,9 @@ test('the chat\'s CSS: tokens only, code scrolls in its own box, links and marks
   assert.match(chat, /\.an-md-link \{[^}]*var\(--an-accent\)/);
   assert.match(chat, /\.an-diff-add \{[^}]*var\(--an-review\) 12%/);
   assert.match(chat, /\.an-diff-remove \{[^}]*var\(--an-critical\) 12%/);
+  assert.match(chat, /\.an-status-read \{[^}]*min-width: 0/, 'the status words can shrink');
+  assert.match(chat, /\.an-status-t \{[^}]*overflow-wrap: anywhere/, 'the status words wrap rather than clip');
+  assert.match(chat, /\.an-status-err \.an-status-t \{[^}]*var\(--an-critical\)/);
   assert.doesNotMatch(chat, /animation:[^;]*infinite/, 'the marks\' stepped arc is theme.css\'s, nothing here loops');
 });
 
