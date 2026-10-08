@@ -420,7 +420,9 @@ struct ChatTranscript: View, Equatable {
         if isLoading {
             ChatPlaceholder(kind: .loading)
                 .measuredHeight(onHeight)
-        } else if history.isEmpty && workingLabel == nil && statusLine == nil {
+        } else if history.isEmpty && workingLabel == nil && statusLine?.glyph != .error {
+            // "Idle · last active…" alone would read as a broken chat; a
+            // failure is worth showing even with nothing above it.
             ChatPlaceholder(kind: .empty)
                 .measuredHeight(onHeight)
         } else {
