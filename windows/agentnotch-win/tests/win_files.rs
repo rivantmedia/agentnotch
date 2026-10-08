@@ -989,6 +989,95 @@ fn canonical_strips_the_prefix_and_resolves_a_junction() {
     );
 }
 
+/// A folder is one file however it is reached (the ledger's "shared history" test compares
+/// these, never spellings): through a junction, in another letter case, by its 8.3 name.
+#[test]
+fn a_folder_has_one_identity_however_it_is_reached() {
+    let root = tempfile::tempdir().unwrap();
+    let files = WinFiles::new();
+    let target = root.path().join("projects");
+    std::fs::create_dir(&target).unwrap();
+    let other = root.path().join("other");
+    std::fs::create_dir(&other).unwrap();
+    let junction = root.path().join("junction");
+    make_junction(&junction, &target);
+
+    let key = |path: &Path| {
+        let id = files.identity(path).unwrap();
+        (id.volume, id.index)
+    };
+    // Through the junction; a folder asked for itself, not the link.
+    assert_eq!(key(&junction), key(&target));
+    assert_ne!(key(&target), key(&other));
+    // The folder's time and size change with its contents; its file index does not.
+    let before = key(&target);
+    std::fs::write(target.join("a.jsonl"), b"{}").unwrap();
+    assert_eq!(key(&target), before);
+    // Another letter case names the same folder on NTFS.
+    let upper = PathBuf::from(target.to_string_lossy().to_uppercase());
+    if upper.exists() {
+        assert_eq!(key(&upper), before);
+    }
+
+    // The rule built on it, over real junctions: a window folder whose `projects` is a
+    // junction to the shared store, a folder of its own, and a folder reaching it.
+    use agentnotch_engine::cloud::backfill::is_shared;
+    use agentnotch_engine::core::paths::{PathStyle, Paths};
+    use agentnotch_engine::model::BackfillFolder;
+    let text = |path: &Path| path.to_string_lossy().into_owned();
+    let paths = Paths::new(PathStyle::Windows, &text(root.path()));
+    let make = |name: &str| {
+        let dir = root.path().join(name);
+        std::fs::create_dir_all(dir.join("projects").join("-Users-me-app")).unwrap();
+        dir
+    };
+    let shared_store = root.path().join(".claude-shared");
+    std::fs::create_dir_all(shared_store.join("projects").join("-Users-me-app")).unwrap();
+    let window = root.path().join("window");
+    std::fs::create_dir(&window).unwrap();
+    make_junction(&window.join("projects"), &shared_store.join("projects"));
+    let own = make(".claude-own");
+    let bare = |dir: &Path| BackfillFolder {
+        config_dir: text(dir),
+        identity_id: None,
+        account_key: None,
+        signed_in_since: None,
+    };
+    let transcript = |dir: &Path| text(&dir.join("projects").join("-Users-me-app").join("s.jsonl"));
+    let known = vec![bare(&window), bare(&own), bare(&shared_store)];
+    assert!(is_shared(
+        Some(&transcript(&window)),
+        &text(&window),
+        &known,
+        &paths,
+        &files
+    ));
+    assert!(is_shared(None, &text(&window), &known, &paths, &files));
+    assert!(!is_shared(
+        Some(&transcript(&own)),
+        &text(&own),
+        &known,
+        &paths,
+        &files
+    ));
+    // Spelled in another case among the known folders: still itself.
+    let shouted = vec![bare(Path::new(&text(&own).to_uppercase()))];
+    assert!(!is_shared(None, &text(&own), &shouted, &paths, &files));
+    // A folder whose `projects` is a junction to its history makes it shared.
+    let adopted = root.path().join("adopted");
+    std::fs::create_dir(&adopted).unwrap();
+    make_junction(&adopted.join("projects"), &own.join("projects"));
+    let mut reached = known.clone();
+    reached.push(bare(&adopted));
+    assert!(is_shared(
+        Some(&transcript(&own)),
+        &text(&own),
+        &reached,
+        &paths,
+        &files
+    ));
+}
+
 // --- 8.3 names ------------------------------------------------------------------------------------
 
 #[test]

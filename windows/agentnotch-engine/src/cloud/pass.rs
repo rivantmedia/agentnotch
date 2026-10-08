@@ -961,6 +961,8 @@ impl CloudSyncPass {
                 cost_usd: None,
                 title: totals.title.clone(),
                 origin: Origin::Backfill,
+                // A root is a folder's own history.
+                shared_history: Some(false),
             });
         }
         if added.is_empty() {

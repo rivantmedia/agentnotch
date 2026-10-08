@@ -42,6 +42,19 @@
 //! Desktop session whose registry entry hasn't been read) is neither: it
 //! runs on as it was, nothing paused, until the hub places it.
 //!
+//! The same goes for a session whose transcript is in a shared history
+//! ([`super::backfill::is_shared`]: a linked `projects\`, or one another
+//! folder reaches), where any account may write the next lines: only what
+//! the app saw running counts. First seen certain, its lines from before its
+//! process started were written by processes the app never saw, perhaps as
+//! another account (a conversation from before sync, continued after an
+//! account switch): they are nobody's, and its account counts from its
+//! process's start. And when its part ends, what follows is nobody's until
+//! the app sees a process of it again (counted from that process's start;
+//! the same process back after a moment's absence loses nothing): another
+//! account may have continued it while the app wasn't capturing. A session
+//! in a folder's own history counts whole, as the backfill would.
+//!
 //! A part that stops being live is ended a minute later (the time it went
 //! away when that was seen while capturing, else its last activity), and
 //! comes back to life if it shows up again.
@@ -118,6 +131,11 @@ pub struct CloudLedgerEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     pub origin: Origin,
+    /// Local only: its transcript is in a shared history, so only what the
+    /// app saw running counts (see the module notes). `None` until the app
+    /// looked (an entry from before it did).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_history: Option<bool>,
 }
 
 impl CloudLedgerEntry {
@@ -341,13 +359,17 @@ pub const WRITE_DELAY: Duration = Duration::from_secs(10);
 /// Hand-overs between accounts kept per session at most: a session that
 /// keeps changing hands (two windows running it at once) stops being split
 /// further. Stretches of nobody are bounded on their own (by the same
-/// number): a hand-over away from nobody is never refused, so a session is
-/// never left counting for no one while the hub is certain.
+/// number, the ones a shared history's session starts with and gets at each
+/// end included): a hand-over away from nobody is never refused, so a
+/// session is never left counting for no one while the hub is certain. Past
+/// the bound, a part stays with the account it ran as.
 pub const MAX_OWNERS: usize = 32;
 /// Sessions first seen unsure kept at most (the oldest go first).
 pub const UNATTRIBUTED_CAPACITY: usize = 2_000;
-/// Nobody's stretch starts this long after the last certain activity
-/// (transcript times have millisecond precision).
+/// A stretch that takes over from an account's part (nobody's, or another
+/// account's) starts this long after that part's last activity (transcript
+/// times have millisecond precision): a response written at that very moment
+/// stays the part's, so it can't also count for the next.
 pub const UNCOUNTED_AFTER: Duration = Duration::from_millis(1);
 
 pub const FILE_NAME: &str = "cloud-ledger.json";
@@ -439,7 +461,8 @@ impl SessionLedger {
             .collect()
     }
 
-    /// The session's entry of the account that ran it last.
+    /// The session's entry of the account that runs it now; `None` while its
+    /// responses count for no one.
     pub fn entry(&self, session_id: &str) -> Option<CloudLedgerEntry> {
         let inner = lock(&self.inner);
         let owner = inner.current_owner(session_id)?;
@@ -481,8 +504,16 @@ impl SessionLedger {
         lock(&self.inner).is_known(session_id)
     }
 
-    /// Whether the session was seen running with its account unknown, and
-    /// nobody's responses since are counted for any account.
+    /// Whether the session's transcript is in a shared history, as the
+    /// ledger was told; `None` until it was (a session it has no entry of, or
+    /// whose entries are from before the app looked).
+    pub fn shared_history(&self, session_id: &str) -> Option<bool> {
+        lock(&self.inner).history_is_shared(session_id)
+    }
+
+    /// Whether the session's new responses count for no account: it was
+    /// seen running with its account unknown, or (in a shared history) it
+    /// stopped running and no process of it has been seen since.
     pub fn is_uncounted(&self, session_id: &str) -> bool {
         lock(&self.inner).current_owner(session_id).as_deref() == Some("")
     }
@@ -607,6 +638,19 @@ impl SessionLedger {
                         part_start = Some(inner.hand_over(&o.session_id, &current, o, now));
                         changed = true;
                     }
+                } else if o.in_shared_history == Some(true) {
+                    // First seen, in a shared history: what came before this
+                    // process is no one's (see the module notes).
+                    let start = min(o.process_started_at.unwrap_or(o.started_at), now);
+                    inner.set_owners(
+                        &o.session_id,
+                        vec![
+                            SessionOwner::new(None, ""),
+                            SessionOwner::new(Some(start), &o.account_key),
+                        ],
+                    );
+                    part_start = Some(start);
+                    changed = true;
                 }
                 inner.seen_this_run.insert(key.clone(), now);
                 inner.missing_since.remove(&key);
@@ -615,7 +659,10 @@ impl SessionLedger {
                     .owners
                     .get(&o.session_id)
                     .is_some_and(|owners| owners.len() > 1);
-                let updated = inner.merged(o, part_start, is_split);
+                let shared = o
+                    .in_shared_history
+                    .or_else(|| inner.history_is_shared(&o.session_id));
+                let updated = inner.merged(o, part_start, is_split, shared);
                 inner.open_ids.insert(key.clone());
                 inner
                     .keys_of_session
@@ -866,16 +913,40 @@ impl Inner {
                 .is_some_and(|u| u.contains_key(session_id))
     }
 
+    /// Whether the session's transcript is in a shared history, as the
+    /// ledger was told: any of its entries says so (`None`: none was told).
+    fn history_is_shared(&self, session_id: &str) -> Option<bool> {
+        let flags: Vec<bool> = self
+            .keys_of_session
+            .get(session_id)
+            .into_iter()
+            .flatten()
+            .filter_map(|key| self.contents.sessions.get(key)?.shared_history)
+            .collect();
+        (!flags.is_empty()).then(|| flags.contains(&true))
+    }
+
     /// How many of the session's kept owners are nobody's stretches
-    /// (`nobody`), or accounts'.
+    /// (`nobody`), or accounts' stretches counted as hand-overs between
+    /// accounts: one account back after a stretch of nobody (a session
+    /// resumed in a shared history) is no new one, or a session resumed
+    /// often would use up the bound and then never change hands.
     fn stretch_count(&self, session_id: &str, nobody: bool) -> usize {
-        match self.contents.owners.get(session_id) {
-            None => usize::from(!nobody),
-            Some(owners) => owners
-                .iter()
-                .filter(|o| o.account_key.is_empty() == nobody)
-                .count(),
+        let Some(owners) = self.contents.owners.get(session_id) else {
+            return usize::from(!nobody);
+        };
+        if nobody {
+            return owners.iter().filter(|o| o.account_key.is_empty()).count();
         }
+        let mut count = 0;
+        let mut previous: Option<&str> = None;
+        for owner in owners.iter().filter(|o| !o.account_key.is_empty()) {
+            if previous != Some(owner.account_key.as_str()) {
+                count += 1;
+            }
+            previous = Some(owner.account_key.as_str());
+        }
+        count
     }
 
     /// The session's responses after its last activity seen while its
@@ -967,12 +1038,13 @@ impl Inner {
     }
 
     /// The session, last run as `current`, now runs as the observation's
-    /// account. The old account's part ends when the new one began (its
-    /// process's start, never before the old part's last activity or an
-    /// earlier hand-over, never after now). Returns that moment. From nobody
-    /// (`current` is `""`), the same rule: a new process takes over from its
-    /// start, the process that ran through the unsure stretch from where it
-    /// began (the stretch goes).
+    /// account. The old account's part ends when the new one began: its
+    /// process's start (or, unknown, when the app first saw it; never after
+    /// now), but never at or before the old part's last activity or before an
+    /// earlier hand-over. Returns that moment. From nobody (`current` is
+    /// `""`), the same rule: a new process takes over from its start, the
+    /// process that ran through the unsure stretch from where it began (the
+    /// stretch goes).
     fn hand_over(
         &mut self,
         session_id: &str,
@@ -993,8 +1065,11 @@ impl Inner {
                 .unwrap_or(observation.started_at),
             now,
         );
+        // A response at the old part's last activity stays the old part's: a
+        // part that is never sent again (its account's key changed) keeps it
+        // on the website, so the new one mustn't count it as well.
         if let Some(old) = self.contents.sessions.get(&old_key) {
-            boundary = max(boundary, old.last_activity_at);
+            boundary = max(boundary, old.last_activity_at + UNCOUNTED_AFTER);
         }
         if let Some(previous) = owners.last().and_then(|o| o.from) {
             boundary = max(boundary, previous);
@@ -1017,11 +1092,14 @@ impl Inner {
     /// `part_start`: where a new part of a split session begins; `is_split`:
     /// the session has more than one owner, so a part's start is where its
     /// account took over, not when the app first saw the process.
+    /// `shared_history`: whether its transcript is in a shared history, if
+    /// known (an entry keeps what it was told first).
     fn merged(
         &self,
         observation: &LiveSessionObservation,
         part_start: Option<SystemTime>,
         is_split: bool,
+        shared_history: Option<bool>,
     ) -> CloudLedgerEntry {
         let key = CloudLedgerEntry::key_of(&observation.session_id, &observation.account_key);
         let path = self
@@ -1048,8 +1126,10 @@ impl Inner {
                 cost_usd: observation.cost_usd,
                 title: observation.title.clone(),
                 origin: Origin::Live,
+                shared_history,
             };
         };
+        entry.shared_history = entry.shared_history.or(shared_history);
         // A backfilled session seen running is the hub's from now on.
         if entry.origin == Origin::Backfill {
             entry.origin = Origin::Live;
@@ -1120,14 +1200,46 @@ impl Inner {
             } else {
                 entry.last_activity_at
             };
+            let mut stopped = None;
             if let Some(entry) = self.contents.sessions.get_mut(&key) {
                 entry.ended_at = Some(at);
+                if entry.shared_history == Some(true) {
+                    stopped = Some(entry.clone());
+                }
             }
             self.missing_since.remove(&key);
             self.open_ids.remove(&key);
             ended.push(key);
+            if let Some(entry) = stopped {
+                self.stop_counting_after_end(&entry, at);
+            }
         }
         ended
+    }
+
+    /// A shared history's session stopped running as `entry`'s account at
+    /// `end`. Whatever is written after it is no one's until the app sees a
+    /// process of the session again (`hand_over` from nobody): whoever
+    /// continues it while the app isn't capturing may be another account.
+    /// Past the bound on stretches of nobody, it stays as it was.
+    fn stop_counting_after_end(&mut self, entry: &CloudLedgerEntry, end: SystemTime) {
+        if self.current_owner(&entry.session_id).as_deref() != Some(entry.account_key.as_str())
+            || self.stretch_count(&entry.session_id, true) >= MAX_OWNERS
+        {
+            return;
+        }
+        let mut owners = self
+            .contents
+            .owners
+            .get(&entry.session_id)
+            .cloned()
+            .unwrap_or_else(|| vec![SessionOwner::new(None, &entry.account_key)]);
+        let mut boundary = end + UNCOUNTED_AFTER;
+        if let Some(previous) = owners.last().and_then(|o| o.from) {
+            boundary = max(boundary, previous);
+        }
+        owners.push(SessionOwner::new(Some(boundary), ""));
+        self.set_owners(&entry.session_id, owners);
     }
 
     /// Keep within [`CAPACITY`]: the oldest by last activity go first.

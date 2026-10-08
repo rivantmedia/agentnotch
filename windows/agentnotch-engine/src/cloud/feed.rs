@@ -101,6 +101,7 @@ pub fn observation(
         cost_usd: view.cost_usd,
         title,
         process_started_at: view.pid_started,
+        in_shared_history: None,
     })
 }
 

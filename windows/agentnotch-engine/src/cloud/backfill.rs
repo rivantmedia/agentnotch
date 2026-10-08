@@ -9,6 +9,11 @@
 //! case-sensitive and fails on Windows; here every component of the path is
 //! asked whether it is a link (`SecureFiles::is_reparse`: symlinks and
 //! junctions), and canonical paths are grouped by `Paths::key`.
+//!
+//! [`is_shared`] asks the same of one running session's history, with the
+//! Mac's full rule (a link, or another known folder reaching the same
+//! folder, compared by file identity: volume and file index, never by
+//! spelling), for the ledger's "only what the app saw running counts".
 
 use super::folder_logins::CloudFolderLogins;
 use super::keys::sha256_hex;
@@ -156,6 +161,67 @@ fn has_link_on_the_way(path: &str, paths: &Paths, files: &dyn SecureFiles) -> bo
         }
     }
     false
+}
+
+/// Whether a session's history is shared with other folders, so other
+/// accounts may have written its transcript and only the ledger can tell
+/// whose a line is: the transcript's project folder, or the `projects\` it
+/// is in (before a transcript is known, `config_dir`'s), is a link (Claude
+/// Parallel Profiles links every folder's `projects\` to `~\.claude-shared`),
+/// or another of `folders` reaches the same physical `projects`. Links
+/// further up (a config folder kept with dotfiles) share nothing by
+/// themselves, and folders are compared as files (`SecureFiles::identity`:
+/// volume and file index), not as spellings (letter case, 8.3 names,
+/// `\\?\`). Unlike a backfill root's test, a folder the app knows nothing
+/// else about is its own. A folder that can't be asked counts as its own
+/// (nothing is guessed shared); a link that can't be asked as no link.
+pub fn is_shared(
+    transcript_path: Option<&str>,
+    config_dir: &str,
+    folders: &[BackfillFolder],
+    paths: &Paths,
+    files: &dyn SecureFiles,
+) -> bool {
+    let is_link = |path: &str| files.is_reparse(Path::new(path)).unwrap_or(false);
+    // Which folder it is, however it is spelled or reached. The file's
+    // times and size say nothing about that.
+    let physical = |path: &str| {
+        files
+            .identity(Path::new(path))
+            .ok()
+            .map(|id| (id.volume, id.index))
+    };
+    let config_dir = paths.normalize(config_dir);
+    let mut projects = paths.join(&config_dir, "projects");
+    if let Some(transcript) = transcript_path.filter(|path| !path.is_empty()) {
+        let folder = paths.parent(&paths.normalize(transcript));
+        if let Some(folder) = &folder {
+            if is_link(folder) {
+                return true;
+            }
+            if let Some(above) = paths.parent(folder) {
+                projects = above;
+            }
+        }
+    }
+    if is_link(&projects) {
+        return true;
+    }
+    let Some(shared) = physical(&projects) else {
+        return false;
+    };
+    let own_folder = physical(&config_dir);
+    folders.iter().any(|other| {
+        let other_dir = paths.normalize(&other.config_dir);
+        // The same folder, however it is spelled, is not another.
+        if paths.same(&other_dir, &config_dir) {
+            return false;
+        }
+        if own_folder.is_some() && physical(&other_dir) == own_folder {
+            return false;
+        }
+        physical(&paths.join(&other_dir, "projects")) == Some(shared)
+    })
 }
 
 /// Who is signed in to a folder, as `CloudFolderLogins` tells logins apart:

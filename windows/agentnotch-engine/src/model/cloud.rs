@@ -80,6 +80,13 @@ pub struct LiveSessionObservation {
     pub title: Option<String>,
     /// When the Claude Code process running it started.
     pub process_started_at: Option<SystemTime>,
+    /// Its transcript is in a history other folders share (Claude Parallel
+    /// Profiles): its lines from before this process may be another
+    /// account's. `CloudSyncService` looks it up for sessions the ledger
+    /// hasn't been told about (`SessionLedger::shared_history`); `None`
+    /// otherwise.
+    #[serde(default)]
+    pub in_shared_history: Option<bool>,
 }
 
 /// A folder the backfill may read (CloudBackfill.Folder, CL§7.2).
