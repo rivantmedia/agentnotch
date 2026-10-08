@@ -325,14 +325,28 @@ function Get-HookOutcomes {
     $outcomes
 }
 
+# Claude Code's connection warm-up: at start it sends `HEAD <ANTHROPIC_BASE_URL>/api/hello` with
+# no key, no body and its errors ignored (2.1.285's bundle: `preconnectFired`, `{method:"HEAD",
+# signal:AbortSignal.timeout(1e4)}).catch(()=>{})`; run 37709649061 logged it). It goes to the fake
+# API like everything else and carries nothing of the user's, so exactly that request may come
+# keyless; any other keyless request, or this one with a body, a key or an Authorization header,
+# still fails.
+function Test-KeylessPreconnect {
+    param([Parameter(Mandatory)]$Entry)
+    $headers = @($Entry['headers'])
+    $Entry['method'] -eq 'HEAD' -and $Entry['path'] -eq '/api/hello' -and $Entry['apiKey'] -eq 'absent' -and
+        -not $Entry.Contains('authorization') -and -not ($headers -contains 'content-length') -and -not ($headers -contains 'transfer-encoding')
+}
+
 # What the fake Messages API's log says against hermeticity: every request carried exactly the
-# fake key (the log says ok/bad/absent, never the value) and no Authorization header.
+# fake key (the log says ok/bad/absent, never the value) and no Authorization header, apart from
+# Claude Code's keyless warm-up above.
 function Test-FakeApiLog {
     param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Entries, [Parameter(Mandatory)][string]$Name)
     if (-not $Entries.Count) { "${Name}: the fake API saw no request" }
     foreach ($entry in $Entries) {
         $what = "$($entry['method']) $($entry['path'])"
-        if ($entry['apiKey'] -ne 'ok') { "${Name}: $what came with the key $($entry['apiKey'])" }
+        if ($entry['apiKey'] -ne 'ok' -and -not (Test-KeylessPreconnect $entry)) { "${Name}: $what came with the key $($entry['apiKey'])" }
         if ($entry.Contains('authorization')) { "${Name}: $what carried an Authorization header" }
     }
     if (-not @($Entries | Where-Object { $_['path'] -eq '/v1/messages' -and $_['reply'] -eq 'turn' }).Count) { "${Name}: no scripted turn was asked for" }

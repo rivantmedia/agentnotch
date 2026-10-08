@@ -217,6 +217,22 @@ Test-Case "the fake API's log: only the fake key, no Authorization header, a scr
     Assert-True (@(Test-FakeApiLog -Entries @(@{ method = 'POST'; path = '/v1/messages'; apiKey = 'ok'; reply = 'passive' }) -Name 'x') -match 'no scripted turn') 'no turn'
 }
 
+Test-Case "the fake API's log: only Claude Code's keyless HEAD /api/hello warm-up may come without the key" {
+    $turn = @{ method = 'POST'; path = '/v1/messages'; apiKey = 'ok'; reply = 'turn' }
+    $hello = @{ method = 'HEAD'; path = '/api/hello'; apiKey = 'absent'; headers = @('accept', 'accept-encoding', 'connection', 'host', 'user-agent'); status = 401 }
+    Assert-Equal @(Test-FakeApiLog -Entries @($hello, $turn) -Name 'x').Count 0 'the warm-up as 2.1.285 sends it'
+    $others = @(
+        @{ method = 'GET'; path = '/api/hello'; apiKey = 'absent'; headers = @('host') },
+        @{ method = 'HEAD'; path = '/api/hello2'; apiKey = 'absent'; headers = @('host') },
+        @{ method = 'HEAD'; path = '/api/hello'; apiKey = 'bad'; headers = @('host', 'x-api-key') },
+        @{ method = 'HEAD'; path = '/api/hello'; apiKey = 'absent'; headers = @('content-length', 'host') },
+        @{ method = 'HEAD'; path = '/api/hello'; apiKey = 'absent'; headers = @('host'); authorization = 'present' },
+        @{ method = 'POST'; path = '/v1/messages'; apiKey = 'absent'; reply = 'turn' })
+    foreach ($other in $others) {
+        Assert-True (@(Test-FakeApiLog -Entries @($other, $turn) -Name 'x').Count -gt 0) "$($other['method']) $($other['path']) key $($other['apiKey']) headers $(@($other['headers']) -join ',') is still refused"
+    }
+}
+
 Test-Case 'the headless runs name the permission mode a Bash call asks in; the plan run names plan' {
     # 2.1.285 starts in auto mode when none is named, and auto runs a `touch` with no PermissionRequest.
     $headless = [string]${function:Invoke-HeadlessScenarios}
