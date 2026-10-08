@@ -35,6 +35,17 @@ The Claude code was ported from an earlier fork of Vibe Notch ("Superpowered Vib
 now retired). The README's first half is the user-facing fork documentation: download, build,
 first use, updates, privacy, development switches, releases. Read it before changing behaviour.
 
+## Agent & Workflow Constraints
+
+These apply to every session and every agent working in this repo.
+
+- Do not spawn parallel sub-agents or dynamic workflows for single-file edits or simple refactors.
+- For complex orchestration there is no cap on concurrent agents: use as many as the task needs
+  to finish as fast as possible.
+- Instruct sub-agents to use lower-tier models (e.g., Sonnet 5 or Haiku) for mechanical tasks
+  rather than inheriting Opus xhigh parameters: pass the model (and a lower effort) explicitly on
+  every sub-agent and workflow agent.
+
 ## Layout
 
 | Path | What lives there |
@@ -347,7 +358,18 @@ Packages/ClaudeControl/Scripts/embed-scripts.sh [--check]
   transcript's size/mtime, so a session is read again (a stat when unchanged) until its end is
   sent. The backfill reads only real (unshared) `projects/` folders, oldest transcript first,
   and only transcripts begun after `CloudFolderLogins` first saw the folder signed in as its
-  account (unknown before: never guessed).
+  account (unknown before: never guessed). Likewise, in a shared history
+  (`CloudBackfill.isShared`: the `projects/` or project folder is a link, or another known
+  folder reaches it; compared by file identity, never by spelling) only what the app saw
+  running counts: a session first seen there counts from its process's start, and after its
+  part ends what follows is no one's until a process of it is seen again (the same process
+  back loses nothing). The entry keeps `sharedHistory`. A hand-over starts just after the old
+  part's last activity, so no response counts for both parts, and only hand-overs between
+  accounts count toward `maxOwners`.
+- **Another website user:** what was sent is remembered per website user, so a Mac signed in as
+  someone else sends that user its whole ledger again. The website counts a Claude session
+  (account key and session id) once whoever's copies it holds, and a session continued under
+  another account once in totals across accounts (`web/contract/README.md`).
 - **Cost:** `ModelPricing` prices each response from the transcript the way Claude Code
   prices its own `total_cost_usd` (per model and token kind, 1-hour cache writes,
   `inference_geo` "us" ×1.1, web searches, advisor-tool iterations, fast mode). A session's

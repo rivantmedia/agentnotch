@@ -27,6 +27,8 @@ struct LiveChatView: View {
     let canFocus: Bool
     let account: AccountTagModel?
     let hooks: ChatHooks
+    /// How the session stands when Claude isn't working (the row's words).
+    var statusLine: ChatStatusLine? = nil
 
     @State private var history: [ChatHistoryItem]
     @State private var isLoading: Bool
@@ -40,8 +42,9 @@ struct LiveChatView: View {
     @State private var sendRefusal: String?
 
     init(session: SessionState, monitor: ClaudeSessionMonitor, state: ClaudePanelState,
-         canFocus: Bool, account: AccountTagModel?, hooks: ChatHooks) {
+         canFocus: Bool, account: AccountTagModel?, hooks: ChatHooks, statusLine: ChatStatusLine? = nil) {
         self.session = session
+        self.statusLine = statusLine
         self.monitor = monitor
         self.state = state
         self.canFocus = canFocus
@@ -66,12 +69,16 @@ struct LiveChatView: View {
             state: state,
             hooks: hooks,
             onSend: send,
-            unavailableReason: unavailableReason
+            unavailableReason: unavailableReason,
+            statusLine: statusLine
         )
         .task {
             // Opening the chat counts as reviewing the latest result.
             monitor.markReviewed(sessionId: session.sessionId)
-            guard isLoading else { return }
+            // Every time the chat appears, not only the first: leaving it
+            // releases the history and drops the chat from the manager, so a
+            // view that comes back must register again or it stops following.
+            // Already loaded is a cheap no-op there.
             await ChatHistoryManager.shared.loadFromFile(sessionId: session.sessionId, cwd: session.cwd)
             history = ChatHistoryManager.shared.history(for: session.sessionId)
             isLoading = false
@@ -194,6 +201,9 @@ struct ChatContent: View {
     let onSend: (String) -> Void
     /// Why there is no composer, when the engine said (shown in its place).
     var unavailableReason: String? = nil
+    /// How the session stands when Claude isn't working: failed, ready for
+    /// review, idle. Nil while it works or waits on an answer.
+    var statusLine: ChatStatusLine? = nil
     /// Snapshots: open the task board.
     var showsTaskBoard = false
     /// Snapshots: selections already made in a question.
@@ -273,6 +283,9 @@ struct ChatContent: View {
                 ? (session.phase == .compacting ? "Compacting context…" : "Working…")
                 : (session.attention == .working ? session.backgroundWaitDescription.map { "Waiting on \($0)…" } : nil),
             agentDescriptions: agentDescriptions,
+            // Never beside the working indicator: the line is for when Claude stopped.
+            statusLine: isWorking || session.attention == .working ? nil : statusLine,
+            onDismiss: { hooks.perform(.markReviewed(sessionId: sessionId)) },
             onHeight: { [messagesHeight = $messagesHeight] height in
                 if abs(messagesHeight.wrappedValue - height) > 0.5 { messagesHeight.wrappedValue = height }
             }
@@ -383,6 +396,9 @@ struct ChatTranscript: View, Equatable {
     /// "Working…" or "Compacting context…" under the last message; nil when idle.
     let workingLabel: String?
     let agentDescriptions: [String: String]
+    /// Under the last message when Claude is not working.
+    var statusLine: ChatStatusLine? = nil
+    var onDismiss: () -> Void = {}
     /// The laid-out height of the messages (not of the scroll view).
     let onHeight: (CGFloat) -> Void
 
@@ -391,6 +407,7 @@ struct ChatTranscript: View, Equatable {
 
     static func == (lhs: ChatTranscript, rhs: ChatTranscript) -> Bool {
         lhs.isLoading == rhs.isLoading && lhs.workingLabel == rhs.workingLabel
+            && lhs.statusLine == rhs.statusLine
             && lhs.agentDescriptions == rhs.agentDescriptions && lhs.history == rhs.history
     }
 
@@ -403,7 +420,9 @@ struct ChatTranscript: View, Equatable {
         if isLoading {
             ChatPlaceholder(kind: .loading)
                 .measuredHeight(onHeight)
-        } else if history.isEmpty && workingLabel == nil {
+        } else if history.isEmpty && workingLabel == nil && statusLine?.glyph != .error {
+            // "Idle · last active…" alone would read as a broken chat; a
+            // failure is worth showing even with nothing above it.
             ChatPlaceholder(kind: .empty)
                 .measuredHeight(onHeight)
         } else {
@@ -419,6 +438,8 @@ struct ChatTranscript: View, Equatable {
                 }
                 if let workingLabel {
                     WorkingIndicator(label: workingLabel)
+                } else if let statusLine {
+                    ChatStatusRow(line: statusLine, onDismiss: onDismiss)
                 }
             }
             .padding(.horizontal, theme.padding)
@@ -534,6 +555,37 @@ private struct WorkingIndicator: View {
                 .foregroundStyle(.ink(.secondary))
         }
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// "● Rate limited · 5-hour limit resets in 47m" under the last message once
+/// Claude has stopped. The text wraps rather than clips: the panel can be narrow.
+private struct ChatStatusRow: View {
+    let line: ChatStatusLine
+    let onDismiss: () -> Void
+
+    @Environment(\.claudeControlTheme) private var theme
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
+            // The mark and its words read as one; Dismiss stays a button of
+            // its own, so reading the status never dismisses the failure.
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                StatusRing(kind: line.glyph)
+                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+                Text(line.text)
+                    .claudeFont(.body)
+                    .foregroundStyle(.ink(line.glyph == .error ? .critical : .secondary))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .accessibilityElement(children: .combine)
+            if line.canDismiss {
+                Button("Dismiss", action: onDismiss)
+                    .buttonStyle(.claude(.quiet, compact: true))
+                    .help("Dismiss this failure (⌘R)")
+            }
+        }
     }
 }
 

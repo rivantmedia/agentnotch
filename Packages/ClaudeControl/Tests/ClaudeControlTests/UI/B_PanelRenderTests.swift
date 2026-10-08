@@ -36,7 +36,7 @@ struct B_PanelRenderTests {
         var model = SessionsPanelModel(sessions: sessions, accounts: accounts)
         model.now = UIFixtures.now
         model.readings = UIFixtures.readings()
-        let view = SessionsPanelContent(model: model, state: state, actions: SessionsPanelActions(), chat: { session, hooks in
+        let view = SessionsPanelContent(model: model, state: state, actions: SessionsPanelActions(), chat: { session, hooks, _ in
             ChatContent(session: session, history: UIFixtures.chatHistory(), isLoading: false, canFocus: true,
                         messageRoute: .tmux, account: nil, agentDescriptions: [:], sendFailure: nil,
                         state: state, hooks: hooks, onSend: { _ in })

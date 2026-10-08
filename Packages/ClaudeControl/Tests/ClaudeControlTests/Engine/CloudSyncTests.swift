@@ -156,8 +156,28 @@ struct CloudSyncTests {
 
         func transcript(_ id: String) -> String { (projects as NSString).appendingPathComponent("\(id).jsonl") }
 
+        /// Claude Parallel Profiles' layout: a window folder whose `projects/`
+        /// links to the shared store. The folder, and `id`'s transcript
+        /// through it.
+        func sharedWindow(_ id: String) throws -> (configDir: String, transcript: String) {
+            let fm = FileManager.default
+            let shared = root.appendingPathComponent(".claude-shared/projects").path
+            let window = root.appendingPathComponent(".claude-windows/a1b2c3d4e5f6").path
+            if !fm.fileExists(atPath: window + "/projects") {
+                try fm.createDirectory(atPath: shared, withIntermediateDirectories: true)
+                try fm.createDirectory(atPath: window, withIntermediateDirectories: true)
+                try fm.createSymbolicLink(atPath: window + "/projects", withDestinationPath: shared)
+            }
+            return (window, window + "/projects/-Users-me-code-app/\(id).jsonl")
+        }
+
+        /// The first session of the last sync request.
+        func lastSentSession() -> [String: Any]? {
+            syncRequests.last.flatMap { (body($0)["sessions"] as? [[String: Any]])?.first }
+        }
+
         /// A session with a prompt, a tool call and its output, and two responses.
-        func writeSession(_ id: String, extra: Int = 0) throws {
+        func writeSession(_ id: String, extra: Int = 0, at path: String? = nil) throws {
             var lines = [
                 CloudTranscriptLines.user("MY SECRET PROMPT about the login bug", session: id, at: CloudFixture.stamp(0)),
                 CloudTranscriptLines.assistant(id: "\(id)-m1", request: "r1", session: id, input: 100, output: 50,
@@ -171,7 +191,7 @@ struct CloudSyncTests {
                 lines.append(CloudTranscriptLines.assistant(id: "\(id)-x\(index)", request: "rx\(index)", session: id, input: 1,
                                                        output: 1, at: CloudFixture.stamp(30 + Double(index))))
             }
-            try CloudTranscriptLines.write(lines, to: transcript(id))
+            try CloudTranscriptLines.write(lines, to: path ?? transcript(id))
         }
 
         func observation(_ id: String, entrypoint: String = "cli", account: CloudAccountInfo = CloudFixture.account) -> LiveSessionObservation {
@@ -399,6 +419,205 @@ struct CloudSyncTests {
         let session = try #require((harness.body(request)["sessions"] as? [[String: Any]])?.first)
         #expect(session["messageCount"] as? Int == 2)
         #expect(session["costUsd"] as? Double == 0.37)
+    }
+
+    /// Regression (double counting): a conversation in Claude Parallel
+    /// Profiles' shared history, first seen when an account continues it,
+    /// is sent with only that process's responses. The ones before it ran
+    /// unseen (before sync, or as another account): counting them for this
+    /// account would credit it with another's, or count them twice.
+    @Test func aSessionFirstSeenInASharedHistoryIsSentFromItsProcess() async throws {
+        let harness = Harness()
+        await harness.start()
+        let id = CloudFixture.sessionA
+        typealias L = CloudTranscriptLines
+        let (window, transcript) = try harness.sharedWindow(id)
+        try L.write([
+            // Earlier processes: two responses.
+            L.user("start", session: id, at: CloudFixture.stamp(0)),
+            L.assistant(id: "old-1", request: "ro1", session: id, input: 100, output: 50, at: CloudFixture.stamp(10)),
+            L.assistant(id: "old-2", request: "ro2", session: id, input: 100, output: 50, at: CloudFixture.stamp(20)),
+            // This process: one.
+            L.user("go on", session: id, at: CloudFixture.stamp(1000)),
+            L.assistant(id: "new-1", request: "rn1", session: id, input: 1, output: 2, at: CloudFixture.stamp(1010)),
+        ], to: transcript)
+        var observation = harness.observation(id)
+        observation.configDir = window
+        observation.transcriptPath = transcript
+        observation.processStartedAt = CloudFixture.base.addingTimeInterval(990)
+        observation.startedAt = CloudFixture.base.addingTimeInterval(995)
+        observation.lastActivityAt = CloudFixture.base.addingTimeInterval(1010)
+        harness.sync.observeLive([observation], liveIDs: [id])
+        await harness.sync.syncNow()
+        let request = try #require(harness.syncRequests.last)
+        let session = try #require((harness.body(request)["sessions"] as? [[String: Any]])?.first)
+        #expect(session["messageCount"] as? Int == 1)
+        #expect((session["tokens"] as? [String: Int])?["output"] == 2)
+        #expect(session["startedAt"] as? String == CloudFixture.stamp(1000))
+        // Not the process's status-line total (it may carry the earlier
+        // ones), but its own response at list prices: Opus 4.5, 1 in, 2 out.
+        #expect(session["costUsd"] as? Double == 0.000055)
+
+        // The same layout, as a folder's own history: counted whole.
+        let own = Harness()
+        await own.start()
+        try own.writeSession(id)
+        var whole = own.observation(id)
+        whole.processStartedAt = CloudFixture.base.addingTimeInterval(15)
+        own.sync.observeLive([whole], liveIDs: [id])
+        await own.sync.syncNow()
+        let ownRequest = try #require(own.syncRequests.last)
+        #expect((own.body(ownRequest)["sessions"] as? [[String: Any]])?.first?["messageCount"] as? Int == 2)
+    }
+
+    /// A new session in a shared history is all its process's: sent whole,
+    /// with Claude Code's own cost (no response is no one's).
+    @Test func aNewSessionInASharedHistoryKeepsClaudeCodesCost() async throws {
+        let harness = Harness()
+        await harness.start()
+        let id = CloudFixture.sessionA
+        let (window, transcript) = try harness.sharedWindow(id)
+        try harness.writeSession(id, at: transcript)
+        var observation = harness.observation(id)
+        observation.configDir = window
+        observation.transcriptPath = transcript
+        observation.processStartedAt = CloudFixture.base.addingTimeInterval(-5)
+        harness.sync.observeLive([observation], liveIDs: [id])
+        #expect(harness.sync.stores?.ledger.owners(of: id).count == 2)
+        await harness.sync.syncNow()
+        let session = try #require(harness.lastSentSession())
+        #expect(session["messageCount"] as? Int == 2 && session["costUsd"] as? Double == 0.37)
+    }
+
+    /// A folder's history counts as shared when another folder the
+    /// registry knows reaches it too (profiles relinked after Claude
+    /// Parallel Profiles was removed, say), though no link leads to it.
+    @Test func aHistoryAnotherFolderReachesIsShared() async throws {
+        let harness = Harness()
+        let fm = FileManager.default
+        let other = harness.root.appendingPathComponent(".claude-work").path
+        try fm.createDirectory(atPath: (harness.projects as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: other, withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: other + "/projects",
+                                  withDestinationPath: (harness.projects as NSString).deletingLastPathComponent)
+        harness.environment.folders = [CloudBackfill.Folder(configDir: other, identityId: nil, accountKey: nil)]
+        await harness.start()
+        let id = CloudFixture.sessionA
+        try harness.writeSession(id)
+        var observation = harness.observation(id)
+        observation.processStartedAt = CloudFixture.base.addingTimeInterval(15)
+        harness.sync.observeLive([observation], liveIDs: [id])
+        await harness.sync.syncNow()
+        // Only the response after its process started.
+        #expect(harness.lastSentSession()?["messageCount"] as? Int == 1)
+    }
+
+    /// Regression (double counting): a shared history's session the app
+    /// saw end, continued while the app wasn't capturing (as another
+    /// account, say), then resumed in a process the app sees: what was
+    /// written in between counts for no one, not for the account it ran as.
+    @Test func whatASharedSessionDidUnseenCountsForNoOne() async throws {
+        let harness = Harness()
+        await harness.start()
+        let id = CloudFixture.sessionA
+        typealias L = CloudTranscriptLines
+        let (window, transcript) = try harness.sharedWindow(id)
+        try harness.writeSession(id, at: transcript)
+        var observation = harness.observation(id)
+        observation.configDir = window
+        observation.transcriptPath = transcript
+        observation.processStartedAt = CloudFixture.base.addingTimeInterval(-5)
+        harness.sync.observeLive([observation], liveIDs: [id])
+        await harness.sync.syncNow()
+        #expect(harness.lastSentSession()?["messageCount"] as? Int == 2)
+        // It ends, and the app sees it go.
+        harness.sync.observeLive([], liveIDs: [])
+        harness.clock.advance(61)
+        await harness.sync.tick()
+        // Continued unseen (sync off meanwhile, say): two responses.
+        harness.sync.setSyncEnabled(false)
+        try L.write([L.user("other account", session: id, at: CloudFixture.stamp(4000)),
+                     L.assistant(id: "gap-1", request: "rg1", session: id, input: 500, output: 500, at: CloudFixture.stamp(4010)),
+                     L.assistant(id: "gap-2", request: "rg2", session: id, input: 500, output: 500, at: CloudFixture.stamp(4020))],
+                    to: transcript, append: true)
+        harness.sync.setSyncEnabled(true)
+        // Resumed as its account in a new process the app sees.
+        try L.write([L.assistant(id: "back-1", request: "rb1", session: id, input: 1, output: 3, at: CloudFixture.stamp(5010))],
+                    to: transcript, append: true)
+        harness.clock.now = CloudFixture.base.addingTimeInterval(5020)
+        var resumed = observation
+        resumed.processStartedAt = CloudFixture.base.addingTimeInterval(5000)
+        resumed.startedAt = CloudFixture.base.addingTimeInterval(5001)
+        resumed.lastActivityAt = CloudFixture.base.addingTimeInterval(5010)
+        harness.sync.observeLive([resumed], liveIDs: [id])
+        await harness.sync.syncNow()
+        let session = try #require(harness.lastSentSession())
+        #expect(session["messageCount"] as? Int == 3)
+        #expect((session["tokens"] as? [String: Int])?["output"] == 58)
+    }
+
+    /// Regression (double counting): an account whose key changes while a
+    /// session of it runs (its organization became known) hands the
+    /// session over in the same process. The old key's row is never sent
+    /// again, so its last response mustn't count for the new key as well.
+    @Test func aKeyChangeMidSessionCountsTheLastResponseOnce() async throws {
+        let harness = Harness()
+        await harness.start()
+        let id = CloudFixture.sessionA
+        typealias L = CloudTranscriptLines
+        try harness.writeSession(id)
+        var observation = harness.observation(id)
+        observation.processStartedAt = CloudFixture.base.addingTimeInterval(-5)
+        harness.sync.observeLive([observation], liveIDs: [id])
+        await harness.sync.syncNow()
+        #expect(harness.lastSentSession()?["messageCount"] as? Int == 2)
+        // The same Claude account, keyed with its organization from now on.
+        var rekeyed = CloudFixture.account
+        rekeyed.accountKey = CloudFixture.workAccountKey
+        harness.environment.accountList = [rekeyed]
+        try L.write([L.assistant(id: "after", request: "ra", session: id, input: 1, output: 1, at: CloudFixture.stamp(30))],
+                    to: harness.transcript(id), append: true)
+        observation.lastActivityAt = CloudFixture.base.addingTimeInterval(30)
+        harness.sync.observeLive([observation], liveIDs: [id])
+        await harness.sync.syncNow()
+        let session = try #require(harness.lastSentSession())
+        #expect(session["accountKey"] as? String == CloudFixture.workAccountKey)
+        #expect(session["messageCount"] as? Int == 1)
+    }
+
+    /// The website counts a session once however many people's copies it
+    /// holds: a Mac signed in as someone else is sent what it captured
+    /// before, under the same session id and project key.
+    @Test func anotherWebsiteUserIsSentWhatWasCapturedBefore() async throws {
+        let harness = Harness()
+        await harness.start()
+        let id = CloudFixture.sessionA
+        try harness.writeSession(id)
+        harness.sync.observeLive([harness.observation(id)], liveIDs: [id])
+        await harness.sync.syncNow()
+        func lastSession() -> [String: Any]? {
+            harness.syncRequests.last.flatMap { (harness.body($0)["sessions"] as? [[String: Any]])?.first }
+        }
+        let first = try #require(lastSession())
+
+        await harness.sync.signOut()
+        harness.transport.answer { request in
+            guard request.url?.path == "/api/app/v1/me" else { return try Harness.website(request) }
+            return .json(200, ["user": ["id": "22222222-3333-4444-8555-666666666666", "email": "other@example.com",
+                                        "name": NSNull()],
+                               "dashboardUrl": "https://agentnotch.example.com/dashboard"])
+        }
+        #expect(await harness.sync.signIn { _ in URL(string: "agentnotch://auth-callback?code=other")! })
+        #expect(harness.sync.stores?.memory.userId == "22222222-3333-4444-8555-666666666666")
+        harness.sync.setSyncEnabled(true)
+        let before = harness.syncRequests.count
+        // No sighting since: the session comes from the ledger.
+        await harness.sync.syncNow()
+        #expect(harness.syncRequests.count == before + 1)
+        let again = try #require(lastSession())
+        #expect(again["sessionId"] as? String == id)
+        #expect((again["project"] as? [String: Any])?["key"] as? String == (first["project"] as? [String: Any])?["key"] as? String)
+        #expect(again["messageCount"] as? Int == first["messageCount"] as? Int)
     }
 
     /// A session no status line reported a cost for (the VS Code

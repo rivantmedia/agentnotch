@@ -585,7 +585,9 @@ nonisolated enum CloudSyncPass {
                 model: totals.models.first,
                 costUsd: nil,
                 title: totals.title,
-                origin: .backfill
+                origin: .backfill,
+                // A root is a folder's own history.
+                sharedHistory: false
             ))
         }
         guard !added.isEmpty else { return 0 }
@@ -681,6 +683,8 @@ final class CloudSync: ObservableObject {
     /// An account whose 5-hour window is at least this used (percent) gets
     /// no summaries until it comes down: they would eat into real work.
     nonisolated static let summaryUsageCeiling: Double = 80
+    /// How long whether a place's history is shared is taken as known.
+    nonisolated static let sharedHistoryMemory: TimeInterval = 60
 
     // MARK: Dependencies
 
@@ -784,6 +788,9 @@ final class CloudSync: ObservableObject {
     /// The hub reported running sessions since capture last (re)started:
     /// until it has, `lastLiveIDs` says nothing about what ended.
     private var liveObservedSinceResume = false
+    /// `lookUpSharedHistories`' answers since `at`, by config folder and
+    /// transcript folder.
+    private var sharedHistories: (at: Date, byPlace: [String: Bool]) = (.distantPast, [:])
 
     init(dependencies: @escaping @MainActor () -> Dependencies = { Dependencies.live() }) {
         makeDependencies = dependencies
@@ -1069,6 +1076,9 @@ final class CloudSync: ObservableObject {
     /// with sync on; only allowed accounts, each keyed as `accounts()` keys
     /// it. A session the ledger knows that runs as no allowed account now
     /// (unsure, or an account the website may not hear of) counts for none.
+    /// Whether a session's transcript is in a shared history is looked up
+    /// until the ledger knows: there, only what the app saw running counts
+    /// (`SessionLedger`).
     func observeLive(_ live: [LiveSessionObservation], unsure: Set<String> = [], waiting: Set<String> = [],
                      liveIDs: Set<String>) {
         guard isCapturing, let stores, let environment else { return }
@@ -1076,18 +1086,49 @@ final class CloudSync: ObservableObject {
         liveObservedSinceResume = true
         let accounts = environment.accounts()
         let byIdentity = Dictionary(accounts.map { ($0.identityId, $0) }, uniquingKeysWith: { first, _ in first })
-        let kept: [LiveSessionObservation] = live.compactMap { observation in
+        var kept: [LiveSessionObservation] = live.compactMap { observation in
             guard let account = byIdentity[observation.identityId] else { return nil }
             var keyed = observation
             keyed.accountKey = account.accountKey
             return keyed
         }
+        lookUpSharedHistories(&kept, stores: stores, environment: environment)
         let ledgerAccounts = Dictionary(kept.compactMap { observation in
             byIdentity[observation.identityId].map { ($0.accountKey, $0.ledgerAccount) }
         }, uniquingKeysWith: { first, _ in first })
         let ended = stores.ledger.observe(live: kept, liveIDs: liveIDs, unsure: unsure, waiting: waiting,
                                           accounts: ledgerAccounts, now: now)
         if !ended.isEmpty { syncSoon() }
+    }
+
+    /// Sets `inSharedHistory` on the observations of sessions the ledger
+    /// hasn't been told about (`CloudBackfill.isShared`, against every
+    /// folder the registry knows). Answers are kept a minute by where the
+    /// transcript is: a session the ledger never takes (one running as two
+    /// accounts at once) is looked up on every feed.
+    private func lookUpSharedHistories(_ observations: inout [LiveSessionObservation], stores: CloudStores,
+                                       environment: any CloudSyncEnvironment) {
+        let undecided = observations.indices.filter { stores.ledger.sharedHistory(of: observations[$0].sessionId) == nil }
+        guard !undecided.isEmpty else { return }
+        let now = self.now
+        if now.timeIntervalSince(sharedHistories.at) >= Self.sharedHistoryMemory || now < sharedHistories.at {
+            sharedHistories = (now, [:])
+        }
+        let defaultFolder = AccountRegistry.defaultConfigDir(home: deps?.home ?? AppIdentity.homeDirectory)
+        var folders: [CloudBackfill.Folder]?
+        for index in undecided {
+            let configDir = observations[index].configDir ?? defaultFolder
+            let transcriptPath = observations[index].transcriptPath
+            let place = configDir + "\u{0}" + (transcriptPath.map { ($0 as NSString).deletingLastPathComponent } ?? "")
+            if let known = sharedHistories.byPlace[place] {
+                observations[index].inSharedHistory = known
+                continue
+            }
+            if folders == nil { folders = environment.backfillFolders() }
+            let shared = CloudBackfill.isShared(transcriptPath: transcriptPath, configDir: configDir, folders: folders ?? [])
+            sharedHistories.byPlace[place] = shared
+            observations[index].inSharedHistory = shared
+        }
     }
 
     /// A usage reading `UsageStore` took in. Only while signed in with sync

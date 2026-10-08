@@ -495,6 +495,7 @@ actor SessionStore {
             session.stopError = message
             session.stopErrorCode = event.stopError
             session.stopErrorAt = now
+            session.stopErrorIsRestored = false
             // last_assistant_message of a StopFailure is the API error text;
             // the preview keeps the last real reply.
             session.backgroundTaskCount = 0
@@ -526,6 +527,7 @@ actor SessionStore {
         session.stopError = nil
         session.stopErrorCode = nil
         session.stopErrorAt = nil
+        session.stopErrorIsRestored = false
     }
 
     /// Sets or clears `needsInputReason` for this event.
@@ -608,6 +610,7 @@ actor SessionStore {
                 session.stopError = error
                 session.stopErrorCode = record.stopErrorCode
                 session.stopErrorAt = record.failedAt
+                session.stopErrorIsRestored = true
                 session.setNeedsInput(.error(error), at: record.failedAt ?? now)
             }
         }
@@ -1087,6 +1090,8 @@ actor SessionStore {
                     session.phase = .processing
                     if !session.isHookBacked {
                         session.turnStartedAt = changedAt
+                        // Show its task progress now, not at the next recheck.
+                        scheduleFileSync(sessionId: session.sessionId)
                     }
                 }
             default:
@@ -1279,6 +1284,13 @@ actor SessionStore {
                 session.toolTracker = ToolTracker()
                 session.subagentState = SubagentState()
                 session.tasks.reset()
+            }
+            // No hook reports this session, so the transcript is its only
+            // source: follow it on every sync (merging would keep the old
+            // statuses) and, after a /clear, start from its new list.
+            if payload.reconstructedTasks == nil, !session.isHookBacked,
+               let transcriptTasks = payload.transcriptTasks, session.tasks != transcriptTasks {
+                session.tasks = transcriptTasks
             }
 
             mergeMessages(
@@ -1747,7 +1759,8 @@ actor SessionStore {
             toolResults: result.toolResults,
             structuredResults: result.structuredResults,
             subagentTools: result.subagentTools,
-            reconstructedTasks: reconstruct ? result.transcriptTasks : nil
+            reconstructedTasks: reconstruct ? result.transcriptTasks : nil,
+            transcriptTasks: result.transcriptTasks
         )
         await process(.fileUpdated(payload))
     }

@@ -20,6 +20,12 @@ SEAM	U2	Sources/App/AppDelegate.swift	Fork.prepareDefaults() // Fork: U2
 SEAM	U3	Sources/App/AppDelegate.swift	let allProviders: [UsageProvider] = ClaudeBridge.shared.launchUsageProviders() + claudeProviders // Fork: U3
 SEAM	U4	Sources/App/AppDelegate.swift	ClaudeBridge.shared.attach(fleet: fleet, store: store, preferences: preferences) // Fork: U4
 SEAM	U5	Sources/App/AppDelegate.swift	let events = completions.absorb(sessions).filter { !ClaudeBridge.ownsProvider($0.providerID) } // Fork: U5
+# LIM1/LIM2: a Claude account's usage limit is announced once (LimitAnnouncements
+# in the package): Codenotch's threshold banner at 100% is dropped for Claude rings,
+# and its "limit reached" card or banner shows only as the first announcement of
+# that account's limit (shared with the account's limit banner and the notch's chime).
+SEAM	LIM1	Sources/App/AppDelegate.swift	deliver: { if ClaudeBridge.forwardsThresholdAlert(providerID: $0.providerID, threshold: $0.threshold, usedPercent: $0.usedPercent) { ThresholdAlerts.deliver($0) } } // Fork: LIM1
+SEAM	LIM2	Sources/App/AppDelegate.swift	guard ClaudeBridge.shared.claimsLimitAlert(event, bringsSound: preferences.limitReachedSound) else { return } // Fork: LIM2
 
 # --- U6: Model/UsageStore.swift (one block after registerCustomProviders) ----
 SEAM	U6	Sources/Model/UsageStore.swift	// Fork: U6 begin.

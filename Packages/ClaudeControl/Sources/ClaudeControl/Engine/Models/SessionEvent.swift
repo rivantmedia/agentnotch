@@ -112,6 +112,9 @@ nonisolated struct FileUpdatePayload: Sendable {
     /// Task list rebuilt from the transcript. Set only on the first sync of a
     /// session discovered mid-flight (app restart, registry, status line).
     var reconstructedTasks: SessionTaskList?
+    /// The task list as the transcript has it now, on every sync. Sessions no
+    /// hook reports take it as their list; hook-driven ones ignore it.
+    var transcriptTasks: SessionTaskList?
 
     init(
         sessionId: String,
@@ -123,7 +126,8 @@ nonisolated struct FileUpdatePayload: Sendable {
         toolResults: [String: ConversationParser.ToolResult] = [:],
         structuredResults: [String: ToolResultData] = [:],
         subagentTools: [String: [SubagentToolInfo]] = [:],
-        reconstructedTasks: SessionTaskList? = nil
+        reconstructedTasks: SessionTaskList? = nil,
+        transcriptTasks: SessionTaskList? = nil
     ) {
         self.sessionId = sessionId
         self.transcriptPath = transcriptPath
@@ -135,6 +139,7 @@ nonisolated struct FileUpdatePayload: Sendable {
         self.structuredResults = structuredResults
         self.subagentTools = subagentTools
         self.reconstructedTasks = reconstructedTasks
+        self.transcriptTasks = transcriptTasks
     }
 }
 

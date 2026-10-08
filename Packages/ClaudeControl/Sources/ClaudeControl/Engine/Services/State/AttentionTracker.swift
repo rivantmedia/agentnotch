@@ -13,6 +13,8 @@
 //    alert (each registry arrives as its own snapshot);
 //  - a completion from before this launch (restored from review-state.json,
 //    or inferred from a transcript that finished while the app was down);
+//  - a failed turn restored from review-state.json when its session is seen
+//    again (`SessionState.stopErrorIsRestored`);
 //  - a quiet completion: a /loop or cron tick, or a turn that scheduled a
 //    wake-up. They stay in the review queue; the final turn is announced.
 //    (A turn that ended waiting for background agents isn't a completion
@@ -135,9 +137,14 @@ final class AttentionTracker {
     }
 
     /// Every change is passed on (banners are withdrawn on any of them),
-    /// except a completion that `AttentionNews` says isn't news: from before
-    /// this launch, or quiet.
+    /// except a completion that `AttentionNews` says isn't news (from before
+    /// this launch, or quiet) and a restored failure that withdraws nothing.
     private func isNews(_ change: AttentionTransition) -> Bool {
+        if change.to.isError, change.session.stopErrorIsRestored {
+            return !AttentionNews.kinds(from: change.from, to: change.to, isQuietCompletion: false,
+                                        completedAt: nil, launchedAt: launchedAt,
+                                        failureIsRestored: true).isEmpty
+        }
         guard change.becameReadyForReview else { return true }
         return AttentionNews.kinds(from: change.from, to: change.to,
                                    isQuietCompletion: change.session.completionIsQuiet,

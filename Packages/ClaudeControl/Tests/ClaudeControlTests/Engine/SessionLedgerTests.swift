@@ -161,6 +161,209 @@ struct SessionLedgerTests {
         #expect(!reloaded.knows(CloudFixture.sessionB))
     }
 
+    /// Regression (double counting): a session first seen certain whose
+    /// transcript is in a shared history (Claude Parallel Profiles) may
+    /// have been run by another account before (a conversation from before
+    /// sync, continued after an account switch): only its process's
+    /// responses are its account's, as for a session first seen unsure. One
+    /// in its folder's own history counts whole, and a session the ledger
+    /// knows goes on as it was.
+    @Test func aSessionFirstSeenInASharedHistoryCountsFromItsProcess() throws {
+        let ledger = SessionLedger(fileURL: nil, persists: false, home: "/Users/me")
+        let start = CloudFixture.base
+        let processStart = start.addingTimeInterval(500)
+        var shared = Self.observation(lastActivity: start.addingTimeInterval(600), startedAt: start.addingTimeInterval(550),
+                                      processStartedAt: processStart)
+        shared.inSharedHistory = true
+        ledger.observe(live: [shared], liveIDs: [CloudFixture.sessionA], accounts: [:], now: start.addingTimeInterval(600))
+        #expect(ledger.owners(of: CloudFixture.sessionA) == [SessionOwner(from: nil, accountKey: ""),
+                                                             SessionOwner(from: processStart, accountKey: CloudFixture.accountKey)])
+        #expect(ledger.entry(CloudFixture.sessionA)?.startedAt == processStart)
+        #expect(!ledger.isUncounted(CloudFixture.sessionA) && ledger.count == 1)
+        // Seen again (marked or not): nothing more changes.
+        ledger.observe(live: [shared], liveIDs: [CloudFixture.sessionA], accounts: [:], now: start.addingTimeInterval(700))
+        ledger.observe(live: [Self.observation(lastActivity: start.addingTimeInterval(800))], liveIDs: [CloudFixture.sessionA],
+                       accounts: [:], now: start.addingTimeInterval(800))
+        #expect(ledger.owners(of: CloudFixture.sessionA).count == 2 && ledger.count == 1)
+        #expect(ledger.entry(CloudFixture.sessionA)?.startedAt == processStart)
+
+        // Its process's start unknown: from when the app first saw it.
+        var noProcess = Self.observation(CloudFixture.sessionB, lastActivity: start.addingTimeInterval(650),
+                                         startedAt: start.addingTimeInterval(640))
+        noProcess.inSharedHistory = true
+        ledger.observe(live: [noProcess], liveIDs: [CloudFixture.sessionB], accounts: [:], now: start.addingTimeInterval(650))
+        #expect(ledger.owners(of: CloudFixture.sessionB).last == SessionOwner(from: start.addingTimeInterval(640),
+                                                                              accountKey: CloudFixture.accountKey))
+
+        // A folder's own history: the whole session is its account's.
+        ledger.observe(live: [Self.observation(CloudFixture.sessionC, processStartedAt: processStart)],
+                       liveIDs: [CloudFixture.sessionC], accounts: [:], now: start.addingTimeInterval(700))
+        #expect(ledger.owners(of: CloudFixture.sessionC) == [SessionOwner(from: nil, accountKey: CloudFixture.accountKey)])
+    }
+
+    /// Regression (double counting): when a shared history's session stops
+    /// running, what is written after it is no one's until the app sees a
+    /// process of it again (another account may have continued it while the
+    /// app wasn't capturing). The same process back after a moment's absence
+    /// loses nothing; a session in its folder's own history is left as it was.
+    @Test func aSharedSessionCountsOnlyWhatTheAppSawRunning() throws {
+        let ledger = SessionLedger(fileURL: nil, persists: false, home: "/Users/me")
+        let start = CloudFixture.base
+        let id = CloudFixture.sessionA, account = CloudFixture.accountKey
+        let key = CloudLedgerEntry.key(sessionId: id, accountKey: account)
+        var running = Self.observation(lastActivity: start.addingTimeInterval(100), processStartedAt: start)
+        running.inSharedHistory = true
+        ledger.observe(live: [running], liveIDs: [id], accounts: [:], now: start.addingTimeInterval(100))
+        // Gone: ended a minute later, at when it went.
+        ledger.settle(liveIDs: [], now: start.addingTimeInterval(110))
+        #expect(ledger.settle(liveIDs: [], now: start.addingTimeInterval(171)) == [key])
+        let gone = start.addingTimeInterval(110 + SessionLedger.uncountedAfter)
+        #expect(ledger.entry(key: key)?.endedAt == start.addingTimeInterval(110))
+        #expect(ledger.owners(of: id) == [SessionOwner(from: nil, accountKey: ""), SessionOwner(from: start, accountKey: account),
+                                          SessionOwner(from: gone, accountKey: "")])
+        // Whatever an unseen process wrote meanwhile is no one's.
+        #expect(SessionOwners.owner(at: start.addingTimeInterval(500), in: ledger.owners(of: id)) == "")
+        // A new process of it: counted from its start, in the same entry.
+        let resumedAt = start.addingTimeInterval(900)
+        ledger.observe(live: [Self.observation(lastActivity: start.addingTimeInterval(950), startedAt: resumedAt,
+                                               processStartedAt: resumedAt)],
+                       liveIDs: [id], accounts: [:], now: start.addingTimeInterval(950))
+        #expect(ledger.owners(of: id).suffix(2) == [SessionOwner(from: gone, accountKey: ""),
+                                                    SessionOwner(from: resumedAt, accountKey: account)])
+        #expect(ledger.entry(key: key)?.endedAt == nil && ledger.count == 1)
+
+        // Missing for a minute, then the same process again: nothing is lost.
+        let flicker = SessionLedger(fileURL: nil, persists: false, home: "/Users/me")
+        flicker.observe(live: [running], liveIDs: [id], accounts: [:], now: start.addingTimeInterval(100))
+        flicker.settle(liveIDs: [], now: start.addingTimeInterval(110))
+        flicker.settle(liveIDs: [], now: start.addingTimeInterval(171))
+        flicker.observe(live: [Self.observation(lastActivity: start.addingTimeInterval(200), processStartedAt: start)],
+                        liveIDs: [id], accounts: [:], now: start.addingTimeInterval(200))
+        #expect(flicker.owners(of: id) == [SessionOwner(from: nil, accountKey: ""), SessionOwner(from: start, accountKey: account)])
+        #expect(flicker.entry(key: key)?.endedAt == nil)
+
+        // Its folder's own history: its end changes no owner.
+        let own = SessionLedger(fileURL: nil, persists: false, home: "/Users/me")
+        var ownRunning = running
+        ownRunning.inSharedHistory = false
+        own.observe(live: [ownRunning], liveIDs: [id], accounts: [:], now: start.addingTimeInterval(100))
+        own.settle(liveIDs: [], now: start.addingTimeInterval(110))
+        #expect(own.settle(liveIDs: [], now: start.addingTimeInterval(171)) == [key])
+        #expect(own.owners(of: id) == [SessionOwner(from: nil, accountKey: account)])
+    }
+
+    /// A shared session resumed again and again by one account (each end a
+    /// stretch of nobody, each resume its account back) can still change
+    /// hands: only hand-overs between accounts count toward the bound.
+    @Test func resumingASharedSessionOftenNeverBlocksAnotherAccount() throws {
+        let ledger = SessionLedger(fileURL: nil, persists: false, home: "/Users/me")
+        let id = CloudFixture.sessionA
+        let personal = CloudFixture.account, work = CloudFixture.workAccount
+        var now = CloudFixture.base
+        for round in 0..<(SessionLedger.maxOwners + 4) {
+            now = now.addingTimeInterval(100)
+            var running = Self.observation(lastActivity: now, account: personal, startedAt: now, processStartedAt: now)
+            if round == 0 { running.inSharedHistory = true }
+            ledger.observe(live: [running], liveIDs: [id], accounts: [:], now: now)
+            ledger.settle(liveIDs: [], now: now.addingTimeInterval(1))
+            now = now.addingTimeInterval(62)
+            ledger.settle(liveIDs: [], now: now)
+        }
+        #expect(ledger.owners(of: id).filter(\.accountKey.isEmpty).count == SessionLedger.maxOwners)
+        now = now.addingTimeInterval(100)
+        ledger.observe(live: [Self.observation(lastActivity: now, account: work, startedAt: now, processStartedAt: now)],
+                       liveIDs: [id], accounts: [:], now: now)
+        #expect(ledger.owners(of: id).last == SessionOwner(from: now, accountKey: work.accountKey))
+        #expect(ledger.entry(sessionId: id, accountKey: work.accountKey) != nil)
+    }
+
+    /// Whether a session's history is shared is told once and kept with its
+    /// entries: a part another account takes over inherits it, it survives a
+    /// relaunch, and a session from before the app looked learns it later.
+    @Test func whetherAHistoryIsSharedIsKeptWithTheSession() throws {
+        let root = URL(fileURLWithPath: TestPaths.temporaryRoot("cloud-ledger-shared"))
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent(SessionLedger.fileName)
+        let start = CloudFixture.base
+        let id = CloudFixture.sessionA
+        let personal = CloudFixture.account, work = CloudFixture.workAccount
+        let ledger = SessionLedger(fileURL: file, persists: true, home: "/Users/me")
+        var shared = Self.observation(lastActivity: start.addingTimeInterval(100), account: personal, processStartedAt: start)
+        shared.inSharedHistory = true
+        ledger.observe(live: [shared], liveIDs: [id], accounts: [:], now: start.addingTimeInterval(100))
+        #expect(ledger.sharedHistory(of: id) == true)
+        // Taken over by another account (not looked up again): the same history.
+        ledger.observe(live: [Self.observation(lastActivity: start.addingTimeInterval(300), account: work,
+                                               processStartedAt: start.addingTimeInterval(250))],
+                       liveIDs: [id], accounts: [:], now: start.addingTimeInterval(300))
+        #expect(ledger.entry(sessionId: id, accountKey: work.accountKey)?.sharedHistory == true)
+        ledger.saveNow()
+        let reloaded = SessionLedger(fileURL: file, persists: true, home: "/Users/me")
+        #expect(reloaded.sharedHistory(of: id) == true)
+        #expect(reloaded.owners(of: id).map(\.accountKey) == ["", personal.accountKey, work.accountKey])
+
+        // Not looked up (an entry from before): unknown until an observation says.
+        reloaded.observe(live: [Self.observation(CloudFixture.sessionB)], liveIDs: [CloudFixture.sessionB], accounts: [:],
+                         now: start.addingTimeInterval(400))
+        #expect(reloaded.sharedHistory(of: CloudFixture.sessionB) == nil)
+        var told = Self.observation(CloudFixture.sessionB)
+        told.inSharedHistory = false
+        reloaded.observe(live: [told], liveIDs: [CloudFixture.sessionB], accounts: [:], now: start.addingTimeInterval(410))
+        #expect(reloaded.sharedHistory(of: CloudFixture.sessionB) == false)
+        #expect(reloaded.owners(of: CloudFixture.sessionB) == [SessionOwner(from: nil, accountKey: personal.accountKey)])
+    }
+
+    /// A shared history's session the hub placed late, lost for a while and
+    /// then handed to another account: each stretch where it should be.
+    @Test func aSharedSessionPlacedLateThenUnsureThenHandedOver() throws {
+        let ledger = SessionLedger(fileURL: nil, persists: false, home: "/Users/me")
+        let start = CloudFixture.base
+        let id = CloudFixture.sessionA
+        let personal = CloudFixture.account, work = CloudFixture.workAccount
+        // Not placed yet: nothing is remembered; placed: counted from its process's start.
+        ledger.observe(live: [], liveIDs: [id], waiting: [id], accounts: [:], now: start.addingTimeInterval(5))
+        #expect(!ledger.knows(id))
+        var placed = Self.observation(lastActivity: start.addingTimeInterval(100), account: personal, processStartedAt: start)
+        placed.inSharedHistory = true
+        ledger.observe(live: [placed], liveIDs: [id], accounts: [:], now: start.addingTimeInterval(100))
+        #expect(ledger.owners(of: id) == [SessionOwner(from: nil, accountKey: ""), SessionOwner(from: start, accountKey: personal.accountKey)])
+        // Unsure for a while, then certain again in the same process: nothing lost.
+        ledger.observe(live: [], liveIDs: [id], unsure: [id], accounts: [:], now: start.addingTimeInterval(200))
+        ledger.observe(live: [Self.observation(lastActivity: start.addingTimeInterval(300), account: personal, processStartedAt: start)],
+                       liveIDs: [id], accounts: [:], now: start.addingTimeInterval(300))
+        #expect(ledger.owners(of: id) == [SessionOwner(from: nil, accountKey: ""), SessionOwner(from: start, accountKey: personal.accountKey)])
+        // Another account's new process takes over from its start.
+        let resumedAt = start.addingTimeInterval(450)
+        ledger.observe(live: [Self.observation(lastActivity: start.addingTimeInterval(500), account: work,
+                                               startedAt: resumedAt, processStartedAt: resumedAt)],
+                       liveIDs: [id], accounts: [:], now: start.addingTimeInterval(500))
+        #expect(ledger.owners(of: id) == [SessionOwner(from: nil, accountKey: ""), SessionOwner(from: start, accountKey: personal.accountKey),
+                                          SessionOwner(from: resumedAt, accountKey: work.accountKey)])
+    }
+
+    /// Regression (double counting): a session that changes hands while its
+    /// process runs (an account's key changed, a window switched) leaves the
+    /// old part's last response with it. The old part may never be sent
+    /// again, so the new part counting it too would count it twice.
+    @Test func aHandOverLeavesTheOldPartsLastResponseWithIt() throws {
+        let ledger = SessionLedger(fileURL: nil, persists: false, home: "/Users/me")
+        let start = CloudFixture.base
+        let personal = CloudFixture.account, work = CloudFixture.workAccount
+        let lastResponse = start.addingTimeInterval(600)
+        ledger.observe(live: [Self.observation(lastActivity: lastResponse, account: personal, processStartedAt: start)],
+                       liveIDs: [CloudFixture.sessionA], accounts: [:], now: lastResponse)
+        ledger.observe(live: [Self.observation(lastActivity: start.addingTimeInterval(700), account: work,
+                                               processStartedAt: start)],
+                       liveIDs: [CloudFixture.sessionA], accounts: [:], now: start.addingTimeInterval(700))
+        let boundary = lastResponse.addingTimeInterval(SessionLedger.uncountedAfter)
+        let owners = ledger.owners(of: CloudFixture.sessionA)
+        #expect(owners == [SessionOwner(from: nil, accountKey: personal.accountKey),
+                           SessionOwner(from: boundary, accountKey: work.accountKey)])
+        #expect(SessionOwners.owner(at: lastResponse, in: owners) == personal.accountKey)
+        #expect(ledger.entry(sessionId: CloudFixture.sessionA, accountKey: personal.accountKey)?.endedAt == boundary)
+        #expect(ledger.entry(sessionId: CloudFixture.sessionA, accountKey: work.accountKey)?.startedAt == boundary)
+    }
+
     /// Regression (review): a session the hub hasn't placed yet (its state
     /// just made again by a hook, a folder not grouped yet) waits: a known
     /// one isn't paused (no stretch of nobody, its part not ended), a new
@@ -439,6 +642,65 @@ struct SessionLedgerTests {
         #expect(linkedTo.isEmpty)
         let elsewhere = CloudBackfill.roots(folders: [folders[0]], realPath: { _ in "/shared/projects" })
         #expect(elsewhere.isEmpty)
+    }
+
+    /// A running session's history is shared when it is reached through a
+    /// link, or another known folder reaches it; then its lines from before
+    /// its process may be another account's (see the ledger's notes).
+    @Test func aSharedHistoryIsOneReachedThroughALinkOrByAnotherFolder() throws {
+        let root = TestPaths.temporaryRoot("cloud-shared-history")
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let fm = FileManager.default
+        func folder(_ name: String) -> String { (root as NSString).appendingPathComponent(name) }
+        let slug = "-Users-me-code-app"
+        // Claude Parallel Profiles: a window folder's projects/ links to the shared store.
+        try fm.createDirectory(atPath: folder(".claude-shared/projects/\(slug)"), withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: folder(".claude-windows/a1b2c3d4e5f6"), withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: folder(".claude-windows/a1b2c3d4e5f6/projects"),
+                                  withDestinationPath: folder(".claude-shared/projects"))
+        // A folder with a history of its own, and one whose project folder alone is a link.
+        try fm.createDirectory(atPath: folder(".claude-own/projects/\(slug)"), withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: folder(".claude-per-repo/projects"), withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: folder(".claude-per-repo/projects/\(slug)"),
+                                  withDestinationPath: folder(".claude-shared/projects/\(slug)"))
+        let id = CloudFixture.sessionA
+        func transcript(_ configDir: String) -> String { folder("\(configDir)/projects/\(slug)/\(id).jsonl") }
+        let known = [".claude-windows/a1b2c3d4e5f6", ".claude-own", ".claude-per-repo"]
+            .map { CloudBackfill.Folder(configDir: folder($0), identityId: nil, accountKey: nil) }
+
+        // Through the link, with or without a transcript yet.
+        #expect(CloudBackfill.isShared(transcriptPath: transcript(".claude-windows/a1b2c3d4e5f6"),
+                                       configDir: folder(".claude-windows/a1b2c3d4e5f6"), folders: known))
+        #expect(CloudBackfill.isShared(transcriptPath: nil, configDir: folder(".claude-windows/a1b2c3d4e5f6"), folders: known))
+        #expect(CloudBackfill.isShared(transcriptPath: transcript(".claude-per-repo"), configDir: folder(".claude-per-repo"),
+                                       folders: known))
+        // Its own: the folder itself among the known ones doesn't count.
+        #expect(!CloudBackfill.isShared(transcriptPath: transcript(".claude-own"), configDir: folder(".claude-own"), folders: known))
+        #expect(!CloudBackfill.isShared(transcriptPath: nil, configDir: folder(".claude-own") + "/", folders: []))
+        // Nor do other spellings of the folder make it shared: a config
+        // folder reached through a link (kept with dotfiles), another letter
+        // case, or /private before /var.
+        try fm.createDirectory(atPath: folder("dotfiles/claude/projects/\(slug)"), withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: folder(".claude-dotfiles"), withDestinationPath: folder("dotfiles/claude"))
+        #expect(!CloudBackfill.isShared(transcriptPath: transcript(".claude-dotfiles"), configDir: folder(".claude-dotfiles"),
+                                        folders: known))
+        let alias = CloudBackfill.Folder(configDir: folder("dotfiles/claude"), identityId: nil, accountKey: nil)
+        #expect(!CloudBackfill.isShared(transcriptPath: transcript(".claude-dotfiles"), configDir: folder(".claude-dotfiles"),
+                                        folders: known + [alias]))
+        let ownUpper = folder(".CLAUDE-OWN")
+        if fm.fileExists(atPath: ownUpper) {
+            #expect(!CloudBackfill.isShared(transcriptPath: nil, configDir: ownUpper, folders: known))
+        }
+        if root.hasPrefix("/var/") {
+            #expect(!CloudBackfill.isShared(transcriptPath: "/private" + transcript(".claude-own"),
+                                            configDir: "/private" + folder(".claude-own"), folders: known))
+        }
+
+        // Until another known folder links to it.
+        try fm.createDirectory(atPath: folder(".claude-adopted"), withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: folder(".claude-adopted/projects"), withDestinationPath: folder(".claude-own/projects"))
+        let adopted = known + [CloudBackfill.Folder(configDir: folder(".claude-adopted"), identityId: nil, accountKey: nil)]
+        #expect(CloudBackfill.isShared(transcriptPath: transcript(".claude-own"), configDir: folder(".claude-own"), folders: adopted))
     }
 
     /// Regression (review finding 0): "signed in as <login> since <date>",

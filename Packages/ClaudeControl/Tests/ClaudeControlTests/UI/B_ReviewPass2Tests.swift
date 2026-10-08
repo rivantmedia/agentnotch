@@ -49,6 +49,12 @@ struct B_ReviewPass2Tests {
         #expect(a != grown)
         let working = ChatTranscript(history: items, isLoading: false, workingLabel: "Working…", agentDescriptions: [:], onHeight: { _ in })
         #expect(a != working)
+        // The status line's words change (a failure, "5m ago" → "6m ago"):
+        // the transcript must redraw to show them.
+        let failed = ChatTranscript(history: items, isLoading: false, workingLabel: nil, agentDescriptions: [:],
+                                    statusLine: ChatStatusLine(glyph: .error, text: "Rate limited", canDismiss: true),
+                                    onHeight: { _ in })
+        #expect(a != failed)
     }
 
     /// A 2,000-item session opens in the panel and still asks for a height

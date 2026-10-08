@@ -186,6 +186,22 @@ nonisolated struct AccountUsage: Codable, Hashable, Sendable {
             (lhs.resetsAt ?? .distantFuture) < (rhs.resetsAt ?? .distantFuture)
         }
     }
+
+    /// The used-up window a limit is announced under (`LimitAnnouncements`):
+    /// the 5-hour or the weekly window when either is used up (they stop
+    /// every model, and they are the windows Codenotch's own limit alert
+    /// names), the one that resets last; else a model's own window. A failed
+    /// turn doesn't say which window stopped it, and a model's week used up
+    /// days ago must not stand in for today's 5-hour limit. Pure.
+    func announcedLimitHit(now: Date = Date()) -> UsageLimitHit? {
+        let general = [(fiveHour, UsageLimitHit.Window.session), (sevenDay, .weekly)]
+            .compactMap { window, kind -> UsageLimitHit? in
+                guard let window, window.effectiveUtilization(now: now) >= 100 else { return nil }
+                return UsageLimitHit(window: kind, resetsAt: window.resetsAt)
+            }
+        return general.max { ($0.resetsAt ?? .distantFuture) < ($1.resetsAt ?? .distantFuture) }
+            ?? limitHit(now: now)
+    }
 }
 
 /// Fetch status for one account, shown next to its usage.

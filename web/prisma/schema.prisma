@@ -130,6 +130,9 @@ model Session {
   summaryAt           DateTime?
   deviceId            String?
   createdAt           DateTime  @default(now())
+  /// When the owner's app last synced this row. Only the sync upsert sets it (in its own SQL):
+  /// which of two people's copies of one session counts relies on it ("the copy synced last",
+  /// src/server/services/sql.ts), so every other write leaves it alone.
   updatedAt           DateTime  @updatedAt
 
   user    User          @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -140,6 +143,9 @@ model Session {
   device  Device?       @relation(fields: [userId, deviceId], references: [userId, id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([userId, accountKey, sessionId])
+  // Finds the other copies of one session (same account and id, other people) for the rule
+  // that counts one of them (src/server/services/sql.ts).
+  @@index([accountKey, sessionId])
   @@index([accountKey, startedAt])
   @@index([userId, startedAt])
   // The per-user quota on new sessions a day counts these.

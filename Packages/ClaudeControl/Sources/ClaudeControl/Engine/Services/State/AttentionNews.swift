@@ -12,7 +12,10 @@
 //  - resolved: it needed input or waited for review, and now does
 //    something else, or it went away (`to == nil`) while it did;
 //  - needs input: it didn't need input (or wasn't known), or now needs it
-//    for another reason;
+//    for another reason; but not a failed turn read back from
+//    review-state.json (`SessionState.stopErrorIsRestored`): a session seen
+//    again (a relaunch, `--resume`, a reopened editor chat) shows its old
+//    failure without announcing it again;
 //  - ready for review: it wasn't ready for review, the completion isn't
 //    quiet (see `SessionState.completionIsQuiet`), and it didn't finish
 //    before this launch (restored, or inferred from a transcript that ended
@@ -35,7 +38,8 @@ nonisolated enum AttentionNews {
         to: SessionAttention?,
         isQuietCompletion: Bool,
         completedAt: Date?,
-        launchedAt: Date?
+        launchedAt: Date?,
+        failureIsRestored: Bool = false
     ) -> [Kind] {
         var kinds: [Kind] = []
         if let from, from.bucket == .needsInput || from.bucket == .readyForReview, to?.bucket != from.bucket {
@@ -44,9 +48,9 @@ nonisolated enum AttentionNews {
         guard let to else { return kinds }
         switch (from, to) {
         case (.needsInput(let was)?, .needsInput(let reason)):
-            if was != reason { kinds.append(.needsInput) }
-        case (_, .needsInput):
-            kinds.append(.needsInput)
+            if was != reason, !(failureIsRestored && reason.isError) { kinds.append(.needsInput) }
+        case (_, .needsInput(let reason)):
+            if !(failureIsRestored && reason.isError) { kinds.append(.needsInput) }
         case (.readyForReview?, .readyForReview):
             break
         case (_, .readyForReview):
