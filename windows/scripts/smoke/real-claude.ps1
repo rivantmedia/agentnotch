@@ -753,8 +753,31 @@ function Wait-Driver {
 function Invoke-PanelAnswer {
     param([Parameter(Mandatory)][string]$SessionId, [Parameter(Mandatory)][string]$Answer)
     Invoke-CdpCall -Page $script:Ui.NotchPage -Method 'panel_open' -Arguments @{ route = 'sessions'; reason = 'ring_click' } | Out-Null
-    Invoke-CdpAnswerClick -Page $script:Ui.PanelPage -Selector ($script:Ui.Answer -f $Answer, $SessionId) -WaitSeconds 120
+    try { Invoke-CdpAnswerClick -Page $script:Ui.PanelPage -Selector ($script:Ui.Answer -f $Answer, $SessionId) -WaitSeconds 120 }
+    catch {
+        Write-PanelAnswerDiagnostics -SessionId $SessionId
+        throw
+    }
     Write-RcLog "  answered '$Answer' in the panel"
+}
+
+# When the answer button never came: how the engine and the panel see the session, so the next
+# round knows which side dropped it.
+function Write-PanelAnswerDiagnostics {
+    param([Parameter(Mandatory)][string]$SessionId)
+    try {
+        $rows = @((Invoke-CdpCall -Page $script:Ui.NotchPage -Method 'snapshot')['sessions'] | Where-Object { $_['session_id'] -eq $SessionId })
+        Write-RcLog "  the engine's row: $(if ($rows.Count) { $rows[0] | ConvertTo-Json -Depth 8 -Compress } else { 'none' })"
+        Write-RcLog "  control status: held $((Get-ControlStatus)['held'])"
+    } catch { Write-RcLog "  (the engine's row could not be read: $($_.Exception.Message))" }
+    $id = ConvertTo-Json $SessionId -Compress
+    $expression = "(() => { const P = window.agentnotchPanel; if (!P) return 'no agentnotchPanel'; const r = P.row($id); " +
+        "const lay = P._.listLayout(P._.view()); return JSON.stringify({ mode: document.body.className, hoverList: P._.state.hoverList, " +
+        "row: r && { bucket: r.bucket, pending: r.pending, detail: r.detail }, " +
+        "sections: lay && lay.sections ? lay.sections.map((s) => ({ bucket: s.bucket, collapsed: s.collapsed, ids: s.rows.map((x) => x.session_id) })) : null, " +
+        "buttons: [...document.querySelectorAll('[data-an-session=' + JSON.stringify($id) + ']')].map((b) => b.getAttribute('data-an-action') + ':' + b.getAttribute('data-an-arg') + ':' + b.className) }); })()"
+    try { Write-RcLog "  the panel: $(Invoke-Cdp -Arguments @('eval', $script:Ui.PanelPage, $expression))" }
+    catch { Write-RcLog "  (the panel could not be read: $($_.Exception.Message))" }
 }
 
 # While Claude Code waits on the first permission: its registry entry and how the engine filed it.
