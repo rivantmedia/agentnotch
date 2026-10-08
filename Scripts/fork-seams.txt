@@ -252,6 +252,7 @@ SEAM	WR-TITLE	windows/codenotch/src/settings_window.rs	.title(crate::agentnotch:
 SEAM	WR-TITLE	windows/codenotch/src/dropzones.rs	.title(crate::agentnotch::DROPZONES_TITLE) // Fork: WR-TITLE
 SEAM	WUP	windows/codenotch/src/updater.rs	&& !crate::agentnotch::sealed() // Fork: WUP
 SEAM	WUP2	windows/codenotch/src/updater.rs	let Some(update) = crate::agentnotch::updater(&app)?.check().await? else { // Fork: WUP2
+SEAM	WUP2	windows/codenotch/src/updater.rs	crate::agentnotch::install_failed(&app); // Fork: WUP2
 SEAM	WNM	windows/codenotch/src/notchmenu.rs	menu = crate::agentnotch::notch_menu_items(app, menu, provider.as_deref()); // Fork: WNM
 SEAM	WNM	windows/codenotch/src/notchmenu.rs	if crate::agentnotch::notch_menu_event(app, item) { return; } // Fork: WNM
 SEAM	WR	windows/codenotch/tauri.conf.json	"productName": "Agent Notch",

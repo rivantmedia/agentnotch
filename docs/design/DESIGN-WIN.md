@@ -2120,7 +2120,10 @@ the next hook pass after launch refreshes them. Before the updater starts the in
 `std::process::exit(0)`, the glue's `on_before_exit` (seam WUP2, §2.4 `update.rs`) stops the hub:
 stores are saved, held PermissionRequests are closed without an answer (the hooks exit 0 and
 Claude Code's own prompt decides), children are killed; then `cleanup_before_exit()` runs as
-upstream's default did.
+upstream's default did. When the installer then fails to start (`ShellExecuteW` refused: a
+declined UAC prompt, AppLocker, an antivirus), the plugin returns the error instead of exiting:
+`install_update`'s error arm calls the glue's `install_failed` (seam WUP2), which starts the hub
+again and brings back the tray icon and the windows the cleanup took away.
 
 ### 4.16 Other providers and the rebrand
 Codex, Cursor, Grok, Antigravity, GLM run exactly as upstream (their own credentials, their own
@@ -3145,6 +3148,7 @@ SEAM	WR-TITLE	windows/codenotch/src/settings_window.rs	.title(crate::agentnotch:
 SEAM	WR-TITLE	windows/codenotch/src/dropzones.rs	.title(crate::agentnotch::DROPZONES_TITLE) // Fork: WR-TITLE
 SEAM	WUP	windows/codenotch/src/updater.rs	&& !crate::agentnotch::sealed() // Fork: WUP
 SEAM	WUP2	windows/codenotch/src/updater.rs	let Some(update) = crate::agentnotch::updater(&app)?.check().await? else { // Fork: WUP2
+SEAM	WUP2	windows/codenotch/src/updater.rs	crate::agentnotch::install_failed(&app); // Fork: WUP2
 SEAM	WNM	windows/codenotch/src/notchmenu.rs	menu = crate::agentnotch::notch_menu_items(app, menu, provider.as_deref()); // Fork: WNM
 SEAM	WNM	windows/codenotch/src/notchmenu.rs	if crate::agentnotch::notch_menu_event(app, item) { return; } // Fork: WNM
 SEAM	WR	windows/codenotch/tauri.conf.json	"productName": "Agent Notch",

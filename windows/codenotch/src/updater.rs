@@ -132,6 +132,7 @@ pub fn install_update(app: AppHandle) {
             Ok(false) => set(&app, UpdateState::default()),
             Err(e) => {
                 crate::applog(&format!("updater: install failed ({e})"));
+                crate::agentnotch::install_failed(&app); // Fork: WUP2
                 set(&app, UpdateState {
                     available: state().as_ref().and_then(|s| s.available.clone()),
                     message: Some("Could not install the update".into()),

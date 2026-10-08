@@ -31,11 +31,12 @@ pub(super) fn set_badge(app: &AppHandle, count: u32) {
     if super::NEEDS_YOU.swap(count, Ordering::Relaxed) == count {
         return;
     }
-    // Upstream rebuilds its tooltip from its readings; with none to show it asks
-    // `tray_tooltip()`, which reads the count above. Nudge it now instead of at its next poll.
-    if let Some(tray) = app.tray_by_id("main") {
-        let _ = tray.set_tooltip(Some(super::tray_tooltip()));
-    }
+    refresh(app);
+}
+
+/// The tray was built again (a failed update's cleanup dropped it): the new icon is plain.
+pub(super) fn rebuilt(app: &AppHandle) {
+    DRAWN.store(false, Ordering::Relaxed);
     refresh(app);
 }
 
@@ -46,10 +47,21 @@ pub(super) fn set_dot_enabled(app: &AppHandle, on: bool) {
     }
 }
 
-/// Draws or removes the dot, on the main thread (the tray is a window-system object).
+/// Puts the count in the tooltip and draws or removes the dot, on the main thread (the tray is a
+/// window-system object). Posted, never waited for: `set_badge` runs on `an-core`, and a tray
+/// call made off the main thread waits for the main thread with no timeout, which at Quit is
+/// busy waiting for `an-core` to stop (emit.rs: nothing there may block).
 fn refresh(app: &AppHandle) {
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
+        // No tray yet (the hub is quicker than upstream's setup): nothing is recorded, so the
+        // next event tries again.
+        let Some(tray) = handle.tray_by_id("main") else {
+            return;
+        };
+        // Upstream rebuilds its tooltip from its readings; with none to show it asks
+        // `tray_tooltip()`, which reads the count. Nudge it now instead of at its next poll.
+        let _ = tray.set_tooltip(Some(super::tray_tooltip()));
         let wanted = dot_wanted(
             super::NEEDS_YOU.load(Ordering::Relaxed),
             ENABLED.load(Ordering::Relaxed),
@@ -57,11 +69,6 @@ fn refresh(app: &AppHandle) {
         if wanted == DRAWN.load(Ordering::Relaxed) {
             return;
         }
-        // No tray yet (the hub is quicker than upstream's setup): nothing is recorded, so the
-        // next event tries again.
-        let Some(tray) = handle.tray_by_id("main") else {
-            return;
-        };
         let Some(plain) = crate::trayicon::app_mark() else {
             return;
         };
