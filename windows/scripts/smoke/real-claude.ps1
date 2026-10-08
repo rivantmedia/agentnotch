@@ -109,6 +109,10 @@ $script:ConfigFileAllowList = @(
     '^\.claude\.json$'
     '^\.claude\.json\.(backup|bak|lock|tmp)[^\\/]*$'
     '^history\.jsonl$'
+    # Claude Code's own housekeeping markers (a timestamp each, no login): 2.1.285's bundle lists
+    # exactly these as its sentinel files (`[".npm-cache-cleanup",".version-cleanup",
+    # ".last-cleanup",".deep-link-register-failed"]`); run 37720051731 left .last-cleanup.
+    '^\.(npm-cache-cleanup|version-cleanup|last-cleanup|deep-link-register-failed)$'
 )
 $script:SessionsFileAllowList = @('^\d+\.json$', '^\.fleetview-heartbeat$')
 

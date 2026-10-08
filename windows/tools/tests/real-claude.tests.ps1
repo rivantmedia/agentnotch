@@ -176,6 +176,8 @@ Test-Case "the allow-lists: Claude Code's own files pass, anything else is named
     Assert-Equal ((Get-UnexpectedNames -Names $names -AllowList $script:ConfigFileAllowList) -join ',') 'login.json,other.txt' 'unexpected'
     Assert-Equal ((Get-UnexpectedNames -Names @('4242.json', '.fleetview-heartbeat', '4242.lock') -AllowList $script:SessionsFileAllowList) -join ',') '4242.lock' 'sessions folder'
     Assert-Equal @(Get-UnexpectedNames -Names @() -AllowList $script:ConfigFileAllowList).Count 0 'nothing'
+    $markers = @('.last-cleanup', '.npm-cache-cleanup', '.version-cleanup', '.deep-link-register-failed', '.last-cleanup.bak', 'last-cleanup', 'login.json')
+    Assert-Equal ((Get-UnexpectedNames -Names $markers -AllowList $script:ConfigFileAllowList) -join ',') '.last-cleanup.bak,last-cleanup,login.json' "Claude Code's housekeeping markers only"
 }
 
 Test-Case 'stream-json: tool calls paired with their results, hook outcomes counted, noise skipped' {
