@@ -87,6 +87,7 @@ fn backfilled(id: &str) -> CloudLedgerEntry {
         cost_usd: None,
         title: None,
         origin: Origin::Backfill,
+        shared_history: None,
     }
 }
 
@@ -875,6 +876,410 @@ fn a_ledger_round_trips_through_its_file_with_every_owner_kind() {
     assert_eq!(again.segments(a).len(), 2);
 }
 
+// ---- A shared history: only what the app saw running counts ----
+
+/// Regression (double counting): a session first seen certain whose
+/// transcript is in a shared history (Claude Parallel Profiles) may have been
+/// run by another account before (a conversation from before sync, continued
+/// after an account switch): only its process's responses are its account's,
+/// as for a session first seen unsure. One in its folder's own history counts
+/// whole, and a session the ledger knows goes on as it was.
+#[test]
+fn a_session_first_seen_in_a_shared_history_counts_from_its_process() {
+    let ledger = memory_ledger();
+    let (a, b, c) = (F::SESSION_A, F::SESSION_B, F::SESSION_C);
+    let process_start = F::at(500.0);
+    let shared = live(a)
+        .active(600.0)
+        .started(550.0)
+        .process(500.0)
+        .shared(true)
+        .build();
+    observe(&ledger, vec![shared.clone()], &[a], &[], &[], 600.0);
+    assert_eq!(
+        ledger.owners(a),
+        vec![
+            SessionOwner::new(None, ""),
+            SessionOwner::new(Some(process_start), F::ACCOUNT_KEY)
+        ]
+    );
+    assert_eq!(ledger.entry(a).unwrap().started_at, process_start);
+    assert!(!ledger.is_uncounted(a) && ledger.count() == 1);
+    // Seen again (marked or not): nothing more changes.
+    observe(&ledger, vec![shared], &[a], &[], &[], 700.0);
+    observe(
+        &ledger,
+        vec![live(a).active(800.0).build()],
+        &[a],
+        &[],
+        &[],
+        800.0,
+    );
+    assert!(ledger.owners(a).len() == 2 && ledger.count() == 1);
+    assert_eq!(ledger.entry(a).unwrap().started_at, process_start);
+
+    // Its process's start unknown: from when the app first saw it.
+    observe(
+        &ledger,
+        vec![live(b).active(650.0).started(640.0).shared(true).build()],
+        &[b],
+        &[],
+        &[],
+        650.0,
+    );
+    assert_eq!(
+        ledger.owners(b).last(),
+        Some(&SessionOwner::new(Some(F::at(640.0)), F::ACCOUNT_KEY))
+    );
+
+    // A folder's own history: the whole session is its account's.
+    observe(
+        &ledger,
+        vec![live(c).process(500.0).build()],
+        &[c],
+        &[],
+        &[],
+        700.0,
+    );
+    assert_eq!(
+        ledger.owners(c),
+        vec![SessionOwner::new(None, F::ACCOUNT_KEY)]
+    );
+}
+
+/// Regression (double counting): when a shared history's session stops
+/// running, what is written after it is no one's until the app sees a
+/// process of it again (another account may have continued it while the app
+/// wasn't capturing). The same process back after a moment's absence loses
+/// nothing; a session in its folder's own history is left as it was.
+#[test]
+fn a_shared_session_counts_only_what_the_app_saw_running() {
+    let ledger = memory_ledger();
+    let a = F::SESSION_A;
+    let k = key(a, F::ACCOUNT_KEY);
+    let running = live(a).active(100.0).process(0.0).shared(true).build();
+    observe(&ledger, vec![running.clone()], &[a], &[], &[], 100.0);
+    // Gone: ended a minute later, at when it went.
+    settle(&ledger, &[], 110.0);
+    assert_eq!(settle(&ledger, &[], 171.0), vec![k.clone()]);
+    let gone = F::at(110.0) + UNCOUNTED_AFTER;
+    assert_eq!(
+        ledger.entry_by_key(&k).unwrap().ended_at,
+        Some(F::at(110.0))
+    );
+    assert_eq!(
+        ledger.owners(a),
+        vec![
+            SessionOwner::new(None, ""),
+            SessionOwner::new(Some(F::at(0.0)), F::ACCOUNT_KEY),
+            SessionOwner::new(Some(gone), "")
+        ]
+    );
+    // Whatever an unseen process wrote meanwhile is no one's.
+    assert_eq!(
+        SessionOwners::owner_at(Some(F::at(500.0)), &ledger.owners(a)),
+        ""
+    );
+    // A new process of it: counted from its start, in the same entry.
+    let resumed_at = F::at(900.0);
+    observe(
+        &ledger,
+        vec![live(a).active(950.0).started(900.0).process(900.0).build()],
+        &[a],
+        &[],
+        &[],
+        950.0,
+    );
+    let owners = ledger.owners(a);
+    assert_eq!(
+        owners[owners.len() - 2..],
+        [
+            SessionOwner::new(Some(gone), ""),
+            SessionOwner::new(Some(resumed_at), F::ACCOUNT_KEY)
+        ]
+    );
+    assert!(ledger.entry_by_key(&k).unwrap().ended_at.is_none() && ledger.count() == 1);
+
+    // Missing for a minute, then the same process again: nothing is lost.
+    let flicker = memory_ledger();
+    observe(&flicker, vec![running.clone()], &[a], &[], &[], 100.0);
+    settle(&flicker, &[], 110.0);
+    settle(&flicker, &[], 171.0);
+    observe(
+        &flicker,
+        vec![live(a).active(200.0).process(0.0).build()],
+        &[a],
+        &[],
+        &[],
+        200.0,
+    );
+    assert_eq!(
+        flicker.owners(a),
+        vec![
+            SessionOwner::new(None, ""),
+            SessionOwner::new(Some(F::at(0.0)), F::ACCOUNT_KEY)
+        ]
+    );
+    assert!(flicker.entry_by_key(&k).unwrap().ended_at.is_none());
+
+    // Its folder's own history: its end changes no owner.
+    let own = memory_ledger();
+    let mut own_running = running;
+    own_running.in_shared_history = Some(false);
+    observe(&own, vec![own_running], &[a], &[], &[], 100.0);
+    settle(&own, &[], 110.0);
+    assert_eq!(settle(&own, &[], 171.0), vec![k]);
+    assert_eq!(own.owners(a), vec![SessionOwner::new(None, F::ACCOUNT_KEY)]);
+}
+
+/// A shared session resumed again and again by one account (each end a
+/// stretch of nobody, each resume its account back) can still change hands:
+/// only hand-overs between accounts count toward the bound.
+#[test]
+fn resuming_a_shared_session_often_never_blocks_another_account() {
+    let ledger = memory_ledger();
+    let a = F::SESSION_A;
+    let (personal, work) = (F::account(), F::work_account());
+    let mut now = 0.0;
+    for round in 0..(MAX_OWNERS + 4) {
+        now += 100.0;
+        let mut running = live_for(a, &personal)
+            .active(now)
+            .started(now)
+            .process(now)
+            .build();
+        if round == 0 {
+            running.in_shared_history = Some(true);
+        }
+        observe(&ledger, vec![running], &[a], &[], &[], now);
+        settle(&ledger, &[], now + 1.0);
+        now += 62.0;
+        settle(&ledger, &[], now);
+    }
+    assert_eq!(
+        ledger
+            .owners(a)
+            .iter()
+            .filter(|o| o.account_key.is_empty())
+            .count(),
+        MAX_OWNERS
+    );
+    now += 100.0;
+    observe(
+        &ledger,
+        vec![live_for(a, &work)
+            .active(now)
+            .started(now)
+            .process(now)
+            .build()],
+        &[a],
+        &[],
+        &[],
+        now,
+    );
+    assert_eq!(
+        ledger.owners(a).last(),
+        Some(&SessionOwner::new(Some(F::at(now)), F::WORK_ACCOUNT_KEY))
+    );
+    assert!(ledger.entry_of(a, F::WORK_ACCOUNT_KEY).is_some());
+}
+
+/// Whether a session's history is shared is told once and kept with its
+/// entries: a part another account takes over inherits it, it survives a
+/// relaunch, and a session from before the app looked learns it later (and
+/// a ledger file written before the field still loads).
+#[test]
+fn whether_a_history_is_shared_is_kept_with_the_session() {
+    let root = tempfile::tempdir().unwrap();
+    let ledger = file_ledger(root.path());
+    let (a, b) = (F::SESSION_A, F::SESSION_B);
+    let (personal, work) = (F::account(), F::work_account());
+    observe(
+        &ledger,
+        vec![live_for(a, &personal)
+            .active(100.0)
+            .process(0.0)
+            .shared(true)
+            .build()],
+        &[a],
+        &[],
+        &[],
+        100.0,
+    );
+    assert_eq!(ledger.shared_history(a), Some(true));
+    // Taken over by another account (not looked up again): the same history.
+    observe(
+        &ledger,
+        vec![live_for(a, &work).active(300.0).process(250.0).build()],
+        &[a],
+        &[],
+        &[],
+        300.0,
+    );
+    assert_eq!(
+        ledger
+            .entry_of(a, F::WORK_ACCOUNT_KEY)
+            .unwrap()
+            .shared_history,
+        Some(true)
+    );
+    ledger.save_now();
+    let reloaded = file_ledger(root.path());
+    assert_eq!(reloaded.shared_history(a), Some(true));
+    assert_eq!(
+        reloaded
+            .owners(a)
+            .iter()
+            .map(|o| o.account_key.as_str())
+            .collect::<Vec<_>>(),
+        vec!["", F::ACCOUNT_KEY, F::WORK_ACCOUNT_KEY]
+    );
+
+    // Not looked up (an entry from before): unknown until an observation says.
+    observe(&reloaded, vec![live(b).build()], &[b], &[], &[], 400.0);
+    assert_eq!(reloaded.shared_history(b), None);
+    observe(
+        &reloaded,
+        vec![live(b).shared(false).build()],
+        &[b],
+        &[],
+        &[],
+        410.0,
+    );
+    assert_eq!(reloaded.shared_history(b), Some(false));
+    assert_eq!(
+        reloaded.owners(b),
+        vec![SessionOwner::new(None, F::ACCOUNT_KEY)]
+    );
+
+    // A file written before the field: no `sharedHistory` anywhere in it.
+    reloaded.save_now();
+    let text = std::fs::read_to_string(root.path().join("cloud-ledger.json")).unwrap();
+    assert!(text.contains("sharedHistory"));
+    let older = tempfile::tempdir().unwrap();
+    let mut doc: serde_json::Value = serde_json::from_str(&text).unwrap();
+    for entry in doc["sessions"].as_object_mut().unwrap().values_mut() {
+        entry.as_object_mut().unwrap().remove("sharedHistory");
+    }
+    std::fs::write(older.path().join("cloud-ledger.json"), doc.to_string()).unwrap();
+    let before = file_ledger(older.path());
+    assert_eq!(before.count(), reloaded.count());
+    assert_eq!(before.shared_history(a), None);
+    assert_eq!(before.owners(a), reloaded.owners(a));
+}
+
+/// A shared history's session the hub placed late, lost for a while and then
+/// handed to another account: each stretch where it should be.
+#[test]
+fn a_shared_session_placed_late_then_unsure_then_handed_over() {
+    let ledger = memory_ledger();
+    let a = F::SESSION_A;
+    let (personal, work) = (F::account(), F::work_account());
+    // Not placed yet: nothing is remembered; placed: counted from its
+    // process's start.
+    observe(&ledger, vec![], &[a], &[], &[a], 5.0);
+    assert!(!ledger.knows(a));
+    observe(
+        &ledger,
+        vec![live_for(a, &personal)
+            .active(100.0)
+            .process(0.0)
+            .shared(true)
+            .build()],
+        &[a],
+        &[],
+        &[],
+        100.0,
+    );
+    let from_start = vec![
+        SessionOwner::new(None, ""),
+        SessionOwner::new(Some(F::at(0.0)), F::ACCOUNT_KEY),
+    ];
+    assert_eq!(ledger.owners(a), from_start);
+    // Unsure for a while, then certain again in the same process: nothing lost.
+    observe(&ledger, vec![], &[a], &[a], &[], 200.0);
+    observe(
+        &ledger,
+        vec![live_for(a, &personal).active(300.0).process(0.0).build()],
+        &[a],
+        &[],
+        &[],
+        300.0,
+    );
+    assert_eq!(ledger.owners(a), from_start);
+    // Another account's new process takes over from its start.
+    let resumed_at = F::at(450.0);
+    observe(
+        &ledger,
+        vec![live_for(a, &work)
+            .active(500.0)
+            .started(450.0)
+            .process(450.0)
+            .build()],
+        &[a],
+        &[],
+        &[],
+        500.0,
+    );
+    assert_eq!(
+        ledger.owners(a),
+        vec![
+            SessionOwner::new(None, ""),
+            SessionOwner::new(Some(F::at(0.0)), F::ACCOUNT_KEY),
+            SessionOwner::new(Some(resumed_at), F::WORK_ACCOUNT_KEY)
+        ]
+    );
+}
+
+/// Regression (double counting): a session that changes hands while its
+/// process runs (an account's key changed, a window switched) leaves the old
+/// part's last response with it. The old part may never be sent again, so the
+/// new part counting it too would count it twice.
+#[test]
+fn a_hand_over_leaves_the_old_parts_last_response_with_it() {
+    let ledger = memory_ledger();
+    let a = F::SESSION_A;
+    let (personal, work) = (F::account(), F::work_account());
+    let last_response = F::at(600.0);
+    observe(
+        &ledger,
+        vec![live_for(a, &personal).active(600.0).process(0.0).build()],
+        &[a],
+        &[],
+        &[],
+        600.0,
+    );
+    observe(
+        &ledger,
+        vec![live_for(a, &work).active(700.0).process(0.0).build()],
+        &[a],
+        &[],
+        &[],
+        700.0,
+    );
+    let boundary = last_response + UNCOUNTED_AFTER;
+    let owners = ledger.owners(a);
+    assert_eq!(
+        owners,
+        vec![
+            SessionOwner::new(None, F::ACCOUNT_KEY),
+            SessionOwner::new(Some(boundary), F::WORK_ACCOUNT_KEY)
+        ]
+    );
+    assert_eq!(
+        SessionOwners::owner_at(Some(last_response), &owners),
+        F::ACCOUNT_KEY
+    );
+    assert_eq!(
+        ledger.entry_of(a, F::ACCOUNT_KEY).unwrap().ended_at,
+        Some(boundary)
+    );
+    assert_eq!(
+        ledger.entry_of(a, F::WORK_ACCOUNT_KEY).unwrap().started_at,
+        boundary
+    );
+}
+
 // ---- Backfill roots ----
 
 /// A `SecureFiles` that knows only which paths are links and what each
@@ -1047,6 +1452,241 @@ fn only_a_folders_own_history_is_backfilled() {
         &StdSecureFiles,
     );
     assert!(linked_to.is_empty());
+}
+
+// ---- Whether a running session's history is shared ----
+
+/// A running session's history is shared when it is reached through a link,
+/// or another known folder reaches it; then its lines from before its
+/// process may be another account's (see the ledger's notes).
+#[cfg(unix)]
+#[test]
+fn a_shared_history_is_one_reached_through_a_link_or_by_another_folder() {
+    use std::os::unix::fs::symlink;
+    let temp = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(temp.path()).unwrap();
+    let paths = Paths::new(PathStyle::native(), HOME);
+    let at = |name: &str| root.join(name);
+    let text = |name: &str| at(name).to_string_lossy().into_owned();
+    let slug = "-Users-me-code-app";
+    let make = |name: &str| std::fs::create_dir_all(at(name)).unwrap();
+    // Claude Parallel Profiles: a window folder's projects\ links to the
+    // shared store.
+    make(&format!(".claude-shared/projects/{slug}"));
+    make(".claude-windows/a1b2c3d4e5f6");
+    symlink(
+        at(".claude-shared/projects"),
+        at(".claude-windows/a1b2c3d4e5f6/projects"),
+    )
+    .unwrap();
+    // A folder with a history of its own, and one whose project folder alone
+    // is a link.
+    make(&format!(".claude-own/projects/{slug}"));
+    make(".claude-per-repo/projects");
+    symlink(
+        at(&format!(".claude-shared/projects/{slug}")),
+        at(&format!(".claude-per-repo/projects/{slug}")),
+    )
+    .unwrap();
+    let transcript = |dir: &str| text(&format!("{dir}/projects/{slug}/{}.jsonl", F::SESSION_A));
+    let bare = |dir: &str| BackfillFolder {
+        config_dir: text(dir),
+        identity_id: None,
+        account_key: None,
+        signed_in_since: None,
+    };
+    let known = vec![
+        bare(".claude-windows/a1b2c3d4e5f6"),
+        bare(".claude-own"),
+        bare(".claude-per-repo"),
+    ];
+    let shared = |transcript: Option<&str>, dir: &str, folders: &[BackfillFolder]| {
+        backfill::is_shared(transcript, dir, folders, &paths, &StdSecureFiles)
+    };
+
+    // Through the link, with or without a transcript yet.
+    let window = ".claude-windows/a1b2c3d4e5f6";
+    assert!(shared(Some(&transcript(window)), &text(window), &known));
+    assert!(shared(None, &text(window), &known));
+    assert!(shared(
+        Some(&transcript(".claude-per-repo")),
+        &text(".claude-per-repo"),
+        &known
+    ));
+    // Its own: the folder itself among the known ones doesn't count.
+    assert!(!shared(
+        Some(&transcript(".claude-own")),
+        &text(".claude-own"),
+        &known
+    ));
+    assert!(!shared(None, &format!("{}/", text(".claude-own")), &[]));
+    // Nor do other spellings of the folder make it shared: a config folder
+    // reached through a link (kept with dotfiles), or another letter case.
+    make(&format!("dotfiles/claude/projects/{slug}"));
+    symlink(at("dotfiles/claude"), at(".claude-dotfiles")).unwrap();
+    assert!(!shared(
+        Some(&transcript(".claude-dotfiles")),
+        &text(".claude-dotfiles"),
+        &known
+    ));
+    let mut with_alias = known.clone();
+    with_alias.push(bare("dotfiles/claude"));
+    assert!(!shared(
+        Some(&transcript(".claude-dotfiles")),
+        &text(".claude-dotfiles"),
+        &with_alias
+    ));
+    let upper = text(".CLAUDE-OWN");
+    if Path::new(&upper).exists() {
+        assert!(!shared(None, &upper, &known));
+    }
+    // Nothing there at all: its own.
+    assert!(!shared(None, &text(".claude-nowhere"), &known));
+
+    // Until another known folder links to it.
+    make(".claude-adopted");
+    symlink(at(".claude-own/projects"), at(".claude-adopted/projects")).unwrap();
+    let mut adopted = known;
+    adopted.push(bare(".claude-adopted"));
+    assert!(shared(
+        Some(&transcript(".claude-own")),
+        &text(".claude-own"),
+        &adopted
+    ));
+}
+
+/// A `SecureFiles` that knows which paths are links and which file each path
+/// is (volume, index), compared without regard to case as NTFS does:
+/// Windows-style paths on any host.
+struct IdFiles {
+    links: BTreeSet<String>,
+    ids: BTreeMap<String, (u64, u128)>,
+}
+
+impl IdFiles {
+    fn new(links: &[&str], ids: &[(&str, u128)]) -> Self {
+        IdFiles {
+            links: links.iter().map(|p| p.to_lowercase()).collect(),
+            ids: ids
+                .iter()
+                .map(|(p, index)| (p.to_lowercase(), (7, *index)))
+                .collect(),
+        }
+    }
+}
+
+impl SecureFiles for IdFiles {
+    fn ensure_private_dir(&self, _: &Path) -> io::Result<()> {
+        Err(io::Error::other("not used"))
+    }
+    fn write_atomic(&self, _: &Path, _: &[u8], _: WriteMode, _: Expect) -> io::Result<WriteResult> {
+        Err(io::Error::other("not used"))
+    }
+    fn create_exclusive(&self, _: &Path, _: &[u8]) -> io::Result<bool> {
+        Err(io::Error::other("not used"))
+    }
+    fn identity(&self, path: &Path) -> io::Result<FileIdentity> {
+        let (volume, index) = *self
+            .ids
+            .get(&path.to_string_lossy().to_lowercase())
+            .ok_or_else(|| io::Error::from(io::ErrorKind::NotFound))?;
+        // The times and size change with the folder's contents: they must
+        // not matter.
+        Ok(FileIdentity {
+            volume,
+            index,
+            modified_ns: index as i128 * 31,
+            size: index as u64 * 17,
+        })
+    }
+    fn is_reparse(&self, path: &Path) -> io::Result<bool> {
+        Ok(self.links.contains(&path.to_string_lossy().to_lowercase()))
+    }
+    fn canonical(&self, path: &Path) -> io::Result<PathBuf> {
+        Ok(path.to_path_buf())
+    }
+    fn is_private(&self, _: &Path) -> io::Result<bool> {
+        Ok(true)
+    }
+}
+
+/// The same rule over Windows paths: junctions, letter case and aliases of a
+/// folder are told apart by the file each names (volume and file index), not
+/// by how it is spelled.
+#[test]
+fn a_shared_history_is_told_by_file_identity_not_spelling() {
+    let paths = Paths::new(PathStyle::Windows, r"C:\Users\Me");
+    let slug = "-Users-me-code-app";
+    let window = r"C:\Users\Me\.claude-windows\a1b2c3d4e5f6";
+    let own = r"C:\Users\Me\.claude-own";
+    let per_repo = r"C:\Users\Me\.claude-per-repo";
+    let dotfiles = r"C:\Users\Me\.claude-dotfiles";
+    let adopted = r"C:\Users\Me\.claude-adopted";
+    let transcript = |dir: &str| format!(r"{dir}\projects\{slug}\{}.jsonl", F::SESSION_A);
+    let files = IdFiles::new(
+        &[
+            &format!(r"{window}\projects"),
+            &format!(r"{per_repo}\projects\{slug}"),
+            &format!(r"{adopted}\projects"),
+        ],
+        &[
+            // The shared store, reached by the window folder's junction.
+            (window, 1),
+            (&format!(r"{window}\projects"), 2),
+            (&format!(r"{window}\projects\{slug}"), 3),
+            (own, 4),
+            (&format!(r"{own}\projects"), 5),
+            (&format!(r"{own}\projects\{slug}"), 6),
+            (per_repo, 7),
+            (&format!(r"{per_repo}\projects"), 8),
+            (&format!(r"{per_repo}\projects\{slug}"), 3),
+            // A folder kept elsewhere and reached under two names.
+            (dotfiles, 9),
+            (&format!(r"{dotfiles}\projects"), 10),
+            (&format!(r"{dotfiles}\projects\{slug}"), 11),
+            (r"C:\Users\Me\dotfiles\claude", 9),
+            (r"C:\Users\Me\dotfiles\claude\projects", 10),
+            // Linked to the own folder's history.
+            (adopted, 12),
+            (&format!(r"{adopted}\projects"), 5),
+        ],
+    );
+    let bare = |dir: &str| BackfillFolder {
+        config_dir: dir.to_owned(),
+        identity_id: None,
+        account_key: None,
+        signed_in_since: None,
+    };
+    let known = vec![bare(window), bare(own), bare(per_repo)];
+    let shared = |transcript_path: Option<&str>, dir: &str, folders: &[BackfillFolder]| {
+        backfill::is_shared(transcript_path, dir, folders, &paths, &files)
+    };
+
+    // A junction to the shared store, with or without a transcript yet; a
+    // project folder alone that is a link.
+    assert!(shared(Some(&transcript(window)), window, &known));
+    assert!(shared(None, window, &known));
+    assert!(shared(Some(&transcript(per_repo)), per_repo, &known));
+    // Its own, however the folder is spelled among the known ones.
+    assert!(!shared(Some(&transcript(own)), own, &known));
+    assert!(!shared(
+        Some(&transcript(own)),
+        r"c:\USERS\me\.CLAUDE-OWN",
+        &known
+    ));
+    assert!(!shared(None, &format!(r"{own}\"), &[]));
+    // Another name for the same folder (kept with dotfiles, reached through
+    // a link) is not another folder; a changed size or time says nothing.
+    let mut aliased = known.clone();
+    aliased.push(bare(r"C:\Users\Me\dotfiles\claude"));
+    assert!(!shared(Some(&transcript(dotfiles)), dotfiles, &known));
+    assert!(!shared(Some(&transcript(dotfiles)), dotfiles, &aliased));
+    // A folder the file system knows nothing of is its own.
+    assert!(!shared(None, r"C:\Users\Me\.claude-nowhere", &known));
+    // Until another known folder reaches its projects.
+    let mut reached = known;
+    reached.push(bare(adopted));
+    assert!(shared(Some(&transcript(own)), own, &reached));
 }
 
 // ---- Folder logins ----

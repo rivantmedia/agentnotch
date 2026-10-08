@@ -367,6 +367,7 @@ fn morning() -> (Harness, Morning) {
             cost_usd: cost,
             title: title.map(str::to_owned),
             process_started_at: process.map(|p| m.at(p)),
+            in_shared_history: None,
         }
     };
     let live_a = live(

@@ -13,6 +13,7 @@ use agentnotch_engine::cloud::pass::{CloudSyncPass, Record};
 use agentnotch_engine::cloud::service::{
     backoff, INITIAL_BACKOFF, MAX_BACKOFF, SIGNED_OUT_OF_WEBSITE, SIGN_IN_NOT_ACCEPTED,
 };
+use agentnotch_engine::hub::DeepLinkOutcome;
 use agentnotch_engine::model::{BackfillFolder, CloudAuthState, IdentityId, UsageSource};
 use agentnotch_engine::platform::{HttpRequest, HttpResponse};
 use agentnotch_engine::runtime_types::UsageObservation;
@@ -339,6 +340,255 @@ fn a_session_placed_a_moment_late_keeps_its_cost() {
     let session = last_sent(&h);
     assert_eq!(session["messageCount"], json!(2));
     assert_eq!(session["costUsd"].as_f64(), Some(0.37));
+}
+
+// ---- A shared history: only what the app saw running counts ----
+
+/// Regression (double counting): a conversation in Claude Parallel Profiles'
+/// shared history, first seen when an account continues it, is sent with only
+/// that process's responses. The ones before it ran unseen (before sync, or
+/// as another account): counting them for this account would credit it with
+/// another's, or count them twice.
+#[cfg(unix)]
+#[test]
+fn a_session_first_seen_in_a_shared_history_is_sent_from_its_process() {
+    let h = started(HarnessOptions::default());
+    let (window, transcript) = h.shared_window(A);
+    Lines::write(
+        &[
+            // Earlier processes: two responses.
+            Lines::user("start", A, 0.0),
+            Lines::assistant("old-1", "ro1", A)
+                .usage(100, 50)
+                .at(10.0)
+                .line(),
+            Lines::assistant("old-2", "ro2", A)
+                .usage(100, 50)
+                .at(20.0)
+                .line(),
+            // This process: one.
+            Lines::user("go on", A, 1000.0),
+            Lines::assistant("new-1", "rn1", A)
+                .usage(1, 2)
+                .at(1010.0)
+                .line(),
+        ],
+        &transcript,
+        false,
+    );
+    let mut observation = h.observation(A);
+    observation.config_dir = Some(window);
+    observation.transcript_path = Some(transcript.to_string_lossy().into_owned());
+    observation.process_started_at = Some(CloudFixture::at(990.0));
+    observation.started_at = CloudFixture::at(995.0);
+    observation.last_activity_at = CloudFixture::at(1010.0);
+    h.observe_one(observation);
+    h.sync_now();
+    let session = last_sent(&h);
+    assert_eq!(session["messageCount"], json!(1));
+    assert_eq!(session["tokens"]["output"], json!(2));
+    assert_eq!(session["startedAt"], json!(CloudFixture::stamp(1000.0)));
+    // Not the process's status-line total (it may carry the earlier ones),
+    // but its own response at list prices: Opus 4.5, 1 in, 2 out.
+    assert_eq!(session["costUsd"].as_f64(), Some(0.000055));
+
+    // The same layout, as a folder's own history: counted whole.
+    let own = started(HarnessOptions::default());
+    own.write_session(A, 0);
+    let mut whole = own.observation(A);
+    whole.process_started_at = Some(CloudFixture::at(15.0));
+    own.observe_one(whole);
+    own.sync_now();
+    assert_eq!(last_sent(&own)["messageCount"], json!(2));
+}
+
+/// A new session in a shared history is all its process's: sent whole, with
+/// Claude Code's own cost (no response is no one's).
+#[cfg(unix)]
+#[test]
+fn a_new_session_in_a_shared_history_keeps_claude_codes_cost() {
+    let h = started(HarnessOptions::default());
+    let (window, transcript) = h.shared_window(A);
+    h.write_session_to(A, 0, &transcript);
+    let mut observation = h.observation(A);
+    observation.config_dir = Some(window);
+    observation.transcript_path = Some(transcript.to_string_lossy().into_owned());
+    observation.process_started_at = Some(CloudFixture::at(-5.0));
+    h.observe_one(observation);
+    assert_eq!(h.service.stores().unwrap().ledger.owners(A).len(), 2);
+    h.sync_now();
+    let session = last_sent(&h);
+    assert_eq!(session["messageCount"], json!(2));
+    assert_eq!(session["costUsd"].as_f64(), Some(0.37));
+}
+
+/// A folder's history counts as shared when another folder the registry
+/// knows reaches it too (profiles relinked after Claude Parallel Profiles
+/// was removed, say), though no link leads to it.
+#[cfg(unix)]
+#[test]
+fn a_history_another_folder_reaches_is_shared() {
+    let h = Harness::new();
+    let projects = h.projects().parent().unwrap().to_path_buf();
+    let other = h.handles.roots.home.join(".claude-work");
+    std::fs::create_dir_all(&projects).unwrap();
+    std::fs::create_dir_all(&other).unwrap();
+    std::os::unix::fs::symlink(&projects, other.join("projects")).unwrap();
+    *h.deps.backfill_folders.lock().unwrap() = vec![BackfillFolder {
+        config_dir: other.to_string_lossy().into_owned(),
+        identity_id: None,
+        account_key: None,
+        signed_in_since: None,
+    }];
+    h.start();
+    h.write_session(A, 0);
+    let mut observation = h.observation(A);
+    observation.process_started_at = Some(CloudFixture::at(15.0));
+    h.observe_one(observation);
+    h.sync_now();
+    // Only the response after its process started.
+    assert_eq!(last_sent(&h)["messageCount"], json!(1));
+}
+
+/// Regression (double counting): a shared history's session the app saw
+/// end, continued while the app wasn't capturing (as another account, say),
+/// then resumed in a process the app sees: what was written in between
+/// counts for no one, not for the account it ran as.
+#[cfg(unix)]
+#[test]
+fn what_a_shared_session_did_unseen_counts_for_no_one() {
+    let h = started(HarnessOptions::default());
+    let (window, transcript) = h.shared_window(A);
+    h.write_session_to(A, 0, &transcript);
+    let mut observation = h.observation(A);
+    observation.config_dir = Some(window);
+    observation.transcript_path = Some(transcript.to_string_lossy().into_owned());
+    observation.process_started_at = Some(CloudFixture::at(-5.0));
+    h.observe_one(observation.clone());
+    h.sync_now();
+    assert_eq!(last_sent(&h)["messageCount"], json!(2));
+    // It ends, and the app sees it go.
+    h.observe(Vec::new(), &[], &[]);
+    h.advance(Duration::from_secs(61));
+    h.service.tick(h.now());
+    // Continued unseen (sync off meanwhile, say): two responses.
+    h.service.set_sync(false, h.now());
+    Lines::write(
+        &[
+            Lines::user("other account", A, 4000.0),
+            Lines::assistant("gap-1", "rg1", A)
+                .usage(500, 500)
+                .at(4010.0)
+                .line(),
+            Lines::assistant("gap-2", "rg2", A)
+                .usage(500, 500)
+                .at(4020.0)
+                .line(),
+        ],
+        &transcript,
+        true,
+    );
+    h.service.set_sync(true, h.now());
+    // Resumed as its account in a new process the app sees.
+    Lines::write(
+        &[Lines::assistant("back-1", "rb1", A)
+            .usage(1, 3)
+            .at(5010.0)
+            .line()],
+        &transcript,
+        true,
+    );
+    h.handles.clock.set(CloudFixture::at(5020.0));
+    let mut resumed = observation;
+    resumed.process_started_at = Some(CloudFixture::at(5000.0));
+    resumed.started_at = CloudFixture::at(5001.0);
+    resumed.last_activity_at = CloudFixture::at(5010.0);
+    h.observe_one(resumed);
+    h.sync_now();
+    let session = last_sent(&h);
+    assert_eq!(session["messageCount"], json!(3));
+    assert_eq!(session["tokens"]["output"], json!(58));
+}
+
+/// Regression (double counting): an account whose key changes while a
+/// session of it runs (its organization became known) hands the session over
+/// in the same process. The old key's row is never sent again, so its last
+/// response mustn't count for the new key as well.
+#[test]
+fn a_key_change_mid_session_counts_the_last_response_once() {
+    let h = started(HarnessOptions::default());
+    h.write_session(A, 0);
+    let mut observation = h.observation(A);
+    observation.process_started_at = Some(CloudFixture::at(-5.0));
+    h.observe_one(observation.clone());
+    h.sync_now();
+    assert_eq!(last_sent(&h)["messageCount"], json!(2));
+    // The same Claude account, keyed with its organization from now on.
+    let rekeyed = CloudAccountBuilder::new(CloudFixture::IDENTITY_ID)
+        .email("me@example.com")
+        .plan("Max 20x")
+        .label("Personal")
+        .folder(CloudAccountBuilder::run_folder(
+            "/Users/me/.claude",
+            Some(CloudFixture::WORK_ORGANIZATION),
+        ))
+        .build();
+    let new_key = keys::account_key_of(&rekeyed).expect("a key");
+    assert_ne!(new_key, CloudFixture::ACCOUNT_KEY);
+    *h.deps.accounts.lock().unwrap() = vec![rekeyed];
+    h.append(
+        A,
+        &[Lines::assistant("after", "ra", A)
+            .usage(1, 1)
+            .at(30.0)
+            .line()],
+    );
+    observation.last_activity_at = CloudFixture::at(30.0);
+    h.observe_one(observation);
+    h.sync_now();
+    let session = last_sent(&h);
+    assert_eq!(session["accountKey"], json!(new_key));
+    assert_eq!(session["messageCount"], json!(1));
+}
+
+/// The website counts a session once however many people's copies it holds:
+/// a PC signed in as someone else is sent what it captured before, under the
+/// same session id and project key.
+#[test]
+fn another_website_user_is_sent_what_was_captured_before() {
+    let h = started(HarnessOptions::default());
+    h.write_session(A, 0);
+    h.observe_one(h.observation(A));
+    h.sync_now();
+    let first = last_sent(&h);
+
+    h.service.sign_out(h.now());
+    h.handles.http.set_handler(|request| {
+        if path_of(request) == "/api/app/v1/me" {
+            return Ok(json_response(
+                200,
+                json!({"user": {"id": "22222222-3333-4444-8555-666666666666",
+                                "email": "other@example.com", "name": null},
+                       "dashboardUrl": "https://agentnotch.example.com/dashboard"})
+                .to_string(),
+            ));
+        }
+        Ok(website_answer(request))
+    });
+    assert_eq!(h.sign_in(), DeepLinkOutcome::SignInCompleted);
+    assert_eq!(
+        h.service.stores().unwrap().memory.user_id().as_deref(),
+        Some("22222222-3333-4444-8555-666666666666")
+    );
+    h.service.set_sync(true, h.now());
+    let before = h.sync_requests().len();
+    // No sighting since: the session comes from the ledger.
+    h.sync_now();
+    assert_eq!(h.sync_requests().len(), before + 1);
+    let again = last_sent(&h);
+    assert_eq!(again["sessionId"], json!(A));
+    assert_eq!(again["project"]["key"], first["project"]["key"]);
+    assert_eq!(again["messageCount"], first["messageCount"]);
 }
 
 /// A session no status line reported a cost for (the VS Code extension's

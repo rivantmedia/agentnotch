@@ -32,7 +32,7 @@ use super::website;
 use crate::core::paths::PathStyle;
 use crate::core::settings::keys;
 use crate::hub::DeepLinkOutcome;
-use crate::model::{CloudAuthState, CloudState};
+use crate::model::{BackfillFolder, CloudAuthState, CloudState, LiveSessionObservation};
 use crate::platform::{Browser, Clock, Http, Platform};
 use crate::runtime_types::{CloudCall, CloudConfig, CloudDeps, LiveBatch, UsageObservation};
 use std::collections::{BTreeMap, BTreeSet};
@@ -58,6 +58,8 @@ pub const NO_FOLDER_WAIT: Duration = Duration::from_secs(60 * 60);
 /// An account whose 5-hour window is at least this used (percent) gets no
 /// summaries until it comes down: they would eat into real work.
 pub const SUMMARY_USAGE_CEILING: f64 = 80.0;
+/// How long whether a place's history is shared is taken as known.
+pub const SHARED_HISTORY_MEMORY: Duration = Duration::from_secs(60);
 /// How long a sign-in waits for its callback. Windows can't tell when the
 /// user closes the browser tab (the Mac's sheet says so), so a sign-in
 /// nobody finishes ends by itself, quietly, instead of leaving the section
@@ -345,6 +347,9 @@ struct Inner {
     /// The hub reported running sessions since capture last (re)started:
     /// until it has, `last_live_ids` says nothing about what ended.
     live_observed_since_resume: bool,
+    /// `look_up_shared_histories`' answers since `.0`, by config folder and
+    /// transcript folder.
+    shared_histories: (Option<SystemTime>, BTreeMap<String, bool>),
     /// The summary running beside the schedule (claimed before its thread
     /// starts, released when it ends).
     summary_cancel: Option<Cancel>,
@@ -464,6 +469,7 @@ impl CloudSync {
                 pending_sessions: 0,
                 last_live_ids: BTreeSet::new(),
                 live_observed_since_resume: false,
+                shared_histories: (None, BTreeMap::new()),
                 summary_cancel: None,
                 last_backfill_at: None,
                 max_sessions_per_request: limit::SESSIONS,
@@ -1190,7 +1196,9 @@ impl CloudSync {
     /// The hub's running sessions (see `cloud::feed`): only while
     /// capturing; only accounts the website may hear of, each keyed as
     /// `CloudDeps::accounts` keys it. A session the ledger knows that runs
-    /// as no such account now counts for none.
+    /// as no such account now counts for none. Whether a session's
+    /// transcript is in a shared history is looked up until the ledger knows:
+    /// there, only what the app saw running counts (`SessionLedger`).
     pub fn observe_live(&self, batch: LiveBatch, now: SystemTime) {
         let Some(stores) = &self.stores else { return };
         {
@@ -1209,7 +1217,7 @@ impl CloudSync {
                 .or_insert(account);
         }
         let mut ledger_accounts = BTreeMap::new();
-        let kept: Vec<_> = batch
+        let mut kept: Vec<_> = batch
             .attributed
             .iter()
             .filter_map(|observation| {
@@ -1222,6 +1230,7 @@ impl CloudSync {
                 Some(keyed)
             })
             .collect();
+        self.look_up_shared_histories(&mut kept, stores, now);
         let ended = stores.ledger.observe(
             &kept,
             &batch.live_ids,
@@ -1232,6 +1241,74 @@ impl CloudSync {
         );
         if !ended.is_empty() {
             self.sync_soon(now);
+        }
+    }
+
+    /// Sets `in_shared_history` on the observations of sessions the ledger
+    /// hasn't been told about (`backfill::is_shared`, against every folder
+    /// the registry knows). Answers are kept a minute by where the
+    /// transcript is: a session the ledger never takes (one running as two
+    /// accounts at once) is looked up on every feed. Reads the file system,
+    /// so never under the service's lock.
+    fn look_up_shared_histories(
+        &self,
+        observations: &mut [LiveSessionObservation],
+        stores: &CloudStores,
+        now: SystemTime,
+    ) {
+        let undecided: Vec<usize> = (0..observations.len())
+            .filter(|&index| {
+                stores
+                    .ledger
+                    .shared_history(&observations[index].session_id)
+                    .is_none()
+            })
+            .collect();
+        if undecided.is_empty() {
+            return;
+        }
+        let mut known = {
+            let mut inner = lock(&self.inner);
+            let (at, answers) = &mut inner.shared_histories;
+            let stale = at.is_none_or(|at| {
+                now.duration_since(at)
+                    .map_or(true, |age| age >= SHARED_HISTORY_MEMORY)
+            });
+            if stale {
+                *at = Some(now);
+                answers.clear();
+            }
+            answers.clone()
+        };
+        let default_folder = stores.paths.default_config_dir();
+        let mut folders: Option<Vec<BackfillFolder>> = None;
+        for index in undecided {
+            let observation = &mut observations[index];
+            let config_dir = observation
+                .config_dir
+                .clone()
+                .unwrap_or_else(|| default_folder.clone());
+            let transcript_folder = observation
+                .transcript_path
+                .as_deref()
+                .and_then(|path| stores.paths.parent(path))
+                .unwrap_or_default();
+            let place = format!("{config_dir}\0{transcript_folder}");
+            if let Some(&answer) = known.get(&place) {
+                observation.in_shared_history = Some(answer);
+                continue;
+            }
+            let folders = folders.get_or_insert_with(|| self.deps.backfill_folders());
+            let shared = backfill::is_shared(
+                observation.transcript_path.as_deref(),
+                &config_dir,
+                folders,
+                &stores.paths,
+                &*stores.files,
+            );
+            known.insert(place.clone(), shared);
+            lock(&self.inner).shared_histories.1.insert(place, shared);
+            observation.in_shared_history = Some(shared);
         }
     }
 

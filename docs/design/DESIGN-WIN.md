@@ -3454,3 +3454,16 @@ logs and the two cross-cutting reviews, kept beside the checkout in `an-work/` (
   and its secrets); upstream's `report_dpr` correction loop at 125 %; paths over `MAX_PATH`
   and volumes without 8.3 names (not proven on Windows); a light-taskbar variant of the tray
   dot.
+- **Parity with 1.0.2: the ledger in a shared history (da0b235).** A running session whose
+  transcript is in a shared history (`backfill::is_shared`: the `projects\` or the project
+  folder is a link or junction, or another known folder reaches the same `projects\`, compared
+  by `SecureFiles::identity`'s volume and file index, never by spelling) counts only from its
+  process's start, and after its part ends what follows is no one's until a process of it is
+  seen again. `CloudSync` looks that up for sessions the ledger hasn't been told about
+  (`LiveSessionObservation::in_shared_history`, answers kept a minute) and the entry keeps
+  `shared_history` in `cloud-ledger.json` (files without it still load). A hand-over starts
+  1 ms after the old part's last activity, and only hand-overs between accounts count toward
+  `MAX_OWNERS`. No new platform method was needed: `identity` already opens a folder with
+  `FILE_FLAG_BACKUP_SEMANTICS` and returns the 128-bit file id. The real-link tests run on Unix
+  (`StdSecureFiles` has no file index on Windows); `win_files.rs` proves the Windows side with
+  real junctions.

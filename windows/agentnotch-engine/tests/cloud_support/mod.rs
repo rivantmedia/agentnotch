@@ -291,6 +291,7 @@ pub fn live_for(session_id: &str, account: &CloudAccount) -> Live {
         cost_usd: None,
         title: None,
         process_started_at: None,
+        in_shared_history: None,
     })
 }
 
@@ -317,6 +318,12 @@ impl Live {
 
     pub fn process(mut self, seconds: f64) -> Self {
         self.0.process_started_at = Some(CloudFixture::at(seconds));
+        self
+    }
+
+    /// The hub-side lookup said whether its transcript is in a shared history.
+    pub fn shared(mut self, shared: bool) -> Self {
+        self.0.in_shared_history = Some(shared);
         self
     }
 
@@ -923,6 +930,11 @@ impl Harness {
     /// A session with a prompt, a tool call and its output, and two
     /// responses (`extra` more after them).
     pub fn write_session(&self, id: &str, extra: usize) {
+        self.write_session_to(id, extra, &self.transcript(id));
+    }
+
+    /// [`Self::write_session`], at `path`.
+    pub fn write_session_to(&self, id: &str, extra: usize, path: &std::path::Path) {
         let mut lines = vec![
             Lines::user("MY SECRET PROMPT about the login bug", id, 0.0),
             Lines::assistant(&format!("{id}-m1"), "r1", id)
@@ -948,7 +960,27 @@ impl Harness {
                     .line(),
             );
         }
-        Lines::write(&lines, &self.transcript(id), false);
+        Lines::write(&lines, path, false);
+    }
+
+    /// Claude Parallel Profiles' layout: a window folder whose `projects`
+    /// links to the shared store. The folder, and `id`'s transcript through
+    /// it. Real links, so on Unix only.
+    #[cfg(unix)]
+    pub fn shared_window(&self, id: &str) -> (String, PathBuf) {
+        let home = &self.handles.roots.home;
+        let shared = home.join(".claude-shared").join("projects");
+        let window = home.join(".claude-windows").join("a1b2c3d4e5f6");
+        if !window.join("projects").exists() {
+            std::fs::create_dir_all(&shared).expect("the shared store");
+            std::fs::create_dir_all(&window).expect("the window folder");
+            std::os::unix::fs::symlink(&shared, window.join("projects")).expect("the link");
+        }
+        let transcript = window
+            .join("projects")
+            .join("-Users-me-code-app")
+            .join(format!("{id}.jsonl"));
+        (window.to_string_lossy().into_owned(), transcript)
     }
 
     /// Appends lines to a session's transcript.
