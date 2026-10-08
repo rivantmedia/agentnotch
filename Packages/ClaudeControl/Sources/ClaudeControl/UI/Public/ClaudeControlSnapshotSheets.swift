@@ -130,7 +130,7 @@ import SwiftUI
         let panelState = state ?? Self.state(width: width)
         panelState.contentWidth = width
         return SessionsPanelContent(model: model, state: panelState, actions: SessionsPanelActions(),
-                                    chat: { _, _ in EmptyView() }, hoveredSessionId: hovered)
+                                    chat: { _, _, _ in EmptyView() }, hoveredSessionId: hovered)
     }
 
     // MARK: - Chat
@@ -148,6 +148,7 @@ import SwiftUI
                 session: session, history: history ?? UIFixtures.chatHistory(for: session), isLoading: false, canFocus: true, messageRoute: route,
                 account: chatAccount(for: session), agentDescriptions: [:], sendFailure: nil,
                 state: state, hooks: ChatHooks(), onSend: { _ in },
+                statusLine: statusLine(for: session),
                 showsTaskBoard: taskBoard, initialQuestionSelections: selections
             )
             .frame(width: width)
@@ -166,7 +167,18 @@ import SwiftUI
         add("chat-plan", planSession())
         add("chat-terminal-only", UIFixtures.dialog())
         add("chat-no-route", finished, route: nil)
+        // The turn failed on the account's limit: the line says when it lifts.
+        add("chat-rate-limited", SampleSessions.rateLimited())
         return sheets
+    }
+
+    /// The chat's status line, as the panel works it out for the session.
+    private static func statusLine(for session: SessionState) -> ChatStatusLine? {
+        var model = SessionsPanelModel(sessions: [session], accounts: UIFixtures.accounts())
+        model.readings = UIFixtures.readings()
+        model.home = UIFixtures.home
+        return ChatStatusLine.make(for: session, rateLimit: model.rateLimit(for: session, now: UIFixtures.now),
+                                   now: UIFixtures.now, home: UIFixtures.home)
     }
 
     /// The session's own account, named as the live chat names it.

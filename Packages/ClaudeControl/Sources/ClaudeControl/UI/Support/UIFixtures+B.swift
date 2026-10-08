@@ -341,6 +341,10 @@ enum UIFixtures {
                 status: .success, result: nil, structuredResult: nil, subagentTools: []
             )), 13)
             add(.assistant("Here's the plan. The migration runs once and is safe to interrupt."), 11)
+        case "needs-ratelimit":
+            add(.user("Refactor the usage parser so each window is parsed on its own."), 40)
+            add(.assistant("Splitting `UsageParser` by window now; the 5-hour and weekly readings no longer share state."), 30)
+            add(bash("swift test --filter UsageParserTests", "Test Suite 'UsageParserTests' passed"), 16)
         case "needs-dialog-network":
             add(.user("Set up the staging database and seed it with the demo data."), 4)
             add(.assistant("Installing the database client first; npm needs network access for that."), 3)

@@ -21,7 +21,7 @@ struct SessionsPanelContent<Chat: View>: View {
     let actions: SessionsPanelActions
     /// The chat for a session (live, or from fixtures), and how it reaches
     /// the panel's commands.
-    @ViewBuilder let chat: (SessionState, ChatHooks) -> Chat
+    @ViewBuilder let chat: (SessionState, ChatHooks, ChatStatusLine?) -> Chat
     /// Snapshots: draw this row with its pointer actions showing.
     var hoveredSessionId: String? = nil
 
@@ -63,7 +63,8 @@ struct SessionsPanelContent<Chat: View>: View {
                     submitAnswers: { toolUseId, answers in
                         answer(toolUseId) { actions.answer(id, toolUseId, answers) }
                     }
-                ))
+                ), ChatStatusLine.make(for: session, rateLimit: model.rateLimit(for: session, now: now),
+                                       now: now, home: model.home))
                 .id(id)
                 .modifier(PanelKeys(context: chatContext(for: session, now: now), perform: { perform($0, now: now) }))
             } else {

@@ -33,10 +33,11 @@ public struct ClaudeSessionsPanel: View {
             model: model,
             state: state,
             actions: LivePanelActions.make(hub: hub, state: state, settingsChanged: { settingsRevision &+= 1 }),
-            chat: { session, hooks in
+            chat: { session, hooks, statusLine in
                 LiveChatView(session: session, monitor: monitor, state: state,
                              canFocus: model.focusable.contains(session.sessionId),
-                             account: Self.chatAccount(for: session, in: model), hooks: hooks)
+                             account: Self.chatAccount(for: session, in: model), hooks: hooks,
+                             statusLine: statusLine)
             }
         )
         .task(id: FocusKey(monitor.instances, isPresented: state.isPresented)) {

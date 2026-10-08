@@ -1090,6 +1090,8 @@ actor SessionStore {
                     session.phase = .processing
                     if !session.isHookBacked {
                         session.turnStartedAt = changedAt
+                        // Show its task progress now, not at the next recheck.
+                        scheduleFileSync(sessionId: session.sessionId)
                     }
                 }
             default:
@@ -1282,6 +1284,13 @@ actor SessionStore {
                 session.toolTracker = ToolTracker()
                 session.subagentState = SubagentState()
                 session.tasks.reset()
+            }
+            // No hook reports this session, so the transcript is its only
+            // source: follow it on every sync (merging would keep the old
+            // statuses) and, after a /clear, start from its new list.
+            if payload.reconstructedTasks == nil, !session.isHookBacked,
+               let transcriptTasks = payload.transcriptTasks, session.tasks != transcriptTasks {
+                session.tasks = transcriptTasks
             }
 
             mergeMessages(
@@ -1750,7 +1759,8 @@ actor SessionStore {
             toolResults: result.toolResults,
             structuredResults: result.structuredResults,
             subagentTools: result.subagentTools,
-            reconstructedTasks: reconstruct ? result.transcriptTasks : nil
+            reconstructedTasks: reconstruct ? result.transcriptTasks : nil,
+            transcriptTasks: result.transcriptTasks
         )
         await process(.fileUpdated(payload))
     }
