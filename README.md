@@ -319,7 +319,8 @@ from every Mac that syncs. Nothing leaves this Mac until you sign in and turn sy
     the same conversation") is sent once per account, each with only the responses, tokens and
     estimated cost of the time that account ran it: the status line's cost is the whole Claude
     Code process's total (a resumed session starts from what it had already spent), so it
-    can't be divided between the accounts.
+    can't be divided between the accounts. The website's totals across accounts count such a
+    session once.
   - Only responses the app can put on an account for certain. While it can't tell which
     account a running session runs as (a `~/.claude` that Claude Parallel Profiles is
     switching between accounts, a Claude Desktop session whose record isn't found, below),
@@ -328,7 +329,12 @@ from every Mac that syncs. Nothing leaves this Mac until you sign in and turn sy
     estimated cost), and nothing it does meanwhile is ever synced under a guess.
     Once the account is certain again, counting goes on from then (for a new process of the
     session, from when that process started). A session first seen that way counts only from
-    its first process the app is sure of.
+    its first process the app is sure of. In a shared history (Claude Parallel Profiles'
+    `~/.claude-shared`, or any `projects/` another folder reaches), where any account may
+    continue a conversation, only what the app saw running counts: a conversation from before
+    sync was on, continued now, counts from the Claude Code process the app saw, and what a
+    conversation does in a process the app never saw running (one run while sync was off,
+    while you were signed out or while the app was closed) counts for no account.
   - Usage-limit readings (5-hour, weekly, per model, extra usage) and where each came from:
     the usage check, the status line, `.claude.json` or Claude Desktop. A reset time the
     website wouldn't take (before 2023, or more than 32 days ahead) is sent empty.
@@ -373,7 +379,10 @@ from every Mac that syncs. Nothing leaves this Mac until you sign in and turn sy
   *Pools* page. Create a share code for an account you have synced and give it to someone
   else who uses the same Claude account. Once they redeem it, everyone in the pool sees every
   member's sessions and usage for that account, and nothing else of each other's. The creator
-  can revoke the code or remove members; members can leave.
+  can revoke the code or remove members; members can leave. A Mac signed in to the website as
+  one person and later as another sends its sessions to both; the website counts each session
+  once, whoever's copies it holds, so sharing the account between those two people doesn't
+  double anything.
 - **Claude Desktop** here means two things: its plan-limit readings (with *Also read Claude
   Desktop's cached usage* on) and the Claude Code sessions it hosts. Claude Desktop runs those
   as whichever account it is signed in to, not as the folder they run in, so the app places

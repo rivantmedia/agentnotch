@@ -43,6 +43,19 @@
 //  Desktop session whose registry entry hasn't been read) is neither: it
 //  runs on as it was, nothing paused, until the hub places it.
 //
+//  The same goes for a session whose transcript is in a shared history
+//  (`CloudBackfill.isShared`: a linked `projects/`, or one another folder
+//  reaches), where any account may write the next lines: only what the app
+//  saw running counts. First seen certain, its lines from before its
+//  process started were written by processes the app never saw, perhaps as
+//  another account (a conversation from before sync, continued after an
+//  account switch): they are nobody's, and its account counts from its
+//  process's start. And when its part ends, what follows is nobody's until
+//  the app sees a process of it again (counted from that process's start;
+//  the same process back after a moment's absence loses nothing): another
+//  account may have continued it while the app wasn't capturing. A session
+//  in a folder's own history counts whole, as the backfill would.
+//
 //  A part that stops being live is ended a minute later (the time it went
 //  away when that was seen while capturing, else its last activity), and
 //  comes back to life if it shows up again.
@@ -90,6 +103,10 @@ nonisolated struct CloudLedgerEntry: Codable, Equatable, Sendable {
     var costUsd: Double?
     var title: String?
     var origin: Origin
+    /// Local only: its transcript is in a shared history, so only what the
+    /// app saw running counts (see the file's notes). Nil until the app
+    /// looked (an entry from before it did).
+    var sharedHistory: Bool? = nil
 
     /// Where the ledger (and what was sent, and summaries) keep it: one
     /// per session and account.
@@ -196,6 +213,11 @@ nonisolated struct LiveSessionObservation: Equatable, Sendable {
     /// When the Claude Code process running it started (from the kernel),
     /// if known: where another account's part of a resumed session begins.
     var processStartedAt: Date? = nil
+    /// Its transcript is in a history other folders share (Claude Parallel
+    /// Profiles): its lines from before this process may be another
+    /// account's. `CloudSync` looks it up for sessions the ledger hasn't
+    /// been told about (`SessionLedger.sharedHistory(of:)`); nil otherwise.
+    var inSharedHistory: Bool? = nil
 }
 
 nonisolated final class SessionLedger: @unchecked Sendable {
@@ -214,13 +236,17 @@ nonisolated final class SessionLedger: @unchecked Sendable {
     /// Hand-overs between accounts kept per session at most: a session that
     /// keeps changing hands (two windows running it at once) stops being
     /// split further. Stretches of nobody are bounded on their own (by the
-    /// same number): a hand-over away from nobody is never refused, so a
-    /// session is never left counting for no one while the hub is certain.
+    /// same number, the ones a shared history's session starts with and gets
+    /// at each end included): a hand-over away from nobody is never refused,
+    /// so a session is never left counting for no one while the hub is
+    /// certain. Past the bound, a part stays with the account it ran as.
     static let maxOwners = 32
     /// Sessions first seen unsure kept at most (the oldest go first).
     static let unattributedCapacity = 2_000
-    /// Nobody's stretch starts this long after the last certain activity
-    /// (transcript times have millisecond precision).
+    /// A stretch that takes over from an account's part (nobody's, or
+    /// another account's) starts this long after that part's last activity
+    /// (transcript times have millisecond precision): a response written at
+    /// that very moment stays the part's, so it can't also count for the next.
     static let uncountedAfter: TimeInterval = 0.001
 
     nonisolated struct Contents: Codable, Equatable, Sendable {
@@ -275,7 +301,8 @@ nonisolated final class SessionLedger: @unchecked Sendable {
         lock.withLock { Array(contents.sessions.values) }
     }
 
-    /// The session's entry of the account that ran it last.
+    /// The session's entry of the account that runs it now; nil while its
+    /// responses count for no one.
     func entry(_ sessionId: String) -> CloudLedgerEntry? {
         lock.withLock {
             currentOwner(sessionId).flatMap { contents.sessions[CloudLedgerEntry.key(sessionId: sessionId, accountKey: $0)] }
@@ -303,8 +330,22 @@ nonisolated final class SessionLedger: @unchecked Sendable {
         lock.withLock { isKnown(sessionId) }
     }
 
-    /// Whether the session was seen running with its account unknown, and
-    /// nobody's responses since are counted for any account.
+    /// Whether the session's transcript is in a shared history, as the
+    /// ledger was told; nil until it was (a session it has no entry of, or
+    /// whose entries are from before the app looked).
+    func sharedHistory(of sessionId: String) -> Bool? {
+        lock.withLock { historyIsShared(sessionId) }
+    }
+
+    /// Lock held: `sharedHistory(of:)`.
+    private func historyIsShared(_ sessionId: String) -> Bool? {
+        let flags = (keysOfSession[sessionId] ?? []).compactMap { contents.sessions[$0]?.sharedHistory }
+        return flags.isEmpty ? nil : flags.contains(true)
+    }
+
+    /// Whether the session's new responses count for no account: it was
+    /// seen running with its account unknown, or (in a shared history) it
+    /// stopped running and no process of it has been seen since.
     func isUncounted(_ sessionId: String) -> Bool {
         lock.withLock { currentOwner(sessionId) == "" }
     }
@@ -385,16 +426,27 @@ nonisolated final class SessionLedger: @unchecked Sendable {
             for observation in attributable {
                 let key = CloudLedgerEntry.key(sessionId: observation.sessionId, accountKey: observation.accountKey)
                 var partStart: Date?
-                if let current = currentOwner(observation.sessionId), current != observation.accountKey {
-                    // Away from nobody always: the hub is certain now.
-                    if !current.isEmpty, stretchCount(observation.sessionId, nobody: false) >= Self.maxOwners { continue }
-                    partStart = handOver(observation.sessionId, from: current, to: observation, now: now)
+                if let current = currentOwner(observation.sessionId) {
+                    if current != observation.accountKey {
+                        // Away from nobody always: the hub is certain now.
+                        if !current.isEmpty, stretchCount(observation.sessionId, nobody: false) >= Self.maxOwners { continue }
+                        partStart = handOver(observation.sessionId, from: current, to: observation, now: now)
+                        changed = true
+                    }
+                } else if observation.inSharedHistory == true {
+                    // First seen, in a shared history: what came before this
+                    // process is no one's (see the file's notes).
+                    let start = min(observation.processStartedAt ?? observation.startedAt, now)
+                    setOwners(observation.sessionId, [SessionOwner(from: nil, accountKey: ""),
+                                                      SessionOwner(from: start, accountKey: observation.accountKey)])
+                    partStart = start
                     changed = true
                 }
                 seenThisRun[key] = now
                 missingSince.removeValue(forKey: key)
                 let updated = merged(observation, into: contents.sessions[key], partStart: partStart,
-                                     isSplit: (contents.owners[observation.sessionId]?.count ?? 0) > 1)
+                                     isSplit: (contents.owners[observation.sessionId]?.count ?? 0) > 1,
+                                     sharedHistory: observation.inSharedHistory ?? historyIsShared(observation.sessionId))
                 openIDs.insert(key)
                 keysOfSession[observation.sessionId, default: []].insert(key)
                 if contents.sessions[key] != updated {
@@ -454,10 +506,20 @@ nonisolated final class SessionLedger: @unchecked Sendable {
     }
 
     /// Lock held: how many of the session's kept owners are nobody's
-    /// stretches (`nobody`), or accounts'.
+    /// stretches (`nobody`), or accounts' stretches counted as hand-overs
+    /// between accounts: one account back after a stretch of nobody (a
+    /// session resumed in a shared history) is no new one, or a session
+    /// resumed often would use up the bound and then never change hands.
     private func stretchCount(_ sessionId: String, nobody: Bool) -> Int {
         guard let owners = contents.owners[sessionId] else { return nobody ? 0 : 1 }
-        return owners.filter { $0.accountKey.isEmpty == nobody }.count
+        if nobody { return owners.filter(\.accountKey.isEmpty).count }
+        var count = 0
+        var previous: String?
+        for owner in owners where !owner.accountKey.isEmpty {
+            if owner.accountKey != previous { count += 1 }
+            previous = owner.accountKey
+        }
+        return count
     }
 
     /// Lock held: a session the ledger has no entry of runs unsure.
@@ -509,17 +571,23 @@ nonisolated final class SessionLedger: @unchecked Sendable {
 
     /// Lock held: the session, last run as `current`, now runs as the
     /// observation's account. The old account's part ends when the new one
-    /// began (its process's start, never before the old part's last
-    /// activity or an earlier hand-over, never after now). Returns that
-    /// moment. From nobody (`current` ""), the same rule: a new process
-    /// takes over from its start, the process that ran through the unsure
-    /// stretch from where it began (the stretch goes).
+    /// began: its process's start (or, unknown, when the app first saw it;
+    /// never after now), but never at or before the old part's last
+    /// activity or before an earlier hand-over. Returns that moment. From
+    /// nobody (`current` ""), the same rule: a new process takes over from
+    /// its start, the process that ran through the unsure stretch from where
+    /// it began (the stretch goes).
     private func handOver(_ sessionId: String, from current: String, to observation: LiveSessionObservation,
                           now: Date) -> Date {
         let oldKey = CloudLedgerEntry.key(sessionId: sessionId, accountKey: current)
         var owners = contents.owners[sessionId] ?? [SessionOwner(from: nil, accountKey: current)]
         var boundary = min(observation.processStartedAt ?? observation.startedAt, now)
-        if let old = contents.sessions[oldKey] { boundary = max(boundary, old.lastActivityAt) }
+        // A response at the old part's last activity stays the old part's:
+        // a part that is never sent again (its account's key changed) keeps
+        // it on the website, so the new one mustn't count it as well.
+        if let old = contents.sessions[oldKey] {
+            boundary = max(boundary, old.lastActivityAt.addingTimeInterval(Self.uncountedAfter))
+        }
         if let previous = owners.last?.from { boundary = max(boundary, previous) }
         owners.append(SessionOwner(from: boundary, accountKey: observation.accountKey))
         setOwners(sessionId, owners)
@@ -542,8 +610,10 @@ nonisolated final class SessionLedger: @unchecked Sendable {
     ///   - partStart: where a new part of a split session begins.
     ///   - isSplit: the session has more than one owner: a part's start is
     ///     where its account took over, not when the app first saw the process.
+    ///   - sharedHistory: whether its transcript is in a shared history, if
+    ///     known (an entry keeps what it was told first).
     private func merged(_ observation: LiveSessionObservation, into existing: CloudLedgerEntry?,
-                        partStart: Date?, isSplit: Bool) -> CloudLedgerEntry {
+                        partStart: Date?, isSplit: Bool, sharedHistory: Bool?) -> CloudLedgerEntry {
         let path = projectPaths[observation.cwd] ?? CloudKeys.projectPath(forCwd: observation.cwd, home: home)
         guard var entry = existing else {
             let start = partStart ?? min(observation.startedAt, observation.lastActivityAt)
@@ -562,9 +632,11 @@ nonisolated final class SessionLedger: @unchecked Sendable {
                 model: observation.model,
                 costUsd: observation.costUsd,
                 title: observation.title,
-                origin: .live
+                origin: .live,
+                sharedHistory: sharedHistory
             )
         }
+        entry.sharedHistory = entry.sharedHistory ?? sharedHistory
         // A backfilled session seen running is the hub's from now on.
         if entry.origin == .backfill {
             entry.origin = .live
@@ -609,8 +681,24 @@ nonisolated final class SessionLedger: @unchecked Sendable {
             missingSince.removeValue(forKey: key)
             openIDs.remove(key)
             ended.append(key)
+            if copy.sharedHistory == true, let end = copy.endedAt { stopCountingAfterEnd(copy, end: end) }
         }
         return ended
+    }
+
+    /// Lock held: a shared history's session stopped running as `entry`'s
+    /// account at `end`. Whatever is written after it is no one's until the
+    /// app sees a process of the session again (`handOver` from nobody):
+    /// whoever continues it while the app isn't capturing may be another
+    /// account. Past the bound on stretches of nobody, it stays as it was.
+    private func stopCountingAfterEnd(_ entry: CloudLedgerEntry, end: Date) {
+        guard currentOwner(entry.sessionId) == entry.accountKey,
+              stretchCount(entry.sessionId, nobody: true) < Self.maxOwners else { return }
+        var owners = contents.owners[entry.sessionId] ?? [SessionOwner(from: nil, accountKey: entry.accountKey)]
+        var boundary = end.addingTimeInterval(Self.uncountedAfter)
+        if let previous = owners.last?.from { boundary = max(boundary, previous) }
+        owners.append(SessionOwner(from: boundary, accountKey: ""))
+        setOwners(entry.sessionId, owners)
     }
 
     // MARK: - Backfill
@@ -739,6 +827,57 @@ nonisolated enum CloudBackfill {
             return Root(projects: real, identityId: identityId, accountKey: key,
                         configDir: AccountPaths.normalize(folder.configDir), signedInSince: since)
         }
+    }
+
+    /// Whether a session's history is shared with other folders, so other
+    /// accounts may have written its transcript and only the ledger can
+    /// tell whose a line is: the transcript's project folder, or the
+    /// `projects/` it is in (before a transcript is known, `configDir`'s),
+    /// is a link (Claude Parallel Profiles links every folder's `projects/`
+    /// to `~/.claude-shared`), or another of `folders` reaches the same
+    /// physical `projects`. Links further up (a config folder kept with
+    /// dotfiles) share nothing by themselves, and folders are compared as
+    /// files, not as spellings (letter case, `/private`). Unlike a backfill
+    /// root's test, a folder the app knows nothing else about is its own.
+    /// Pure apart from `isLink` and `identity`.
+    static func isShared(transcriptPath: String?, configDir: String, folders: [Folder],
+                         isLink: (String) -> Bool = CloudBackfill.isLink,
+                         identity: (String) -> FileIdentity? = CloudBackfill.identity) -> Bool {
+        let configDir = AccountPaths.normalize(configDir)
+        var projects = (configDir as NSString).appendingPathComponent("projects")
+        if let transcriptPath, !transcriptPath.isEmpty {
+            let folder = (AccountPaths.normalize(transcriptPath) as NSString).deletingLastPathComponent
+            if isLink(folder) { return true }
+            projects = (folder as NSString).deletingLastPathComponent
+        }
+        if isLink(projects) { return true }
+        guard let physical = identity(projects) else { return false }
+        let ownFolder = identity(configDir)
+        return folders.contains { other in
+            let otherDir = AccountPaths.normalize(other.configDir)
+            // The same folder, however it is spelled, is not another.
+            guard otherDir != configDir, ownFolder == nil || identity(otherDir) != ownFolder else { return false }
+            return identity((otherDir as NSString).appendingPathComponent("projects")) == physical
+        }
+    }
+
+    /// A file as the file system knows it (links followed): two spellings
+    /// of one folder are one identity.
+    nonisolated struct FileIdentity: Equatable, Sendable {
+        var device: Int64
+        var inode: UInt64
+    }
+
+    static func identity(_ path: String) -> FileIdentity? {
+        var info = stat()
+        guard stat(path, &info) == 0 else { return nil }
+        return FileIdentity(device: Int64(info.st_dev), inode: UInt64(info.st_ino))
+    }
+
+    /// Whether `path` itself is a symbolic link (links on the way to it are followed).
+    static func isLink(_ path: String) -> Bool {
+        var info = stat()
+        return lstat(path, &info) == 0 && (info.st_mode & S_IFMT) == S_IFLNK
     }
 
     static func isDirectory(_ path: String) -> Bool {
