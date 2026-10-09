@@ -33,11 +33,14 @@ agentnotch-win = { path = "../agentnotch-win" } # Fork: WB
 # Fork: WB (the doctor decodes the update key's id with the release tool's own function; the
 # crate is pure Rust and its signing code is never called, so LTO drops it)
 agentnotch-release = { path = "../agentnotch-release" }
+# Fork: WB (the doctor decodes the update key exactly as the updater does: strict base64, then
+# the exact minisign crate and version tauri-plugin-updater verifies with)
+base64 = "0.22"
+minisign-verify = "=0.2.5"
 
-# Fork: WB (the doctor line's tests: the smoke test's pattern, and malformed keys)
+# Fork: WB (the doctor line's tests: the smoke test's pattern)
 [dev-dependencies]
 regex = "1"
-base64 = "0.22"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [

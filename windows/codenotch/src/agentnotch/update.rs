@@ -136,16 +136,28 @@ fn updates_line(config: &serde_json::Map<String, serde_json::Value>, sealed: boo
 /// no smoke test's key pattern (16 upper-case hex digits) matches: a broken release build fails
 /// there instead of shipping an app that refuses every update.
 fn key_id(pubkey: &str) -> String {
-    // The updater decodes the value with a strict base64 decoder and no trimming
-    // (tauri-plugin-updater's `base64_to_string`); the release tool is more lenient (it trims and
-    // also takes a bare minisign `RW…` line), so what only it would accept is refused here first.
-    if pubkey.trim() != pubkey || pubkey.starts_with("RW") {
+    // The release tool is more lenient than the updater (it trims the value and its key line, and
+    // also takes a bare minisign `RW…` line), so the key must first decode the way the updater
+    // decodes it (tauri-plugin-updater's `verify_signature`: strict base64 with no trimming, UTF-8,
+    // then minisign-verify's `PublicKey::decode`, which trims nothing either).
+    if !updater_can_decode(pubkey) {
         return "invalid".into();
     }
     match agentnotch_release::key_id_of_pubkey(pubkey) {
         Ok(id) => id.to_string(),
         Err(_) => "invalid".into(),
     }
+}
+
+/// Whether tauri-plugin-updater could load this `pubkey` value (its `base64_to_string`, then
+/// `PublicKey::decode`).
+fn updater_can_decode(pubkey: &str) -> bool {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD
+        .decode(pubkey)
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .is_some_and(|text| minisign_verify::PublicKey::decode(&text).is_ok())
 }
 
 /// `plugins.updater` as this binary was built: the source `tauri.conf.json`, overlaid with the
@@ -174,7 +186,9 @@ mod tests {
     use agentnotch_engine::hub::{Hub, HubConfig, HubEvent};
     use agentnotch_engine::platform::Roots;
 
-    use super::{key_id, restart_after_failed_install, stop_for_update, updates_line};
+    use super::{
+        key_id, restart_after_failed_install, stop_for_update, updater_can_decode, updates_line,
+    };
 
     /// A sealed hub that counts its starts.
     fn counted_hub() -> (Hub, Arc<Mutex<u32>>) {
@@ -299,6 +313,13 @@ mod tests {
         use base64::Engine as _;
         let b64 = |text: &str| base64::engine::general_purpose::STANDARD.encode(text);
         let short_blob = b64("untrusted comment: minisign public key: 0\nRWQZ0Pthg2Ol\n");
+        // Whitespace around the decoded key line: the release tool trims it, the updater doesn't.
+        let line = key.minisign_public_key();
+        let padded_line = |pad: &str, tail: &str| {
+            b64(&format!(
+                "untrusted comment: minisign public key: 0\n{pad}{line}{tail}\n"
+            ))
+        };
         for pubkey in [
             "not base64 at all".to_string(),
             format!("{}\n", key.tauri_pubkey()),
@@ -307,7 +328,12 @@ mod tests {
             b64("hello"),
             b64("untrusted comment: minisign public key: 0\n"),
             short_blob,
+            padded_line("", " "),
+            padded_line(" ", ""),
+            padded_line("\t", ""),
+            padded_line("", "\t"),
         ] {
+            assert!(!updater_can_decode(&pubkey), "{pubkey:?}");
             assert_eq!(key_id(&pubkey), "invalid", "{pubkey:?}");
             let line = updates_line(&release_config(&pubkey), false);
             assert!(line.contains(" key=invalid "), "{line}");
@@ -317,6 +343,9 @@ mod tests {
                 "{line}"
             );
         }
+        // The release tool alone takes a padded key line, which is why the doctor first decodes
+        // the key the way the updater does.
+        assert!(agentnotch_release::key_id_of_pubkey(&padded_line("", " ")).is_ok());
     }
 
     #[test]

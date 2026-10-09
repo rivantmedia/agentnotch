@@ -601,6 +601,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "dirs 5.0.1",
+ "minisign-verify",
  "native-tls",
  "notify",
  "png 0.17.16",
