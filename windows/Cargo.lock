@@ -596,12 +596,15 @@ name = "codenotch"
 version = "1.18.0"
 dependencies = [
  "agentnotch-engine",
+ "agentnotch-release",
  "agentnotch-win",
+ "base64 0.22.1",
  "chrono",
  "dirs 5.0.1",
  "native-tls",
  "notify",
  "png 0.17.16",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",

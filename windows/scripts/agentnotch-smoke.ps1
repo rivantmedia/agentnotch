@@ -342,7 +342,9 @@ function Test-DoctorReport {
         [ValidateSet('on', 'off')][string]$Updates = 'off',
         [string]$KeyId = ''
     )
-    $key = if ($KeyId) { [regex]::Escape($KeyId) } else { '\S+' }
+    # Without -KeyId any key id the doctor could print (16 upper-case hex digits) passes, but never
+    # `key=invalid`: the doctor's word for an update key the updater could not use.
+    $key = if ($KeyId) { [regex]::Escape($KeyId) } else { '[0-9A-F]{16}' }
     $updatesLine = if ($Updates -eq 'on') { "^updates: on .*key=$key signed-version=required" } else { '^updates: off \(built from source\)' }
     $expected = [ordered]@{
         'the header'                   = '^Agent Notch doctor v' + [regex]::Escape($Version) + '(\s|$)'
