@@ -20,9 +20,10 @@ name: Release
 # and checks it against the previous release's, `windows` builds and
 # smoke-tests the installer with that public key (agentnotch-windows.yml; the
 # seed never comes near it) and `sign-windows` signs it and writes
-# latest.json. `publish` creates the release as a draft with every file, and
-# only then publishes it: latest/download never points at a release whose
-# files are still uploading, and both feeds switch together. A manual run can
+# latest.json. `publish` clears away the draft an interrupted run left,
+# creates the release as a draft with every file, and only then publishes it:
+# latest/download never points at a release whose files are still uploading,
+# and both feeds switch together. A manual run can
 # be a dry run, which builds the same files and keeps them as a run artifact;
 # one can also leave Windows out (skip_windows), the last resort that keeps a
 # Mac release from waiting on Windows.
@@ -116,7 +117,6 @@ jobs:
       version: ${{ steps.plan.outputs.version }}
       tag: ${{ steps.plan.outputs.tag }}
       skip: ${{ steps.plan.outputs.skip }}
-      stale_draft: ${{ steps.plan.outputs.stale_draft }}
       previous_tag: ${{ steps.plan.outputs.previous_tag }}
       previous_has_feed: ${{ steps.plan.outputs.previous_has_feed }}
       windows: ${{ steps.plan.outputs.windows }}
@@ -162,21 +162,22 @@ jobs:
 
           # Released already: a re-run, a VERSION commit that went back to it,
           # or a push that changed only the key file. Green, with nothing to do.
-          if release="$(gh release view "$tag" --json isDraft,name 2>/dev/null)"; then
-            if [[ "$(jq -r .isDraft <<< "$release")" == false ]]; then
-              if [[ "$DRY_RUN" == true ]]; then
-                echo "::warning::Agent Notch $version is released already; a real run would do nothing."
-              else
-                echo "::notice::Agent Notch $version is released already ($tag); nothing to do."
-                echo "skip=true" >> "$GITHUB_OUTPUT"
-                exit 0
-              fi
-            elif [[ "$(jq -r .name <<< "$release")" == "Agent Notch $version" ]]; then
-              # Left by a run that stopped between creating and publishing.
-              echo "::notice::The draft of $tag an interrupted run left behind is replaced."
-              echo "stale_draft=true" >> "$GITHUB_OUTPUT"
+          # Drafts are not looked at here: GitHub lists and serves a draft
+          # release only to a token that can push, and this job's can only
+          # read, so it would never see one. publish, the job that can write,
+          # deals with the tag's drafts right before it makes its own; that
+          # also holds on "Re-run failed jobs", which runs publish again with
+          # this job's outputs from the first attempt.
+          release=""
+          if found="$(gh release view "$tag" --json isDraft 2>/dev/null)" \
+              && [[ "$(jq -r .isDraft <<< "$found")" == false ]]; then
+            release="$found"
+            if [[ "$DRY_RUN" == true ]]; then
+              echo "::warning::Agent Notch $version is released already; a real run would do nothing."
             else
-              problem "A draft release for $tag exists that this workflow did not make; delete it or change VERSION."
+              echo "::notice::Agent Notch $version is released already ($tag); nothing to do."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
             fi
           fi
 
@@ -188,7 +189,7 @@ jobs:
             highest="$(printf '%s\n%s\n' "$latest" "$version" | sort -V | tail -1)"
             if [[ "$version" != "$latest" && "$highest" != "$version" ]]; then
               problem "VERSION $version is below the latest release, $latest: installed copies would never take it."
-            elif [[ "$version" == "$latest" && -z "${release:-}" ]]; then
+            elif [[ "$version" == "$latest" && -z "$release" ]]; then
               # Listed as released, yet not found by its tag a moment ago.
               problem "Agent Notch $version is listed as the latest release, but its release could not be read; run again."
             fi
@@ -296,7 +297,9 @@ jobs:
         with:
           name: release-tool
           path: ${{ runner.temp }}/release-tool/agentnotch-release
-          retention-days: 1
+          # As long as the other files handed over: "Re-run failed jobs" on
+          # keys or sign-windows downloads it again.
+          retention-days: 3
           if-no-files-found: error
 
   # The Windows update key, derived from the update seed (DESIGN-WIN §6.4):
@@ -761,6 +764,7 @@ jobs:
       GH_REPO: ${{ github.repository }}
       DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
       VERSION: ${{ needs.plan.outputs.version }}
+      TAG: ${{ needs.plan.outputs.tag }}
       WINDOWS: ${{ needs.plan.outputs.windows }}
     steps:
       - uses: actions/download-artifact@v8
@@ -783,6 +787,7 @@ jobs:
         env:
           DMG: ${{ needs.mac.outputs.DMG }}
           NOTARIZED: ${{ needs.mac.outputs.NOTARIZED }}
+          PREVIOUS_HAS_FEED: ${{ needs.plan.outputs.previous_has_feed }}
         run: |
           set -euo pipefail
           authenticode=""
@@ -813,7 +818,13 @@ jobs:
               echo
               echo "## Windows (preview)"
               echo
-              echo "The Windows app is new in this release and still a preview: it is built and tested automatically, but it has not been used by people yet. Please report anything odd."
+              # New only in the first release that has it; plan knows whether
+              # the latest one before this had Windows' feed.
+              if [[ "$PREVIOUS_HAS_FEED" == true ]]; then
+                echo "The Windows app is still a preview: it is built and tested automatically, but it has not been used by many people yet. Please report anything odd."
+              else
+                echo "The Windows app is new in this release and still a preview: it is built and tested automatically, but it has not been used by people yet. Please report anything odd."
+              fi
               echo
               echo "1. Download **AgentNotch-$VERSION-Setup.exe** below and run it. It installs for your user only (no administrator) into %LOCALAPPDATA%\\Agent Notch, and fetches Microsoft's WebView2 if needed."
               if [[ "$authenticode" == unsigned || -z "$authenticode" ]]; then
@@ -864,12 +875,89 @@ jobs:
           path: ${{ steps.files.outputs.list }}
           if-no-files-found: error
 
-      - name: Publish the release
-        if: env.DRY_RUN != 'true'
+      # What the tag has now, read with this job's token, the only one in the
+      # run that can see drafts (GitHub shows them only to a token that can
+      # push), right before the release is made. Not decided in plan: it
+      # would see no draft, and "Re-run failed jobs" after this job made its
+      # draft and stopped runs only this job again, with plan's old outputs.
+      # A published release: nothing to do, as in plan. Drafts titled as this
+      # workflow titles its own: leftovers of a run that stopped between
+      # creating and publishing, deleted (all of them; GitHub lets drafts
+      # share a tag). Any other draft for the tag: someone else's; the run
+      # stops and deletes nothing. A dry run only says what a real run would
+      # do. Releases of other tags are never changed.
+      #
+      # plan's other findings are checked again too, as far as they hang on
+      # the releases: a re-run can come days later, after other releases went
+      # out. One above VERSION would lose its place as the latest release
+      # (and the feeds installs read) to this older one. Any other latest
+      # release than the one plan built on leaves the notes' start tag and
+      # the update keys plan and keys checked against out of date. Either
+      # way the run stops, deleting nothing; a new run plans afresh.
+      - name: Clear the way for the release
+        id: existing
         env:
-          TAG: ${{ needs.plan.outputs.tag }}
           PREVIOUS_TAG: ${{ needs.plan.outputs.previous_tag }}
-          STALE_DRAFT: ${{ needs.plan.outputs.stale_draft }}
+        run: |
+          set -euo pipefail
+          title="Agent Notch $VERSION"
+          stop() {
+            if [[ "$DRY_RUN" == true ]]; then
+              echo "::warning::$1 (a real run would stop here)"
+            else
+              echo "::error::$1; nothing was deleted or published."
+              exit 1
+            fi
+          }
+          if ! listed="$(gh api --paginate "repos/$GH_REPO/releases?per_page=100")"; then
+            echo "::error::Could not list the releases; run again."
+            exit 1
+          fi
+          # --paginate prints one JSON array per page; jq reads each in turn.
+          for_tag="$(jq -c --arg t "$TAG" '.[] | select(.tag_name == $t) | {id, name: (.name // ""), draft}' <<< "$listed")"
+          published="$(jq -r 'select(.draft | not) | .id' <<< "$for_tag")"
+          own="$(jq -r --arg n "$title" 'select(.draft and .name == $n) | .id' <<< "$for_tag")"
+          foreign="$(jq -r --arg n "$title" 'select(.draft and .name != $n) | "\"\(.name)\" (id \(.id))"' <<< "$for_tag" | paste -sd, - | sed 's/,/, /g')"
+          if [[ -n "$published" ]]; then
+            # Published since plan looked: say, by an earlier attempt of this
+            # run that went on to fail, and is being re-run.
+            if [[ "$DRY_RUN" == true ]]; then
+              echo "::warning::Agent Notch $VERSION is released already; a real run would do nothing."
+            else
+              echo "::notice::Agent Notch $VERSION is released already ($TAG); nothing to do."
+              echo "released=true" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
+          # The latest release as plan finds it: published, not a prerelease.
+          newest="$(jq -r '.[] | select((.draft | not) and (.prerelease | not)) | .tag_name' <<< "$listed" \
+            | sed -n 's/^agentnotch-v\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p' | sort -V | tail -1)"
+          if [[ -n "$newest" && "$(printf '%s\n%s\n' "$newest" "$VERSION" | sort -V | tail -1)" != "$VERSION" ]]; then
+            stop "VERSION $VERSION is below the latest release, $newest: installed copies would never take it, and it would take over releases/latest from $newest"
+          elif [[ "${newest:+agentnotch-v$newest}" != "$PREVIOUS_TAG" ]]; then
+            stop "The latest release is ${newest:+agentnotch-v}${newest:-none} now, not ${PREVIOUS_TAG:-none} as when this run was planned. Start a new run (Actions › Release › Run workflow on main), not a re-run of this one"
+          fi
+          if [[ -n "$foreign" ]]; then
+            if [[ "$DRY_RUN" == true ]]; then
+              echo "::warning::$TAG has a draft release this workflow did not make: $foreign. Delete it or change VERSION (a real run would stop here)."
+            else
+              echo "::error::$TAG has a draft release this workflow did not make: $foreign. Delete it or change VERSION; nothing was deleted."
+              exit 1
+            fi
+          fi
+          for id in $own; do
+            if [[ "$DRY_RUN" == true ]]; then
+              echo "::notice::A real run would delete the draft of $TAG an interrupted run left behind (id $id)."
+            else
+              gh api -X DELETE "repos/$GH_REPO/releases/$id"
+              echo "::notice::Deleted the draft of $TAG an interrupted run left behind (id $id)."
+            fi
+          done
+
+      - name: Publish the release
+        if: env.DRY_RUN != 'true' && steps.existing.outputs.released != 'true'
+        env:
+          PREVIOUS_TAG: ${{ needs.plan.outputs.previous_tag }}
           FILES: ${{ steps.files.outputs.list }}
         run: |
           set -euo pipefail
@@ -891,18 +979,26 @@ jobs:
               exit 1
             fi
           done
-          if [[ "$STALE_DRAFT" == true ]]; then
-            gh release delete "$TAG" --yes
-          fi
           notes=(--notes-file "$RUNNER_TEMP/notes.md" --generate-notes)
           if [[ -n "$PREVIOUS_TAG" ]]; then notes+=(--notes-start-tag "$PREVIOUS_TAG"); fi
           # A draft first: its files upload while nobody can see it, and
           # latest/download keeps serving the previous release meanwhile.
           gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "Agent Notch $VERSION" \
             "${notes[@]}" "${files[@]}"
+          # The draft just made, by its id: the step above left the tag no
+          # other release, so it is the only one; should there be another,
+          # nothing is published.
+          drafts="$(gh api --paginate "repos/$GH_REPO/releases?per_page=100" \
+            | jq -r --arg t "$TAG" '.[] | select(.tag_name == $t) | "\(.id) \(.draft)"')"
+          read -r id draft <<< "$drafts"
+          if [[ "$(wc -l <<< "$drafts")" -ne 1 || "$draft" != true ]]; then
+            echo "::error::$TAG has these releases now (id and whether a draft): $(tr '\n' ' ' <<< "$drafts")not only the draft this run made; nothing is published."
+            exit 1
+          fi
+          release="repos/$GH_REPO/releases/$id"
           # Exactly these files on the draft, every one whole, before the
           # release goes live.
-          attached="$(gh release view "$TAG" --json assets --jq '.assets[].name' | sort)"
+          attached="$(gh api "$release" --jq '.assets[].name' | sort)"
           if [[ "$attached" != "$(printf '%s\n' "${files[@]}" | sort)" ]]; then
             echo "::error::The draft holds $(tr '\n' ' ' <<< "$attached")instead of ${files[*]}; it stays unpublished."
             exit 1
@@ -913,20 +1009,24 @@ jobs:
           fi
           for file in "${files[@]}"; do
             size="$(wc -c < "$file" | tr -d '[:space:]')"
-            uploaded="$(gh release view "$TAG" --json assets \
+            uploaded="$(gh api "$release" \
               --jq ".assets[] | select(.name == \"$file\" and .state == \"uploaded\") | .size")"
             if [[ "$uploaded" != "$size" ]]; then
               echo "::error::$file on the draft is '${uploaded:-missing}', not the $size bytes built; the draft stays unpublished."
               exit 1
             fi
           done
-          gh release edit "$TAG" --draft=false --latest
+          if ! draft="$(gh api -X PATCH "$release" -F draft=false -f make_latest=true --jq .draft)" \
+              || [[ "$draft" != false ]]; then
+            echo "::error::Publishing the draft (id $id) failed, or GitHub did not say it is published; run again, or look at the Releases page."
+            exit 1
+          fi
           echo "::notice::Published Agent Notch $VERSION: $GITHUB_SERVER_URL/$GH_REPO/releases/tag/$TAG"
 
       # What every installed copy fetches. A warning rather than a failure:
       # the release is out either way, and GitHub's redirect can lag a little.
       - name: Check the feeds installs read
-        if: env.DRY_RUN != 'true'
+        if: env.DRY_RUN != 'true' && steps.existing.outputs.released != 'true'
         run: |
           feeds=(appcast.xml)
           if [[ "$WINDOWS" == true ]]; then feeds+=(latest.json); fi

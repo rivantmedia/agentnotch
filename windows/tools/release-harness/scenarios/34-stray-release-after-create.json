@@ -1,0 +1,54 @@
+{
+  "name": "another release for the tag shows up right after publish made its draft (a lagging delete, listed as the oldest): nothing is published",
+  "previous": {
+    "version": "1.0.1",
+    "feed": "test-key"
+  },
+  "faults": {
+    "strayDraftAfterCreate": true
+  },
+  "expect": {
+    "jobs": {
+      "plan": "success",
+      "release-tool": "success",
+      "keys": "success",
+      "mac": "success",
+      "windows": "success",
+      "sign-windows": "success",
+      "publish": "failure"
+    },
+    "steps": {
+      "publish": {
+        "Publish the release": "failure",
+        "Check the feeds installs read": "skipped"
+      }
+    },
+    "annotations": [
+      {
+        "level": "error",
+        "job": "publish",
+        "contains": "not only the draft this run made; nothing is published"
+      }
+    ],
+    "noAnnotations": [
+      "warning"
+    ],
+    "releasesFor": {
+      "agentnotch-v1.1.0": 2
+    },
+    "deletedCount": 0,
+    "curl": 0,
+    "website": false,
+    "gh": {
+      "called": [
+        "release create agentnotch-v1.1.0"
+      ],
+      "notCalled": [
+        "-X PATCH",
+        "-X DELETE",
+        "release edit",
+        "release delete"
+      ]
+    }
+  }
+}

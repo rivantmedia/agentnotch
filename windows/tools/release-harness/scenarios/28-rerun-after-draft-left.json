@@ -1,0 +1,89 @@
+{
+  "name": "Re-run failed jobs after publish made its draft and stopped: publish, with plan's old outputs, deletes that draft by id and publishes a new one",
+  "previous": {
+    "version": "1.0.1",
+    "feed": "test-key"
+  },
+  "faults": {
+    "uploadShort": "latest.json"
+  },
+  "rerun": {
+    "faults": {}
+  },
+  "expect": {
+    "firstAttempt": {
+      "jobs": {
+        "plan": "success",
+        "release-tool": "success",
+        "keys": "success",
+        "mac": "success",
+        "windows": "success",
+        "sign-windows": "success",
+        "publish": "failure"
+      }
+    },
+    "rerunJobs": [
+      "publish",
+      "website"
+    ],
+    "jobs": {
+      "plan": "success",
+      "release-tool": "success",
+      "keys": "success",
+      "mac": "success",
+      "windows": "success",
+      "sign-windows": "success",
+      "publish": "success"
+    },
+    "annotations": [
+      {
+        "level": "error",
+        "job": "publish",
+        "contains": "latest.json on the draft is"
+      },
+      {
+        "level": "notice",
+        "job": "publish",
+        "contains": "Deleted the draft of agentnotch-v1.1.0 an interrupted run left behind (id 1001)"
+      }
+    ],
+    "noAnnotations": [
+      "error",
+      "warning"
+    ],
+    "deletedIds": [
+      1001
+    ],
+    "deletedCount": 1,
+    "releasesFor": {
+      "agentnotch-v1.1.0": 1
+    },
+    "release": {
+      "tag": "agentnotch-v1.1.0",
+      "isDraft": false,
+      "isLatest": true,
+      "assets": [
+        "AgentNotch-1.1.0.dmg",
+        "AgentNotch-1.1.0.zip",
+        "appcast.xml",
+        "AgentNotch-1.1.0-Setup.exe",
+        "AgentNotch-1.1.0-Setup.exe.sig",
+        "latest.json"
+      ],
+      "name": "Agent Notch 1.1.0"
+    },
+    "curl": 2,
+    "website": true,
+    "rerunGh": {
+      "order": [
+        "api -X DELETE repos/rivantmedia/agentnotch/releases/1001",
+        "release create agentnotch-v1.1.0",
+        "api -X PATCH repos/rivantmedia/agentnotch/releases/1002 "
+      ],
+      "notCalled": [
+        "release delete",
+        "release edit"
+      ]
+    }
+  }
+}

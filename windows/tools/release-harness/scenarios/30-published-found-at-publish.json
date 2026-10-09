@@ -1,0 +1,94 @@
+{
+  "name": "Re-run failed jobs after publishing went through but its answer was lost: publish finds the version released, green, nothing touched",
+  "previous": {
+    "version": "1.0.1",
+    "feed": "test-key"
+  },
+  "faults": {
+    "failCallsAfter": [
+      "api -X PATCH"
+    ]
+  },
+  "rerun": {
+    "faults": {}
+  },
+  "expect": {
+    "firstAttempt": {
+      "jobs": {
+        "plan": "success",
+        "release-tool": "success",
+        "keys": "success",
+        "mac": "success",
+        "windows": "success",
+        "sign-windows": "success",
+        "publish": "failure"
+      }
+    },
+    "rerunJobs": [
+      "publish",
+      "website"
+    ],
+    "jobs": {
+      "plan": "success",
+      "release-tool": "success",
+      "keys": "success",
+      "mac": "success",
+      "windows": "success",
+      "sign-windows": "success",
+      "publish": "success"
+    },
+    "steps": {
+      "publish": {
+        "Clear the way for the release": "success",
+        "Publish the release": "skipped",
+        "Check the feeds installs read": "skipped"
+      }
+    },
+    "annotations": [
+      {
+        "level": "error",
+        "job": "publish",
+        "contains": "Publishing the draft (id 1001) failed"
+      },
+      {
+        "level": "notice",
+        "job": "publish",
+        "contains": "Agent Notch 1.1.0 is released already (agentnotch-v1.1.0); nothing to do."
+      }
+    ],
+    "noAnnotations": [
+      "error",
+      "warning"
+    ],
+    "deletedCount": 0,
+    "releasesFor": {
+      "agentnotch-v1.1.0": 1
+    },
+    "release": {
+      "tag": "agentnotch-v1.1.0",
+      "isDraft": false,
+      "isLatest": true,
+      "assets": [
+        "AgentNotch-1.1.0.dmg",
+        "AgentNotch-1.1.0.zip",
+        "appcast.xml",
+        "AgentNotch-1.1.0-Setup.exe",
+        "AgentNotch-1.1.0-Setup.exe.sig",
+        "latest.json"
+      ]
+    },
+    "website": true,
+    "rerunGh": {
+      "called": [
+        "api --paginate repos/rivantmedia/agentnotch/releases?per_page=100"
+      ],
+      "notCalled": [
+        "release create",
+        "api -X DELETE",
+        "api -X PATCH",
+        "release delete",
+        "release edit"
+      ]
+    }
+  }
+}
