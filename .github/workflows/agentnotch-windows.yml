@@ -11,6 +11,14 @@ name: Windows
 # key; every other build carries no key and no feed, so a copy built from
 # source never updates itself. The update seed never comes near this workflow.
 #
+# A manual run may pass a throwaway updater public key and its key id, to prove
+# on Windows what only a build with updates on does (the doctor's key id, the
+# updater's config) without a release: it is still no release build (no
+# signing environment, no secret). Such a build carries the real feed with a
+# key no release is signed with, so it never yields an installer artifact (only
+# the smoke test's files, under a name that says so) and the real-Claude job,
+# which installs that artifact, is skipped.
+#
 # Code signing (Authenticode, Maintainer decision Q4) is the only secret here,
 # and only in a release build: the WINDOWS_SIGN_* values (a .pfx pair, or the
 # six Azure Artifact Signing values; agentnotch-build.ps1 lists them). They
@@ -51,6 +59,15 @@ on:
       - 'Scripts/verify-token-free.sh'
       - '.github/workflows/agentnotch-windows.yml'
   workflow_dispatch:
+    inputs:
+      updater_pubkey:
+        description: A THROWAWAY Tauri updater public key (agentnotch-release derive-public); no installer artifact is kept
+        type: string
+        default: ''
+      expected_key_id:
+        description: The key id the doctor must show for that key (required with it)
+        type: string
+        default: ''
   workflow_call:
     inputs:
       updater_pubkey:
@@ -270,6 +287,9 @@ jobs:
             Artifacts = 'out\smoke'
             Bins      = 'target\debug'
           }
+          # A key the doctor isn't checked against would prove nothing about which key the
+          # build trusts.
+          if ($env:UPDATER_PUBKEY -and -not $env:EXPECTED_KEY_ID) { throw 'an updater_pubkey needs its expected_key_id' }
           if ($env:EXPECTED_KEY_ID) { $smoke.KeyId = $env:EXPECTED_KEY_ID }
           if ($env:RELEASE -eq 'true') { $smoke.Release = $true }
           ./scripts/agentnotch-smoke.ps1 @smoke
@@ -296,13 +316,24 @@ jobs:
         run: ./scripts/agentnotch-build.ps1 -CheckSigning
 
       - name: Upload the installer and the smoke test's files
-        if: ${{ !inputs.release && always() && steps.installer.outputs.name != '' }}
+        if: ${{ !inputs.release && !inputs.updater_pubkey && always() && steps.installer.outputs.name != '' }}
         uses: actions/upload-artifact@v7
         with:
           name: AgentNotch-Setup-${{ steps.installer.outputs.version }}-${{ github.sha }}
           path: |
             windows/out/${{ steps.installer.outputs.name }}
             windows/out/smoke/**
+          retention-days: 14
+          if-no-files-found: error
+
+      # A manual run with a throwaway update key: its installer has the real feed
+      # and a key no release is signed with, so it is never uploaded.
+      - name: Upload the smoke test's files (throwaway update key, no installer)
+        if: ${{ !inputs.release && inputs.updater_pubkey && always() && steps.installer.outputs.name != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: smoke-throwaway-update-key-${{ github.sha }}
+          path: windows/out/smoke/**
           retention-days: 14
           if-no-files-found: error
 
@@ -321,18 +352,26 @@ jobs:
 
       - name: Summary
         if: ${{ !inputs.release }}
+        env:
+          UPDATER_PUBKEY: ${{ inputs.updater_pubkey }}
+          EXPECTED_KEY_ID: ${{ inputs.expected_key_id }}
         run: |
-          "Unsigned, no update feed (built from source). SmartScreen: More info, then Run anyway. Never attach it to a release." >> $env:GITHUB_STEP_SUMMARY
+          if ($env:UPDATER_PUBKEY) {
+            "Built with a throwaway update key ($env:EXPECTED_KEY_ID) and the real feed: no installer was kept, and the real-Claude job is skipped." >> $env:GITHUB_STEP_SUMMARY
+          } else {
+            "Unsigned, no update feed (built from source). SmartScreen: More info, then Run anyway. Never attach it to a release." >> $env:GITHUB_STEP_SUMMARY
+          }
 
   # The installed app against the real, pinned Claude Code (Maintainer decision Q3): the ONE
   # place real Claude Code ever runs, on a fresh runner, inside a temporary profile, with a fake
   # key and a fake Messages API on 127.0.0.1, its executable firewalled from everything but
   # loopback; npm's download of the pinned package is the only network use. No secret reaches
-  # this job. Never part of a release build. While the realClaude gate of smoke/gates.json is
+  # this job. Never part of a release build, nor of a manual run with a throwaway update key
+  # (no installer artifact is made for it). While the realClaude gate of smoke/gates.json is
   # closed it prints a notice and installs nothing. scripts/smoke/real-claude.ps1 says what it
   # proves; its job summary records exec-form evidence for the facts file.
   real-claude:
-    if: ${{ github.repository != 'vinzdg/codenotch' && !inputs.release }}
+    if: ${{ github.repository != 'vinzdg/codenotch' && !inputs.release && !inputs.updater_pubkey }}
     needs: build
     name: Real Claude Code (hermetic)
     runs-on: windows-2025

@@ -332,6 +332,22 @@ Test-Case 'a release build shows the derived key id and a required signed versio
     Assert-Equal (@(Test-DoctorReport -Report $on -Version '1.2.3' -Updates off) -join ';') 'the updates line' 'on where off is expected'
 }
 
+Test-Case 'the doctor line a release build prints passes with its key id, and an invalid key never' {
+    # The format update.rs writes (DESIGN-WIN §4.14), with Appendix B's test key id.
+    $feed = 'https://github.com/rivantmedia/agentnotch/releases/latest/download/latest.json'
+    $on = $doctorOff.Replace('updates: off (built from source)', "updates: on feed=$feed key=B5A5638361FBD019 signed-version=required")
+    Assert-Equal @(Test-DoctorReport -Report $on -Version '1.2.3' -Updates on -KeyId 'B5A5638361FBD019').Count 0 'with -KeyId'
+    Assert-Equal @(Test-DoctorReport -Report $on -Version '1.2.3' -Updates on).Count 0 'without -KeyId'
+    Assert-Equal (@(Test-DoctorReport -Report $on -Version '1.2.3' -Updates on -KeyId '0000000000000000') -join ';') 'the updates line' 'another key id'
+    # The line before the fix: no key at all.
+    $noKey = $doctorOff.Replace('updates: off (built from source)', "updates: on feed=$feed signed-version=required")
+    Assert-Equal (@(Test-DoctorReport -Report $noKey -Version '1.2.3' -Updates on -KeyId 'B5A5638361FBD019') -join ';') 'the updates line' 'no key id, with -KeyId'
+    Assert-Equal (@(Test-DoctorReport -Report $noKey -Version '1.2.3' -Updates on) -join ';') 'the updates line' 'no key id, without -KeyId'
+    $invalid = $doctorOff.Replace('updates: off (built from source)', "updates: on feed=$feed key=invalid signed-version=required")
+    Assert-Equal (@(Test-DoctorReport -Report $invalid -Version '1.2.3' -Updates on -KeyId 'B5A5638361FBD019') -join ';') 'the updates line' 'invalid, with -KeyId'
+    Assert-Equal (@(Test-DoctorReport -Report $invalid -Version '1.2.3' -Updates on) -join ';') 'the updates line' 'invalid, without -KeyId'
+}
+
 Test-Case 'each missing doctor line is named' {
     $broken = $doctorOff.Replace('accounts: 2', 'accounts: 1').Replace('deep-link: registered', 'deep-link: unknown').Replace('v1.2.3', 'v9.9.9')
     $missing = @(Test-DoctorReport -Report $broken -Version '1.2.3')

@@ -100,9 +100,14 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// The doctor's `updates:` line (§4.14). Only release builds carry an update key (the release
 /// workflow's config overlay); a copy built from source never updates itself.
 pub(super) fn doctor_line() -> String {
-    let config = merged_updater_config();
+    updates_line(&merged_updater_config(), super::sealed())
+}
+
+/// The line for a given `plugins.updater` config. Pure, so the format the release's smoke test
+/// matches (`^updates: on .*key=<id> signed-version=required`) is tested on any OS.
+fn updates_line(config: &serde_json::Map<String, serde_json::Value>, sealed: bool) -> String {
     let pubkey = config.get("pubkey").and_then(|v| v.as_str()).unwrap_or("");
-    if pubkey.is_empty() || super::sealed() {
+    if pubkey.is_empty() || sealed {
         return "updates: off (built from source)".into();
     }
     let feed = config
@@ -114,16 +119,45 @@ pub(super) fn doctor_line() -> String {
         .get("requireSignedVersion")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
-    // The key id is decoded from the key by the release tooling's rules (WP11); the doctor shows
-    // the feed and whether the signed version is enforced.
     format!(
-        "updates: on feed={feed} signed-version={}",
+        "updates: on feed={feed} key={} signed-version={}",
+        key_id(pubkey),
         if signed_version {
             "required"
         } else {
             "not required"
         }
     )
+}
+
+/// The key id the build's update key names, decoded by the release tool's own function (the one
+/// release.yml checks the published key and feed with), so the doctor can never disagree with the
+/// release about which key a build trusts. A key the updater could not use reads `invalid`, which
+/// no smoke test's key pattern (16 upper-case hex digits) matches: a broken release build fails
+/// there instead of shipping an app that refuses every update.
+fn key_id(pubkey: &str) -> String {
+    // The release tool is more lenient than the updater (it trims the value and its key line, and
+    // also takes a bare minisign `RW…` line), so the key must first decode the way the updater
+    // decodes it (tauri-plugin-updater's `verify_signature`: strict base64 with no trimming, UTF-8,
+    // then minisign-verify's `PublicKey::decode`, which trims nothing either).
+    if !updater_can_decode(pubkey) {
+        return "invalid".into();
+    }
+    match agentnotch_release::key_id_of_pubkey(pubkey) {
+        Ok(id) => id.to_string(),
+        Err(_) => "invalid".into(),
+    }
+}
+
+/// Whether tauri-plugin-updater could load this `pubkey` value (its `base64_to_string`, then
+/// `PublicKey::decode`).
+fn updater_can_decode(pubkey: &str) -> bool {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD
+        .decode(pubkey)
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .is_some_and(|text| minisign_verify::PublicKey::decode(&text).is_ok())
 }
 
 /// `plugins.updater` as this binary was built: the source `tauri.conf.json`, overlaid with the
@@ -152,7 +186,9 @@ mod tests {
     use agentnotch_engine::hub::{Hub, HubConfig, HubEvent};
     use agentnotch_engine::platform::Roots;
 
-    use super::{restart_after_failed_install, stop_for_update};
+    use super::{
+        key_id, restart_after_failed_install, stop_for_update, updater_can_decode, updates_line,
+    };
 
     /// A sealed hub that counts its starts.
     fn counted_hub() -> (Hub, Arc<Mutex<u32>>) {
@@ -208,5 +244,121 @@ mod tests {
         assert_eq!(*starts.lock().unwrap(), 0);
         stop_for_update(None, &stopped);
         assert!(!stopped.load(Ordering::SeqCst), "no hub, nothing stopped");
+    }
+
+    const FEED: &str =
+        "https://github.com/rivantmedia/agentnotch/releases/latest/download/latest.json";
+
+    /// `plugins.updater` as agentnotch-build.ps1's release overlay writes it.
+    fn release_config(pubkey: &str) -> serde_json::Map<String, serde_json::Value> {
+        serde_json::json!({
+            "pubkey": pubkey,
+            "endpoints": [FEED],
+            "requireSignedVersion": true,
+        })
+        .as_object()
+        .cloned()
+        .unwrap()
+    }
+
+    /// agentnotch-smoke.ps1's `Test-DoctorReport` pattern for the updates line, as a release run
+    /// (`-Updates on -KeyId <id>`) and a run without `-KeyId` build it.
+    fn smoke_pattern(key_id: Option<&str>) -> regex::Regex {
+        let key = key_id.map_or_else(|| "[0-9A-F]{16}".to_string(), regex::escape);
+        regex::Regex::new(&format!(
+            "(?m)^updates: on .*key={key} signed-version=required"
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn the_design_vector_shows_its_key_id() {
+        // DESIGN-WIN Appendix B's pubkey (a test seed, never a real key) and §4.14's line.
+        let pubkey = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI1QTU2MzgzNjFGQkQwMTkKUldRWjBQdGhnMk9sdGN3UFAralJPTnNJUnh6bjFOZUVGamloRlNMUWZTako4Qzk4RlRGZi9qdjQK";
+        let line = updates_line(&release_config(pubkey), false);
+        assert_eq!(
+            line,
+            format!("updates: on feed={FEED} key=B5A5638361FBD019 signed-version=required")
+        );
+        assert!(smoke_pattern(Some("B5A5638361FBD019")).is_match(&line));
+        assert!(smoke_pattern(None).is_match(&line));
+        assert!(!smoke_pattern(Some("0000000000000000")).is_match(&line));
+    }
+
+    #[test]
+    fn keys_made_by_the_release_tool_show_the_id_it_derived() {
+        // The id is compared with the one `UpdateKey::derive` produced (HKDF output), not with
+        // a second decoding: what release.yml passes as expected_key_id.
+        for seed in [
+            "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+            "//////////////////////////////////////////8=",
+            "q83vEjRWeJCrze8SNFZ4kKvN7xI0VniQq83vEjRWeJA=",
+        ] {
+            let seed = agentnotch_release::Seed::from_base64(seed.as_bytes()).unwrap();
+            let key = agentnotch_release::UpdateKey::derive(&seed);
+            let id = key.key_id().to_string();
+            assert_eq!(key_id(&key.tauri_pubkey()), id);
+            let line = updates_line(&release_config(&key.tauri_pubkey()), false);
+            assert!(smoke_pattern(Some(&id)).is_match(&line), "{line}");
+            assert!(smoke_pattern(None).is_match(&line), "{line}");
+        }
+    }
+
+    #[test]
+    fn a_key_the_updater_could_not_use_never_passes_the_smoke_test() {
+        let key = agentnotch_release::UpdateKey::derive(
+            &agentnotch_release::Seed::from_base64(b"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
+                .unwrap(),
+        );
+        use base64::Engine as _;
+        let b64 = |text: &str| base64::engine::general_purpose::STANDARD.encode(text);
+        let short_blob = b64("untrusted comment: minisign public key: 0\nRWQZ0Pthg2Ol\n");
+        // Whitespace around the decoded key line: the release tool trims it, the updater doesn't.
+        let line = key.minisign_public_key();
+        let padded_line = |pad: &str, tail: &str| {
+            b64(&format!(
+                "untrusted comment: minisign public key: 0\n{pad}{line}{tail}\n"
+            ))
+        };
+        for pubkey in [
+            "not base64 at all".to_string(),
+            format!("{}\n", key.tauri_pubkey()),
+            format!(" {}", key.tauri_pubkey()),
+            key.minisign_public_key(),
+            b64("hello"),
+            b64("untrusted comment: minisign public key: 0\n"),
+            short_blob,
+            padded_line("", " "),
+            padded_line(" ", ""),
+            padded_line("\t", ""),
+            padded_line("", "\t"),
+        ] {
+            assert!(!updater_can_decode(&pubkey), "{pubkey:?}");
+            assert_eq!(key_id(&pubkey), "invalid", "{pubkey:?}");
+            let line = updates_line(&release_config(&pubkey), false);
+            assert!(line.contains(" key=invalid "), "{line}");
+            assert!(!smoke_pattern(None).is_match(&line), "{line}");
+            assert!(
+                !smoke_pattern(Some("B5A5638361FBD019")).is_match(&line),
+                "{line}"
+            );
+        }
+        // The release tool alone takes a padded key line, which is why the doctor first decodes
+        // the key the way the updater does.
+        assert!(agentnotch_release::key_id_of_pubkey(&padded_line("", " ")).is_ok());
+    }
+
+    #[test]
+    fn no_key_or_a_sealed_run_means_updates_off() {
+        let key_text = "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI1QTU2MzgzNjFGQkQwMTkKUldRWjBQdGhnMk9sdGN3UFAralJPTnNJUnh6bjFOZUVGamloRlNMUWZTako4Qzk4RlRGZi9qdjQK";
+        let off = "updates: off (built from source)";
+        assert_eq!(updates_line(&serde_json::Map::new(), false), off);
+        assert_eq!(updates_line(&release_config(""), false), off);
+        assert_eq!(updates_line(&release_config(key_text), true), off);
+        let mut unsigned = release_config(key_text);
+        unsigned.insert("requireSignedVersion".into(), false.into());
+        let line = updates_line(&unsigned, false);
+        assert!(line.ends_with("key=B5A5638361FBD019 signed-version=not required"));
+        assert!(!smoke_pattern(Some("B5A5638361FBD019")).is_match(&line));
     }
 }
