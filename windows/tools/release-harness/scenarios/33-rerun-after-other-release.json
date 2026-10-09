@@ -1,0 +1,91 @@
+{
+  "name": "Re-run failed jobs after another release went out below VERSION: plan's previous tag, notes start and key checks are out of date; publish stops, deletes nothing",
+  "previous": {
+    "version": "1.0.1",
+    "feed": "test-key"
+  },
+  "faults": {
+    "uploadShort": "latest.json"
+  },
+  "rerun": {
+    "faults": {},
+    "addReleases": [
+      {
+        "tagName": "agentnotch-v1.0.2",
+        "name": "Agent Notch 1.0.2",
+        "isDraft": false,
+        "isPrerelease": false,
+        "isLatest": true,
+        "assets": []
+      }
+    ]
+  },
+  "expect": {
+    "firstAttempt": {
+      "jobs": {
+        "plan": "success",
+        "release-tool": "success",
+        "keys": "success",
+        "mac": "success",
+        "windows": "success",
+        "sign-windows": "success",
+        "publish": "failure"
+      }
+    },
+    "rerunJobs": [
+      "publish",
+      "website"
+    ],
+    "jobs": {
+      "plan": "success",
+      "release-tool": "success",
+      "keys": "success",
+      "mac": "success",
+      "windows": "success",
+      "sign-windows": "success",
+      "publish": "failure"
+    },
+    "steps": {
+      "publish": {
+        "Clear the way for the release": "failure",
+        "Publish the release": "skipped",
+        "Check the feeds installs read": "skipped"
+      }
+    },
+    "annotations": [
+      {
+        "level": "error",
+        "job": "publish",
+        "contains": "latest.json on the draft is"
+      },
+      {
+        "level": "error",
+        "job": "publish",
+        "contains": "The latest release is agentnotch-v1.0.2 now, not agentnotch-v1.0.1 as when this run was planned"
+      }
+    ],
+    "noAnnotations": [
+      "warning"
+    ],
+    "deletedCount": 0,
+    "releasesFor": {
+      "agentnotch-v1.1.0": 1
+    },
+    "release": {
+      "tag": "agentnotch-v1.0.2",
+      "isDraft": false,
+      "isLatest": true
+    },
+    "curl": 0,
+    "website": false,
+    "rerunGh": {
+      "notCalled": [
+        "-X DELETE",
+        "-X PATCH",
+        "release create",
+        "release delete",
+        "release edit"
+      ]
+    }
+  }
+}

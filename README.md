@@ -828,7 +828,9 @@ Releases are published to this repository's
   draft an interrupted run left (titled "Agent Notch <VERSION>") is deleted and made again,
   also when you re-run the failed jobs. Drafts are checked by the publishing job, the only one
   whose token can see them, just before it makes its own; a foreign one stops it there,
-  after the build, and nothing is deleted.
+  after the build, and nothing is deleted. A re-run of the failed jobs also stops there when
+  another release went out since the run began (one above `VERSION`, or any new latest
+  release): start a new run instead, which checks everything again.
 - **Only from `main`.** Every run, a dry run too, fails on any other branch before it builds
   anything: the job holds the update key, and only `main`'s code may run with it.
 - **Dry run.** Actions › Release › Run workflow on `main`, with *Dry run* ticked, makes the

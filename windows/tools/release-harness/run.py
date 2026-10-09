@@ -15,8 +15,9 @@ artifacts handed between jobs), and runs the real shell steps of `plan`, `keys`,
   `contents` permission, and the fake gh shows a read token what GitHub shows it: no
   drafts, and no writes;
 - "Re-run failed jobs" when a scenario has `rerun`: the failed jobs and the jobs after
-  them run again against what the first attempt left, with the other jobs' outputs (plan's
-  among them) as they were;
+  them run again against what the first attempt left, plus any releases published in the
+  meantime (`rerun.addReleases`), with the other jobs' outputs (plan's among them) as they
+  were;
 - the real windows/agentnotch-release binary from the workspace (built if missing) in
   `keys` and `sign-windows`, fed only the DESIGN-WIN Appendix B test seed;
 - the jobs that build (release-tool, mac, windows) simulated: they hand over the files
@@ -527,7 +528,9 @@ class Harness(object):
         """GitHub's "Re-run failed jobs": the failed jobs and every job after them run again,
         in the same run (its artifacts, and the outputs of the jobs that succeeded, plan's
         among them, as the first attempt left them); GitHub's state is whatever the first
-        attempt left, with the scenario's faults for the second attempt."""
+        attempt left, with the scenario's faults for the second attempt and the releases it says
+        were published in between (`addReleases`: release objects as setup() makes them, without
+        ids; one with isLatest takes that mark from the others)."""
         run["first"] = dict(run["jobs"])
         again = set(j for j in JOB_ORDER if run["jobs"][j].result in ("failure", "cancelled"))
         for job_id in JOB_ORDER:
@@ -536,6 +539,16 @@ class Harness(object):
         with open(run["state"]) as f:
             state = json.load(f)
         state["faults"] = rerun.get("faults", {})
+        taken = set(r["id"] for r in state["releases"] + state.get("deleted", []))
+        for extra in rerun.get("addReleases", []):
+            extra = dict(extra)
+            extra["id"] = min(i for i in range(201, 1000) if i not in taken)
+            taken.add(extra["id"])
+            os.makedirs(os.path.join(run["gh_files"], "r%d" % extra["id"]))
+            if extra.get("isLatest"):
+                for r in state["releases"]:
+                    r["isLatest"] = False
+            state["releases"].append(extra)
         with open(run["state"], "w") as f:
             json.dump(state, f, indent=1)
         run["attempt"] = 2
@@ -1015,6 +1028,31 @@ def structure(wf):
     by_tag = [s.label for s in publish.steps if s.run and re.search(r"\bgh release (view|edit|delete)\b", s.run)]
     add(not by_tag, "publish addresses releases by id, never gh release view/edit/delete <tag>%s" % (
         (" (" + ", ".join(by_tag) + ")") if by_tag else ""))
+
+    # Every artifact a job of the run downloads is kept as long as the others: "Re-run failed
+    # jobs" downloads them again, and one that expired first fails that re-run. Uploaded in
+    # release.yml or, for windows-unsigned, in the Windows workflow it calls.
+    retention = {}
+    for job_id in wf.job_order:
+        for s in wf.jobs[job_id].steps:
+            if s.uses and s.uses.startswith("actions/upload-artifact"):
+                retention.setdefault(s.with_.get("name"), []).append(s.with_.get("retention-days"))
+    windows_yml = os.path.join(os.path.dirname(RELEASE_YML), "agentnotch-windows.yml")
+    if not os.path.exists(windows_yml):  # --workflow with a lone copy of release.yml
+        windows_yml = os.path.join(ROOT, ".github", "workflows", "agentnotch-windows.yml")
+    with open(windows_yml) as f:
+        for wjob in (extract.parse(f.read()).get("jobs") or {}).values():
+            for s in wjob.get("steps") or []:
+                if str(s.get("uses", "")).startswith("actions/upload-artifact") and \
+                        (s.get("with") or {}).get("name") == "windows-unsigned":
+                    retention.setdefault("windows-unsigned", []).append(s["with"].get("retention-days"))
+    handed = sorted(set(s.with_.get("name") for j in wf.job_order for s in wf.jobs[j].steps
+                        if s.uses and s.uses.startswith("actions/download-artifact")))
+    kept = dict((name, retention.get(name) or [None]) for name in handed)
+    days = set(d for ds in kept.values() for d in ds)
+    add(handed and len(days) == 1 and all(isinstance(d, int) and d >= 3 for d in days),
+        "artifacts handed between jobs are all kept the same days, at least 3 (%s)" % ", ".join(
+            "%s %s" % (n, "/".join(str(d) for d in ds)) for n, ds in sorted(kept.items())))
 
     tool = wf.jobs["release-tool"]
     add(tool.environment is None and "secrets." not in _dump(tool.data) and tool.permissions == {"contents": "read"},

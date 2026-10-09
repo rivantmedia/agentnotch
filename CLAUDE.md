@@ -435,8 +435,11 @@ Packages/ClaudeControl/Scripts/embed-scripts.sh [--check]
     published one is a green stop (`released=true`, nothing touched); drafts titled
     `Agent Notch <V>` are leftovers of an interrupted run, deleted by id, all of them (drafts
     can share a tag); any other draft is foreign: an error naming it, nothing deleted. This also
-    holds on "Re-run failed jobs", which reruns publish with plan's old outputs. A dry run only
-    warns. The new draft is then addressed by id (its assets, sizes and the publishing
+    holds on "Re-run failed jobs", which reruns publish with plan's old outputs; so the same
+    step checks plan's release facts again before it deletes anything: a published
+    `agentnotch-v*` above `VERSION`, or a latest release other than plan's `previous_tag`
+    (stale notes start, stale key checks), stops the run, and a new run plans afresh. A dry run
+    only warns. The new draft is then addressed by id (its assets, sizes and the publishing
     `PATCH … draft=false make_latest=true`), never `gh release view/edit <tag>`, which picks one
     of several drafts.
   - With no `SPARKLE_ED_PRIVATE_KEY` or no committed public key, it fails with setup steps in

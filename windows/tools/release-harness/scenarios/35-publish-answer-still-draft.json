@@ -1,0 +1,53 @@
+{
+  "name": "GitHub answers the publish but the release is still a draft: the step fails and says so",
+  "previous": {
+    "version": "1.0.1",
+    "feed": "test-key"
+  },
+  "faults": {
+    "patchKeepsDraft": true
+  },
+  "expect": {
+    "jobs": {
+      "plan": "success",
+      "release-tool": "success",
+      "keys": "success",
+      "mac": "success",
+      "windows": "success",
+      "sign-windows": "success",
+      "publish": "failure"
+    },
+    "steps": {
+      "publish": {
+        "Publish the release": "failure",
+        "Check the feeds installs read": "skipped"
+      }
+    },
+    "annotations": [
+      {
+        "level": "error",
+        "job": "publish",
+        "contains": "Publishing the draft (id 1001) failed, or GitHub did not say it is published"
+      }
+    ],
+    "noAnnotations": [
+      "warning"
+    ],
+    "releasesFor": {
+      "agentnotch-v1.1.0": 1
+    },
+    "release": {
+      "tag": "agentnotch-v1.1.0",
+      "isDraft": true,
+      "isLatest": false
+    },
+    "curl": 0,
+    "website": false,
+    "gh": {
+      "order": [
+        "release create agentnotch-v1.1.0",
+        "api -X PATCH repos/rivantmedia/agentnotch/releases/1001 "
+      ]
+    }
+  }
+}

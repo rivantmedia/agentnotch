@@ -23,7 +23,8 @@
 #                   "tagObjects": {"<sha>": {"object": {"sha"}}},
 #                   "faults": {"failCalls": ["<start of the joined argv>"],
 #                              "failCallsAfter": ["<same, but done first, then failed>"],
-#                              "uploadShort": "<asset>", "uploadExtra": "<asset>"}}
+#                              "uploadShort": "<asset>", "uploadExtra": "<asset>",
+#                              "strayDraftAfterCreate": true, "patchKeepsDraft": true}}
 #   FAKE_GH_FILES  folder of asset bytes: r<release id>/<name> (read by download, written by create)
 #   FAKE_GH_LOG    one JSON array of argv per call
 #   GH_REPO, GH_TOKEN  as the workflow sets them; the repository must be GH_REPO's
@@ -127,10 +128,11 @@ visible() {
 }
 
 # The release `gh release view|edit|delete|download <tag>` acts on: the published one (GitHub's
-# releases/tags/<tag>), else, for a token that sees drafts, a draft with that tag (gh looks
-# through the drafts; with several, one of them: the oldest here).
+# releases/tags/<tag>), else, for a token that sees drafts, a draft with that tag. gh finds
+# the draft by walking the release list, which GitHub gives newest first, so with several
+# drafts it takes the newest; so does this.
 release_json() {
-  visible | jq -c --arg t "$1" '([.[] | select(.tagName == $t and (.isDraft | not))] + [.[] | select(.tagName == $t)]) | first // empty'
+  visible | jq -c --arg t "$1" '([.[] | select(.tagName == $t and (.isDraft | not))] + [reverse[] | select(.tagName == $t)]) | first // empty'
 }
 
 fields_of() {
@@ -223,6 +225,15 @@ case "${positional[0]} ${positional[1]:-}" in
       '.releases += [{id: $id, tagName: $t, name: $title, isDraft: $draft, isPrerelease: false, isLatest: false,
                       targetCommitish: $target, notesStartTag: $start, generateNotes: $generate,
                       notes: $notes, assets: $assets}]'
+    # Another release for the tag that shows up only now: a delete GitHub has not applied
+    # yet, or someone else's draft. Listed as the oldest, so on the last page.
+    if jq -e '.faults.strayDraftAfterCreate == true' "$state" > /dev/null; then
+      stray="$(jq '[.releases[].id, (.deleted // [])[].id, 1000] | max + 1' "$state")"
+      mkdir -p "$files/r$stray"
+      save --argjson id "$stray" --arg t "$tag" --arg title "$title" \
+        '.releases = [{id: $id, tagName: $t, name: $title, isDraft: true, isPrerelease: false, isLatest: false,
+                       assets: []}] + .releases'
+    fi
     if [[ "${draft:-false}" == true ]]; then
       echo "https://github.com/$GH_REPO/releases/tag/untagged-$id"
     else
@@ -292,8 +303,11 @@ case "${positional[0]} ${positional[1]:-}" in
             # Publishing a draft: exactly draft=false (typed) and make_latest=true.
             [[ "${fields[*]}" == "-F draft=false -f make_latest=true" ]] || refuse "$joined"
             $writer || forbidden "$path"
-            save --argjson id "$id" \
-              '.releases |= map(if .id == $id then .isDraft = false | .isLatest = true else .isLatest = false end)'
+            # patchKeepsDraft: GitHub answers 200 but the release is still a draft.
+            if ! jq -e '.faults.patchKeepsDraft == true' "$state" > /dev/null; then
+              save --argjson id "$id" \
+                '.releases |= map(if .id == $id then .isDraft = false | .isLatest = true else .isLatest = false end)'
+            fi
             emit "$(jq -c --argjson id "$id" ".releases[] | select(.id == \$id) | $rest" "$state")"
             ;;
           DELETE)

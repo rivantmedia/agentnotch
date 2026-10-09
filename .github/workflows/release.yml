@@ -885,12 +885,30 @@ jobs:
       # creating and publishing, deleted (all of them; GitHub lets drafts
       # share a tag). Any other draft for the tag: someone else's; the run
       # stops and deletes nothing. A dry run only says what a real run would
-      # do. Releases of other tags are never looked at.
+      # do. Releases of other tags are never changed.
+      #
+      # plan's other findings are checked again too, as far as they hang on
+      # the releases: a re-run can come days later, after other releases went
+      # out. One above VERSION would lose its place as the latest release
+      # (and the feeds installs read) to this older one. Any other latest
+      # release than the one plan built on leaves the notes' start tag and
+      # the update keys plan and keys checked against out of date. Either
+      # way the run stops, deleting nothing; a new run plans afresh.
       - name: Clear the way for the release
         id: existing
+        env:
+          PREVIOUS_TAG: ${{ needs.plan.outputs.previous_tag }}
         run: |
           set -euo pipefail
           title="Agent Notch $VERSION"
+          stop() {
+            if [[ "$DRY_RUN" == true ]]; then
+              echo "::warning::$1 (a real run would stop here)"
+            else
+              echo "::error::$1; nothing was deleted or published."
+              exit 1
+            fi
+          }
           if ! listed="$(gh api --paginate "repos/$GH_REPO/releases?per_page=100")"; then
             echo "::error::Could not list the releases; run again."
             exit 1
@@ -910,6 +928,14 @@ jobs:
               echo "released=true" >> "$GITHUB_OUTPUT"
             fi
             exit 0
+          fi
+          # The latest release as plan finds it: published, not a prerelease.
+          newest="$(jq -r '.[] | select((.draft | not) and (.prerelease | not)) | .tag_name' <<< "$listed" \
+            | sed -n 's/^agentnotch-v\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p' | sort -V | tail -1)"
+          if [[ -n "$newest" && "$(printf '%s\n%s\n' "$newest" "$VERSION" | sort -V | tail -1)" != "$VERSION" ]]; then
+            stop "VERSION $VERSION is below the latest release, $newest: installed copies would never take it, and it would take over releases/latest from $newest"
+          elif [[ "${newest:+agentnotch-v$newest}" != "$PREVIOUS_TAG" ]]; then
+            stop "The latest release is ${newest:+agentnotch-v}${newest:-none} now, not ${PREVIOUS_TAG:-none} as when this run was planned. Start a new run (Actions › Release › Run workflow on main), not a re-run of this one"
           fi
           if [[ -n "$foreign" ]]; then
             if [[ "$DRY_RUN" == true ]]; then
