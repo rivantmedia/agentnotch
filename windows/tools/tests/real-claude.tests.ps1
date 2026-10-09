@@ -219,6 +219,17 @@ Test-Case "the fake API's log: only the fake key, no Authorization header, a scr
     Assert-True (@(Test-FakeApiLog -Entries @(@{ method = 'POST'; path = '/v1/messages'; apiKey = 'ok'; reply = 'passive' }) -Name 'x') -match 'no scripted turn') 'no turn'
 }
 
+Test-Case 'the interactive run waits for the scripted turn before it reads the fake API log' {
+    Assert-Equal (Test-ScriptedTurn -Entries @()) $false 'an empty log'
+    Assert-Equal (Test-ScriptedTurn -Entries @(@{ method = 'POST'; path = '/v1/messages'; apiKey = 'ok'; reply = 'passive' })) $false 'only the title request'
+    Assert-Equal (Test-ScriptedTurn -Entries @(@{ method = 'POST'; path = '/v1/messages'; apiKey = 'ok'; reply = 'passive' }, @{ method = 'POST'; path = '/v1/messages'; apiKey = 'ok'; reply = 'turn' })) $true 'the turn after the title'
+    # 2.1.285 asks for the title first, and the status line can run before the turn is asked for.
+    $interactive = [string]${function:Invoke-InteractiveScenario}
+    $wait = $interactive.IndexOf('Wait-Until { Test-ScriptedTurn')
+    $check = $interactive.IndexOf("Test-FakeApiLog -Entries @(Read-FakeApiLog -Api `$api) -Name 'interactive'")
+    Assert-True ($wait -ge 0 -and $check -gt $wait) 'the wait comes before the log check'
+}
+
 Test-Case "the fake API's log: only Claude Code's keyless HEAD /api/hello warm-up may come without the key" {
     $turn = @{ method = 'POST'; path = '/v1/messages'; apiKey = 'ok'; reply = 'turn' }
     $hello = @{ method = 'HEAD'; path = '/api/hello'; apiKey = 'absent'; headers = @('accept', 'accept-encoding', 'connection', 'host', 'user-agent'); status = 401 }

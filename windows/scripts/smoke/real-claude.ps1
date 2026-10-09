@@ -353,7 +353,13 @@ function Test-FakeApiLog {
         if ($entry['apiKey'] -ne 'ok' -and -not (Test-KeylessPreconnect $entry)) { "${Name}: $what came with the key $($entry['apiKey'])" }
         if ($entry.Contains('authorization')) { "${Name}: $what carried an Authorization header" }
     }
-    if (-not @($Entries | Where-Object { $_['path'] -eq '/v1/messages' -and $_['reply'] -eq 'turn' }).Count) { "${Name}: no scripted turn was asked for" }
+    if (-not (Test-ScriptedTurn -Entries $Entries)) { "${Name}: no scripted turn was asked for" }
+}
+
+# Whether the fake API's log shows the scenario's scripted turn was asked for.
+function Test-ScriptedTurn {
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Entries)
+    [bool]@($Entries | Where-Object { $_['path'] -eq '/v1/messages' -and $_['reply'] -eq 'turn' }).Count
 }
 
 # `cmdkey /list`: the targets it names.
@@ -940,6 +946,11 @@ function Invoke-InteractiveScenario {
         if (-not $status['session_id']) { $problems.Add('the status line JSON has no session_id') }
         Write-RcLog "status line: Claude Code $($status['version']), session $($status['session_id']), rate_limits $(if ($status.Contains('rate_limits')) { 'present' } else { 'absent (an API-key session)' })"
         Wait-ControlStatus -Seconds 15 -What 'the readings to stay or grow' -Check ({ param($s) if ([int]$s['readings'] -lt $readingsBefore) { "readings fell from $readingsBefore to $($s['readings'])" } }.GetNewClosure()) | Out-Null
+        # 2.1.285 asks for the session's title before the scripted turn, and the status line can
+        # run in between (three runs on 046ab84 checked the log too early): wait for the turn. If it
+        # never comes, the log check below says so.
+        try { Wait-Until { Test-ScriptedTurn -Entries @(Read-FakeApiLog -Api $api) } 60 'the scripted turn in the fake API log' }
+        catch { Write-RcLog "  $($_.Exception.Message)" }
         foreach ($line in (Test-FakeApiLog -Entries @(Read-FakeApiLog -Api $api) -Name 'interactive')) { $problems.Add($line) }
         if ($problems.Count) { throw ("interactive scenario:`n  " + ($problems -join "`n  ")) }
         # Ctrl+C twice is Claude Code's own way out.
