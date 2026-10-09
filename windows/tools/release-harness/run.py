@@ -11,7 +11,12 @@ artifacts handed between jobs), and runs the real shell steps of `plan`, `keys`,
 - a fake gh (fake-gh) answering from the scenario's state and refusing anything else,
   and a fake curl (fake-curl) serving only the feeds a published release would; both
   record every call. They come first on PATH, and each step first checks that `gh` and
-  `curl` resolve to them, so nothing reaches GitHub;
+  `curl` resolve to them, so nothing reaches GitHub. Each job's token is named after its
+  `contents` permission, and the fake gh shows a read token what GitHub shows it: no
+  drafts, and no writes;
+- "Re-run failed jobs" when a scenario has `rerun`: the failed jobs and the jobs after
+  them run again against what the first attempt left, with the other jobs' outputs (plan's
+  among them) as they were;
 - the real windows/agentnotch-release binary from the workspace (built if missing) in
   `keys` and `sign-windows`, fed only the DESIGN-WIN Appendix B test seed;
 - the jobs that build (release-tool, mac, windows) simulated: they hand over the files
@@ -426,36 +431,48 @@ class Harness(object):
             repo_files["Scripts/tauri-update-public-key.txt"] = OTHER_PIN
         files = os.path.join(d, "gh-files")
         os.makedirs(files)
-        state = {"releases": [], "contents": {}, "refs": [], "tagObjects": {}, "faults": sc.get("faults", {})}
+        state = {"releases": [], "deleted": [], "contents": {}, "refs": [], "tagObjects": {},
+                 "faults": sc.get("faults", {})}
+
+        def add(release):
+            # Release ids, as GitHub's: the fake gh keeps each release's files under r<id>.
+            release["id"] = 101 + len(state["releases"])
+            os.makedirs(os.path.join(files, "r%d" % release["id"]))
+            state["releases"].append(release)
+            return release["id"]
+
         prev = sc.get("previous")
         if prev:
             ptag = "agentnotch-v" + prev.get("version", "1.0.1")
             assets = ["AgentNotch-%s.dmg" % prev.get("version", "1.0.1"), "AgentNotch-%s.zip" % prev.get("version", "1.0.1"),
                       "appcast.xml"]
-            os.makedirs(os.path.join(files, ptag))
             if prev.get("feed"):
                 assets += ["AgentNotch-%s-Setup.exe" % prev.get("version", "1.0.1"),
                            "AgentNotch-%s-Setup.exe.sig" % prev.get("version", "1.0.1"), "latest.json"]
-                shutil.copy(self.feeds[prev["feed"]], os.path.join(files, ptag, "latest.json"))
-            state["releases"].append({"tagName": ptag, "name": "Agent Notch " + prev.get("version", "1.0.1"),
-                                      "isDraft": False, "isPrerelease": False, "isLatest": True,
-                                      "assets": [{"name": a, "size": 1, "state": "uploaded"} for a in assets]})
+            pid = add({"tagName": ptag, "name": "Agent Notch " + prev.get("version", "1.0.1"),
+                       "isDraft": False, "isPrerelease": False, "isLatest": True,
+                       "assets": [{"name": a, "size": 1, "state": "uploaded"} for a in assets]})
+            if prev.get("feed"):
+                shutil.copy(self.feeds[prev["feed"]], os.path.join(files, "r%d" % pid, "latest.json"))
             released_key = {"same": mac_key, "other": OTHER_SPARKLE_KEY,
                             "test": self.keys["sparkle_public_key"]}[prev.get("macKey", "same")]
             state["contents"]["Scripts/sparkle-public-ed-key.txt@" + ptag] = PUBLIC_KEY_HEADER + (released_key or "") + "\n"
         # Upstream's tags and other names are in the list too; plan must ignore them.
-        state["releases"].append({"tagName": "v1.9.0", "name": "Codenotch 1.9.0", "isDraft": False,
-                                  "isPrerelease": False, "isLatest": False, "assets": []})
+        add({"tagName": "v1.9.0", "name": "Codenotch 1.9.0", "isDraft": False,
+             "isPrerelease": False, "isLatest": False, "assets": []})
+        # A draft of the next version, which no run of this one may touch.
+        add({"tagName": "agentnotch-v9.9.9", "name": "Agent Notch 9.9.9", "isDraft": True,
+             "isPrerelease": False, "isLatest": False, "assets": []})
         tag = "agentnotch-v" + version
-        draft = sc.get("draft")
-        if draft:
-            state["releases"].append({"tagName": tag, "name": "Agent Notch " + version if draft == "own" else "Something else",
-                                      "isDraft": True, "isPrerelease": False, "isLatest": False,
-                                      "assets": [{"name": "AgentNotch-%s.dmg" % version, "size": 3, "state": "uploaded"}]})
-            os.makedirs(os.path.join(files, tag))
+        drafts = sc.get("draft") or []
+        # "own": named as this workflow names its drafts; "foreign": named otherwise.
+        for draft in [drafts] if isinstance(drafts, str) else drafts:
+            add({"tagName": tag, "name": "Agent Notch " + version if draft == "own" else "Something else",
+                 "isDraft": True, "isPrerelease": False, "isLatest": False,
+                 "assets": [{"name": "AgentNotch-%s.dmg" % version, "size": 3, "state": "uploaded"}]})
         if sc.get("published"):
-            state["releases"].append({"tagName": tag, "name": "Agent Notch " + version, "isDraft": False,
-                                      "isPrerelease": False, "isLatest": True, "assets": []})
+            add({"tagName": tag, "name": "Agent Notch " + version, "isDraft": False,
+                 "isPrerelease": False, "isLatest": True, "assets": []})
             for r in state["releases"]:
                 if r["tagName"] != tag:
                     r["isLatest"] = False
@@ -472,11 +489,11 @@ class Harness(object):
         state_path = os.path.join(d, "gh-state.json")
         with open(state_path, "w") as f:
             json.dump(state, f, indent=1)
-        return repo_files, state_path, files
+        return repo_files, state_path, files, state
 
     def run(self, sc):
         d = tempfile.mkdtemp(prefix="sc-", dir=self.base)
-        repo_files, state_path, gh_files = self.setup(sc, d)
+        repo_files, state_path, gh_files, initial = self.setup(sc, d)
         version = sc.get("version", "1.1.0")
         event = sc.get("event", "push")
         inputs = {}
@@ -489,20 +506,43 @@ class Harness(object):
             "gh_log": os.path.join(d, "gh.log"), "curl_log": os.path.join(d, "curl.log"),
             "ctx": {
                 "github": {"event_name": event, "repository": REPO, "ref": sc.get("ref", "refs/heads/main"),
-                           "sha": SHA, "token": "fake-github-token", "server_url": "https://github.com",
-                           "workflow": "Release"},
+                           "sha": SHA, "server_url": "https://github.com", "workflow": "Release"},
                 "inputs": inputs,
                 "secrets": {"SPARKLE_ED_PRIVATE_KEY": TEST_SEED},
                 "vars": {},
             },
-            "jobs": {}, "version": version, "sc": sc,
+            "jobs": {}, "version": version, "sc": sc, "attempt": 1, "first": None, "initial": initial,
         }
         for name in ("gh_log", "curl_log"):
             open(run[name], "w").close()
         os.makedirs(run["artifacts"])
         for job_id in JOB_ORDER:
             run["jobs"][job_id] = self.job(run, job_id)
+        rerun = sc.get("rerun")
+        if rerun is not None:
+            self.rerun_failed_jobs(run, rerun)
         return run
+
+    def rerun_failed_jobs(self, run, rerun):
+        """GitHub's "Re-run failed jobs": the failed jobs and every job after them run again,
+        in the same run (its artifacts, and the outputs of the jobs that succeeded, plan's
+        among them, as the first attempt left them); GitHub's state is whatever the first
+        attempt left, with the scenario's faults for the second attempt."""
+        run["first"] = dict(run["jobs"])
+        again = set(j for j in JOB_ORDER if run["jobs"][j].result in ("failure", "cancelled"))
+        for job_id in JOB_ORDER:
+            if any(n in again for n in self.wf.job(job_id).needs):
+                again.add(job_id)
+        with open(run["state"]) as f:
+            state = json.load(f)
+        state["faults"] = rerun.get("faults", {})
+        with open(run["state"], "w") as f:
+            json.dump(state, f, indent=1)
+        run["attempt"] = 2
+        run["rerun_calls_from"] = len(_calls(run["gh_log"]))
+        run["rerun_jobs"] = [j for j in JOB_ORDER if j in again]
+        for job_id in run["rerun_jobs"]:
+            run["jobs"][job_id] = self.job(run, job_id)
 
     def job(self, run, job_id):
         job = self.wf.job(job_id)
@@ -512,6 +552,11 @@ class Harness(object):
             needs[n] = {"result": r.result, "outputs": r.outputs}
         ctx = dict(run["ctx"])
         ctx["needs"] = needs
+        # The job's GITHUB_TOKEN, named after what it may do with contents: the fake gh shows
+        # a read token no drafts and refuses its writes, as GitHub does.
+        perms = job.permissions if job.permissions is not None else (self.wf.permissions or {})
+        ctx["github"] = dict(ctx["github"], token="fake-github-token-%s" % (
+            "write" if (perms or {}).get("contents") == "write" else "read"))
         status = {"success": all(n["result"] == "success" for n in needs.values()),
                   "failure": any(n["result"] == "failure" for n in needs.values()),
                   "cancelled": False, "always": True}
@@ -612,7 +657,7 @@ class Harness(object):
 
     # The jobs whose shell steps run for real.
     def run_steps(self, run, job, ctx, result):
-        jd = os.path.join(run["dir"], job.id)
+        jd = os.path.join(run["dir"], job.id + ("" if run["attempt"] == 1 else "-attempt-%d" % run["attempt"]))
         workspace = os.path.join(jd, "workspace")
         temp = os.path.join(jd, "runner-temp")
         home = os.path.join(jd, "home")
@@ -751,9 +796,62 @@ def _calls(path):
         return [" ".join(json.loads(line)) for line in f if line.strip()]
 
 
+def _release_key(r):
+    return (r["id"], r["tagName"], r.get("name"), r["isDraft"], json.dumps(r.get("assets"), sort_keys=True))
+
+
+def invariants(run, state):
+    """What no run may ever do, whatever the scenario: delete a published release, turn one
+    back into a draft, or touch a release of another tag."""
+    problems = []
+    tag = "agentnotch-v" + run["version"]
+    for r in state.get("deleted", []):
+        if not r["isDraft"]:
+            problems.append("published release %s (id %s) deleted" % (r["tagName"], r["id"]))
+        if r["tagName"] != tag:
+            problems.append("release %s (id %s) of another tag deleted" % (r["tagName"], r["id"]))
+    now = dict((r["id"], r) for r in state["releases"])
+    for r in run["initial"]["releases"]:
+        if r["tagName"] != tag and (r["id"] not in now or _release_key(now[r["id"]]) != _release_key(r)):
+            problems.append("release %s (id %s) of another tag changed" % (r["tagName"], r["id"]))
+        if r["tagName"] == tag and not r["isDraft"] and (r["id"] not in now or now[r["id"]]["isDraft"]):
+            problems.append("published release %s (id %s) no longer published" % (r["tagName"], r["id"]))
+    return problems
+
+
+def _check_calls(calls, want_calls, where):
+    problems = []
+    for want in want_calls.get("called", []):
+        if not any(want in c for c in calls):
+            problems.append("%sgh never called with %r" % (where, want))
+    for unwanted in want_calls.get("notCalled", []):
+        hit = [c for c in calls if unwanted in c]
+        if hit:
+            problems.append("%sgh called with %r: %s" % (where, unwanted, hit[0][:160]))
+    order = want_calls.get("order")
+    if order:
+        idx = []
+        for want in order:
+            pos = [i for i, c in enumerate(calls) if want in c]
+            idx.append(pos[0] if pos else -1)
+        if -1 in idx or idx != sorted(idx):
+            problems.append("%sgh calls not in the order %s" % (where, order))
+    return problems
+
+
 def check(run, expect):
     problems = []
     jobs = run["jobs"]
+    first = expect.get("firstAttempt")
+    if first is not None:
+        if run["first"] is None:
+            problems.append("firstAttempt expected, but the scenario has no rerun")
+        else:
+            for job_id, want in (first.get("jobs") or {}).items():
+                if run["first"][job_id].result != want:
+                    problems.append("first attempt: job %s: %s, expected %s" % (job_id, run["first"][job_id].result, want))
+    if "rerunJobs" in expect and run.get("rerun_jobs") != expect["rerunJobs"]:
+        problems.append("jobs run again: %s, expected %s" % (run.get("rerun_jobs"), expect["rerunJobs"]))
     for job_id, want in (expect.get("jobs") or {}).items():
         if jobs[job_id].result != want:
             problems.append("job %s: %s, expected %s" % (job_id, jobs[job_id].result, want))
@@ -770,40 +868,45 @@ def check(run, expect):
     every = []
     for job_id in JOB_ORDER:
         every.extend((job_id, lvl, text) for lvl, text in jobs[job_id].annotations)
+    # After a re-run, the annotations looked for may be the first attempt's too; the ones
+    # that must not be there are the final attempt's.
+    seen = list(every)
+    if run["first"] is not None:
+        for job_id in run["rerun_jobs"]:
+            seen.extend((job_id, lvl, text) for lvl, text in run["first"][job_id].annotations)
     for a in expect.get("annotations") or []:
         if not any(lvl == a["level"] and a["contains"] in text and a.get("job", job_id) == job_id
-                   for job_id, lvl, text in every):
+                   for job_id, lvl, text in seen):
             problems.append("no %s%s containing %r" % (a["level"], " in " + a["job"] if "job" in a else "", a["contains"]))
     for level in expect.get("noAnnotations") or []:
         found = [text for _, lvl, text in every if lvl == level]
         if found:
             problems.append("unexpected %s: %s" % (level, found[0][:160]))
     calls = _calls(run["gh_log"])
-    for want in (expect.get("gh") or {}).get("called", []):
-        if not any(want in c for c in calls):
-            problems.append("gh never called with %r" % want)
-    for unwanted in (expect.get("gh") or {}).get("notCalled", []):
-        hit = [c for c in calls if unwanted in c]
-        if hit:
-            problems.append("gh called with %r: %s" % (unwanted, hit[0][:160]))
-    order = (expect.get("gh") or {}).get("order")
-    if order:
-        idx = []
-        for want in order:
-            pos = [i for i, c in enumerate(calls) if want in c]
-            idx.append(pos[0] if pos else -1)
-        if -1 in idx or idx != sorted(idx):
-            problems.append("gh calls not in the order %s" % order)
+    problems.extend(_check_calls(calls, expect.get("gh") or {}, ""))
+    if "rerunGh" in expect:
+        problems.extend(_check_calls(calls[run.get("rerun_calls_from", len(calls)):], expect["rerunGh"], "in the re-run: "))
     curl = _calls(run["curl_log"])
     if "curl" in expect and len(curl) != expect["curl"]:
         problems.append("curl called %d times, expected %d" % (len(curl), expect["curl"]))
     with open(run["state"]) as f:
         state = json.load(f)
+    problems.extend(invariants(run, state))
+    for tag, want in (expect.get("releasesFor") or {}).items():
+        found = [(r["id"], r.get("name"), "draft" if r["isDraft"] else "published")
+                 for r in state["releases"] if r["tagName"] == tag]
+        if len(found) != want:
+            problems.append("%d release(s) for %s, expected %d: %s" % (len(found), tag, want, found))
+    for rid in expect.get("deletedIds") or []:
+        if not any(r["id"] == rid for r in state.get("deleted", [])):
+            problems.append("release id %s not deleted" % rid)
+    if "deletedCount" in expect and len(state.get("deleted", [])) != expect["deletedCount"]:
+        problems.append("%d release(s) deleted, expected %d" % (len(state.get("deleted", [])), expect["deletedCount"]))
     rel = expect.get("release")
     if rel:
         found = [r for r in state["releases"] if r["tagName"] == rel["tag"]]
-        if not found:
-            problems.append("no release %s" % rel["tag"])
+        if len(found) != 1:
+            problems.append("%d releases %s, expected exactly one" % (len(found), rel["tag"]))
         else:
             r = found[0]
             for k in ("isDraft", "isLatest", "notesStartTag", "name", "targetCommitish", "generateNotes"):
@@ -839,14 +942,21 @@ def check(run, expect):
 
 def describe(run):
     lines = []
-    for job_id in JOB_ORDER:
-        j = run["jobs"][job_id]
-        lines.append("    %s: %s%s" % (job_id, j.result, (" (" + j.note + ")") if j.note else ""))
-        for s in j.steps:
-            lines.append("      - %s: %s" % (s.label, s.result))
-            if s.output.strip():
-                for out in s.output.rstrip().split("\n")[-25:]:
-                    lines.append("          | " + out)
+    attempts = [("", run["jobs"])] if run["first"] is None else \
+        [("  first attempt:", run["first"]), ("  re-run of the failed jobs:", dict((j, run["jobs"][j]) for j in run["rerun_jobs"]))]
+    for title, jobs in attempts:
+        if title:
+            lines.append("  " + title)
+        for job_id in JOB_ORDER:
+            if job_id not in jobs:
+                continue
+            j = jobs[job_id]
+            lines.append("    %s: %s%s" % (job_id, j.result, (" (" + j.note + ")") if j.note else ""))
+            for s in j.steps:
+                lines.append("      - %s: %s" % (s.label, s.result))
+                if s.output.strip():
+                    for out in s.output.rstrip().split("\n")[-25:]:
+                        lines.append("          | " + out)
     lines.append("    gh calls:")
     lines.extend("      " + c for c in _calls(run["gh_log"]))
     lines.append("    curl calls:")
@@ -900,6 +1010,11 @@ def structure(wf):
         "publish: contents: write, no environment")
     add(not any(s.uses and s.uses.startswith("actions/checkout") for s in publish.steps),
         "publish checks nothing out (it runs none of the repository's code)")
+    # gh release view/edit/delete <tag> pick one of several drafts that share the tag; publish
+    # addresses the release it made, and the leftovers it deletes, by id.
+    by_tag = [s.label for s in publish.steps if s.run and re.search(r"\bgh release (view|edit|delete)\b", s.run)]
+    add(not by_tag, "publish addresses releases by id, never gh release view/edit/delete <tag>%s" % (
+        (" (" + ", ".join(by_tag) + ")") if by_tag else ""))
 
     tool = wf.jobs["release-tool"]
     add(tool.environment is None and "secrets." not in _dump(tool.data) and tool.permissions == {"contents": "read"},
@@ -968,7 +1083,7 @@ def structure(wf):
     plan = wf.jobs["plan"]
     add(plan.environment is None and plan.permissions == {"contents": "read"} and "secrets." not in _dump(plan.data),
         "plan: no environment, no secret")
-    add(set(plan.outputs) == {"version", "tag", "skip", "stale_draft", "previous_tag", "previous_has_feed", "windows"},
+    add(set(plan.outputs) == {"version", "tag", "skip", "previous_tag", "previous_has_feed", "windows"},
         "plan outputs: " + ", ".join(sorted(plan.outputs)))
 
     site = wf.jobs["website"]

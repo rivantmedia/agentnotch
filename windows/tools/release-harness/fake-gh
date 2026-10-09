@@ -5,16 +5,26 @@
 # else, so a step that starts calling something new fails the harness instead of reaching
 # GitHub. Every call is recorded first, refused ones too.
 #
+# It sees what the job's token may see, as GitHub does. run.py hands each job a token named
+# after its `contents` permission: with fake-github-token-read, draft releases do not exist
+# (GitHub lists and serves a draft only to a token that can push) and every write is a 403;
+# with fake-github-token-write, drafts are visible and writes go through. Like GitHub, it lets
+# several drafts carry one tag (a draft has no tag yet), refuses a release for a tag a
+# published release has, and lists releases a page at a time (two to a page here, so a list
+# that forgets --paginate misses some).
+#
 # Environment (run.py sets all of it):
 #   FAKE_GH_STATE  JSON state, changed in place by create/edit/delete:
-#                  {"releases": [{"tagName", "name", "isDraft", "isPrerelease", "isLatest",
+#                  {"releases": [{"id", "tagName", "name", "isDraft", "isPrerelease", "isLatest",
 #                                 "assets": [{"name", "size", "state"}]}],
+#                   "deleted": [<every release deleted, as it was>],
 #                   "contents": {"<path>@<ref>": "<file text>"},
 #                   "refs": [{"ref": "refs/tags/<tag>", "object": {"type", "sha"}}],
 #                   "tagObjects": {"<sha>": {"object": {"sha"}}},
 #                   "faults": {"failCalls": ["<start of the joined argv>"],
+#                              "failCallsAfter": ["<same, but done first, then failed>"],
 #                              "uploadShort": "<asset>", "uploadExtra": "<asset>"}}
-#   FAKE_GH_FILES  folder of asset bytes: <tag>/<name> (read by download, written by create)
+#   FAKE_GH_FILES  folder of asset bytes: r<release id>/<name> (read by download, written by create)
 #   FAKE_GH_LOG    one JSON array of argv per call
 #   GH_REPO, GH_TOKEN  as the workflow sets them; the repository must be GH_REPO's
 set -euo pipefail
@@ -30,8 +40,18 @@ refuse() {
   exit 64
 }
 
-[[ -n "${GH_TOKEN:-}" ]] || { echo "fake gh: GH_TOKEN is not set (gh would ask to log in)" >&2; exit 4; }
+case "${GH_TOKEN:-}" in
+  fake-github-token-read) writer=false ;;
+  fake-github-token-write) writer=true ;;
+  "") echo "fake gh: GH_TOKEN is not set (gh would ask to log in)" >&2; exit 4 ;;
+  *) echo "fake gh: GH_TOKEN is not a token run.py handed out" >&2; exit 4 ;;
+esac
 [[ -n "${GH_REPO:-}" ]] || { echo "fake gh: GH_REPO is not set" >&2; exit 4; }
+
+forbidden() {
+  echo "HTTP 403: Resource not accessible by integration (https://api.github.com/$1)" >&2
+  exit 1
+}
 
 joined="$*"
 while IFS= read -r prefix; do
@@ -40,14 +60,21 @@ while IFS= read -r prefix; do
     exit 1
   fi
 done < <(jq -r '.faults.failCalls // [] | .[]' "$state")
+# The call reaches GitHub and is done, but its answer is lost: gh fails anyway.
+fail_after=""
+while IFS= read -r prefix; do
+  if [[ -n "$prefix" && "$joined" == "$prefix"* ]]; then fail_after="$prefix"; fi
+done < <(jq -r '.faults.failCallsAfter // [] | .[]' "$state")
+if [[ -n "$fail_after" ]]; then exec > /dev/null; fi
 
 json_fields="" jq_filter="" pattern="" dir="" target="" title="" notes_file="" start_tag="" limit=30
-accept="" draft="" latest=false clobber=false yes=false generate=false
+accept="" draft="" latest=false clobber=false yes=false generate=false paginate=false method=GET
 exclude_drafts=false exclude_pre=false
+fields=()
 positional=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --json | --jq | -H | --pattern | --dir | --target | --title | --notes-file | --notes-start-tag | --limit)
+    --json | --jq | -H | --pattern | --dir | --target | --title | --notes-file | --notes-start-tag | --limit | -X | -F | -f)
       [[ $# -ge 2 ]] || refuse "$joined"
       case "$1" in
         --json) json_fields="$2" ;;
@@ -60,6 +87,8 @@ while [[ $# -gt 0 ]]; do
         --notes-file) notes_file="$2" ;;
         --notes-start-tag) start_tag="$2" ;;
         --limit) limit="$2" ;;
+        -X) method="$2" ;;
+        -F | -f) fields+=("$1 $2") ;;
       esac
       shift 2 ;;
     --draft) draft=true; shift ;;
@@ -70,6 +99,7 @@ while [[ $# -gt 0 ]]; do
     --generate-notes) generate=true; shift ;;
     --exclude-drafts) exclude_drafts=true; shift ;;
     --exclude-pre-releases) exclude_pre=true; shift ;;
+    --paginate) paginate=true; shift ;;
     -*) refuse "$joined" ;;
     *) positional+=("$1"); shift ;;
   esac
@@ -91,12 +121,30 @@ save() {
   mv "$tmp" "$state"
 }
 
+# The releases this token may see.
+visible() {
+  jq -c --argjson w "$writer" '[.releases[] | select($w or (.isDraft | not))]' "$state"
+}
+
+# The release `gh release view|edit|delete|download <tag>` acts on: the published one (GitHub's
+# releases/tags/<tag>), else, for a token that sees drafts, a draft with that tag (gh looks
+# through the drafts; with several, one of them: the oldest here).
 release_json() {
-  jq -c --arg t "$1" '[.releases[] | select(.tagName == $t)] | first // empty' "$state"
+  visible | jq -c --arg t "$1" '([.[] | select(.tagName == $t and (.isDraft | not))] + [.[] | select(.tagName == $t)]) | first // empty'
 }
 
 fields_of() {
   jq -c --arg f "$json_fields" '. as $r | reduce ($f | split(","))[] as $k ({}; . + {($k): $r[$k]})'
+}
+
+# A release as the REST API returns it.
+rest='{id, tag_name: .tagName, name, draft: .isDraft, prerelease: .isPrerelease,
+       target_commitish: .targetCommitish, assets: [.assets[] | {name, size, state}]}'
+
+delete_release() {
+  save --argjson id "$1" '.deleted = ((.deleted // []) + [.releases[] | select(.id == $id)])
+                          | .releases |= map(select(.id != $id))'
+  rm -rf "${files:?}/r$1"
 }
 
 case "${positional[0]} ${positional[1]:-}" in
@@ -109,8 +157,8 @@ case "${positional[0]} ${positional[1]:-}" in
 
   "release list")
     [[ ${#positional[@]} -eq 2 && -n "$json_fields" ]] || refuse "$joined"
-    listed="$(jq -c --argjson d "$exclude_drafts" --argjson p "$exclude_pre" --argjson n "$limit" \
-      '[.releases[] | select(($d | not) or (.isDraft | not)) | select(($p | not) or (.isPrerelease | not))] | .[:$n]' "$state")"
+    listed="$(visible | jq -c --argjson d "$exclude_drafts" --argjson p "$exclude_pre" --argjson n "$limit" \
+      '[.[] | select(($d | not) or (.isDraft | not)) | select(($p | not) or (.isPrerelease | not))] | .[:$n]')"
     emit "$(jq -c --arg f "$json_fields" 'map(. as $r | reduce ($f | split(","))[] as $k ({}; . + {($k): $r[$k]}))' <<< "$listed")"
     ;;
 
@@ -119,14 +167,15 @@ case "${positional[0]} ${positional[1]:-}" in
     tag="${positional[2]}"
     release="$(release_json "$tag")"
     if [[ -z "$release" ]]; then echo "release not found" >&2; exit 1; fi
+    id="$(jq -r .id <<< "$release")"
     mkdir -p "$dir"
     found=0
     while IFS= read -r name; do
       # shellcheck disable=SC2053 # the pattern is a glob, as gh's --pattern is
       if [[ "$name" == $pattern ]]; then
-        if [[ ! -f "$files/$tag/$name" ]]; then echo "fake gh: no bytes for $tag/$name" >&2; exit 1; fi
+        if [[ ! -f "$files/r$id/$name" ]]; then echo "fake gh: no bytes for $tag/$name" >&2; exit 1; fi
         if [[ -e "$dir/$name" && $clobber != true ]]; then echo "$dir/$name already exists" >&2; exit 1; fi
-        cp "$files/$tag/$name" "$dir/$name"
+        cp "$files/r$id/$name" "$dir/$name"
         found=$((found + 1))
       fi
     done < <(jq -r '.assets[].name' <<< "$release")
@@ -135,50 +184,60 @@ case "${positional[0]} ${positional[1]:-}" in
 
   "release delete")
     [[ ${#positional[@]} -eq 3 && $yes == true ]] || refuse "$joined"
-    if [[ -z "$(release_json "${positional[2]}")" ]]; then echo "release not found" >&2; exit 1; fi
-    save --arg t "${positional[2]}" '.releases |= map(select(.tagName != $t))'
-    rm -rf "${files:?}/${positional[2]}"
+    release="$(release_json "${positional[2]}")"
+    if [[ -z "$release" ]]; then echo "release not found" >&2; exit 1; fi
+    $writer || forbidden "repos/$GH_REPO/releases/$(jq -r .id <<< "$release")"
+    delete_release "$(jq -r .id <<< "$release")"
     ;;
 
   "release create")
     [[ ${#positional[@]} -ge 3 && -n "$title" && -n "$notes_file" ]] || refuse "$joined"
+    $writer || forbidden "repos/$GH_REPO/releases"
     tag="${positional[2]}"
-    if [[ -n "$(release_json "$tag")" ]]; then
-      echo "a release with the same tag name already exists: $tag" >&2
+    # Drafts may share a tag; a published release owns it.
+    if jq -e --arg t "$tag" '.releases | any(.tagName == $t and (.isDraft | not))' "$state" > /dev/null; then
+      echo "HTTP 422: Validation Failed: tag_name already_exists ($tag)" >&2
       exit 1
     fi
     [[ -f "$notes_file" ]] || { echo "open $notes_file: no such file or directory" >&2; exit 1; }
     short="$(jq -r '.faults.uploadShort // ""' "$state")"
     extra="$(jq -r '.faults.uploadExtra // ""' "$state")"
-    mkdir -p "$files/$tag"
+    id="$(jq '[.releases[].id, (.deleted // [])[].id, 1000] | max + 1' "$state")"
+    mkdir -p "$files/r$id"
     assets="[]"
     for file in "${positional[@]:3}"; do
       [[ -f "$file" ]] || { echo "open $file: no such file or directory" >&2; exit 1; }
       name="${file##*/}"
       size="$(wc -c < "$file" | tr -d '[:space:]')"
       [[ "$name" == "$short" ]] && size=$((size - 1))
-      cp "$file" "$files/$tag/$name"
+      cp "$file" "$files/r$id/$name"
       assets="$(jq -c --arg n "$name" --argjson s "$size" '. + [{name: $n, size: $s, state: "uploaded"}]' <<< "$assets")"
     done
     if [[ -n "$extra" ]]; then
-      printf 'x' > "$files/$tag/$extra"
+      printf 'x' > "$files/r$id/$extra"
       assets="$(jq -c --arg n "$extra" '. + [{name: $n, size: 1, state: "uploaded"}]' <<< "$assets")"
     fi
-    save --arg t "$tag" --arg title "$title" --arg target "$target" --arg start "$start_tag" \
+    save --argjson id "$id" --arg t "$tag" --arg title "$title" --arg target "$target" --arg start "$start_tag" \
       --argjson draft "${draft:-false}" --argjson generate "$generate" --argjson assets "$assets" \
       --rawfile notes "$notes_file" \
-      '.releases += [{tagName: $t, name: $title, isDraft: $draft, isPrerelease: false, isLatest: false,
+      '.releases += [{id: $id, tagName: $t, name: $title, isDraft: $draft, isPrerelease: false, isLatest: false,
                       targetCommitish: $target, notesStartTag: $start, generateNotes: $generate,
                       notes: $notes, assets: $assets}]'
-    echo "https://github.com/$GH_REPO/releases/tag/$tag"
+    if [[ "${draft:-false}" == true ]]; then
+      echo "https://github.com/$GH_REPO/releases/tag/untagged-$id"
+    else
+      echo "https://github.com/$GH_REPO/releases/tag/$tag"
+    fi
     ;;
 
   "release edit")
     [[ ${#positional[@]} -eq 3 && -n "$draft" ]] || refuse "$joined"
-    tag="${positional[2]}"
-    if [[ -z "$(release_json "$tag")" ]]; then echo "release not found" >&2; exit 1; fi
-    save --arg t "$tag" --argjson draft "$draft" --argjson latest "$latest" \
-      '.releases |= map(if .tagName == $t then .isDraft = $draft | (if $latest then .isLatest = true else . end)
+    release="$(release_json "${positional[2]}")"
+    if [[ -z "$release" ]]; then echo "release not found" >&2; exit 1; fi
+    id="$(jq -r .id <<< "$release")"
+    $writer || forbidden "repos/$GH_REPO/releases/$id"
+    save --argjson id "$id" --argjson draft "$draft" --argjson latest "$latest" \
+      '.releases |= map(if .id == $id then .isDraft = $draft | (if $latest then .isLatest = true else . end)
                         elif $latest then .isLatest = false else . end)'
     ;;
 
@@ -187,11 +246,11 @@ case "${positional[0]} ${positional[1]:-}" in
     path="${positional[1]}"
     prefix="repos/$GH_REPO/"
     [[ "$path" == "$prefix"* ]] || refuse "$joined"
-    rest="${path#"$prefix"}"
-    case "$rest" in
-      contents/*\?ref=*)
-        [[ "$accept" == "Accept: application/vnd.github.raw+json" && -z "$jq_filter" ]] || refuse "$joined"
-        file="${rest#contents/}"
+    rest_path="${path#"$prefix"}"
+    case "$method $rest_path" in
+      "GET contents/"*\?ref=*)
+        [[ "$accept" == "Accept: application/vnd.github.raw+json" && -z "$jq_filter" && ${#fields[@]} -eq 0 ]] || refuse "$joined"
+        file="${rest_path#contents/}"
         key="${file%%\?ref=*}@${file#*\?ref=}"
         if ! jq -e --arg k "$key" '.contents | has($k)' "$state" > /dev/null; then
           echo "gh: Not Found (HTTP 404)" >&2
@@ -199,15 +258,51 @@ case "${positional[0]} ${positional[1]:-}" in
         fi
         jq -j --arg k "$key" '.contents[$k]' "$state"
         ;;
-      git/matching-refs/tags/*)
-        [[ -z "$accept" ]] || refuse "$joined"
-        emit "$(jq -c --arg r "refs/tags/${rest#git/matching-refs/tags/}" '[.refs // [] | .[] | select(.ref | startswith($r))]' "$state")"
+      "GET git/matching-refs/tags/"*)
+        [[ -z "$accept" && ${#fields[@]} -eq 0 ]] || refuse "$joined"
+        emit "$(jq -c --arg r "refs/tags/${rest_path#git/matching-refs/tags/}" '[.refs // [] | .[] | select(.ref | startswith($r))]' "$state")"
         ;;
-      git/tags/*)
-        [[ -z "$accept" ]] || refuse "$joined"
-        object="$(jq -c --arg s "${rest#git/tags/}" '.tagObjects[$s] // empty' "$state")"
+      "GET git/tags/"*)
+        [[ -z "$accept" && ${#fields[@]} -eq 0 ]] || refuse "$joined"
+        object="$(jq -c --arg s "${rest_path#git/tags/}" '.tagObjects[$s] // empty' "$state")"
         if [[ -z "$object" ]]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
         emit "$object"
+        ;;
+      "GET releases?per_page=100")
+        [[ -z "$accept" && ${#fields[@]} -eq 0 ]] || refuse "$joined"
+        # Newest first, as GitHub lists them, a page at a time; --paginate prints every page
+        # (and gh applies --jq to each), without it only the first.
+        pages="$(visible | jq -c "[reverse[] | $rest] | [range(0; length; 2) as \$i | .[\$i:\$i + 2]]
+                                  | if length == 0 then [[]] else . end | .[]")"
+        $paginate || pages="$(head -1 <<< "$pages")"
+        while IFS= read -r page; do emit "$page"; done <<< "$pages"
+        ;;
+      "GET releases/"* | "PATCH releases/"* | "DELETE releases/"*)
+        [[ -z "$accept" ]] || refuse "$joined"
+        id="${rest_path#releases/}"
+        [[ "$id" =~ ^[0-9]+$ ]] || refuse "$joined"
+        release="$(visible | jq -c --argjson id "$id" '.[] | select(.id == $id)')"
+        if [[ -z "$release" ]]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
+        case "$method" in
+          GET)
+            [[ ${#fields[@]} -eq 0 ]] || refuse "$joined"
+            emit "$(jq -c "$rest" <<< "$release")"
+            ;;
+          PATCH)
+            # Publishing a draft: exactly draft=false (typed) and make_latest=true.
+            [[ "${fields[*]}" == "-F draft=false -f make_latest=true" ]] || refuse "$joined"
+            $writer || forbidden "$path"
+            save --argjson id "$id" \
+              '.releases |= map(if .id == $id then .isDraft = false | .isLatest = true else .isLatest = false end)'
+            emit "$(jq -c --argjson id "$id" ".releases[] | select(.id == \$id) | $rest" "$state")"
+            ;;
+          DELETE)
+            [[ ${#fields[@]} -eq 0 && -z "$jq_filter" ]] || refuse "$joined"
+            $writer || forbidden "$path"
+            delete_release "$id"
+            ;;
+          *) refuse "$joined" ;;
+        esac
         ;;
       *) refuse "$joined" ;;
     esac
@@ -215,3 +310,7 @@ case "${positional[0]} ${positional[1]:-}" in
 
   *) refuse "$joined" ;;
 esac
+if [[ -n "$fail_after" ]]; then
+  echo "fake gh: HTTP 502: scripted failure for 'gh $fail_after', after GitHub did it" >&2
+  exit 1
+fi

@@ -25,11 +25,11 @@ if [[ "$url" != "$prefix"* ]]; then
   exit 6
 fi
 name="${url#"$prefix"}"
-tag="$(jq -r '[.releases[] | select(.isLatest == true and .isDraft == false)] | first | .tagName // empty' "$state")"
-if [[ -z "$tag" ]] || ! jq -e --arg t "$tag" --arg n "$name" \
-    '.releases[] | select(.tagName == $t) | .assets | any(.name == $n)' "$state" > /dev/null \
-    || [[ ! -f "$files/$tag/$name" ]]; then
+id="$(jq -r '[.releases[] | select(.isLatest == true and .isDraft == false)] | first | .id // empty' "$state")"
+if [[ -z "$id" ]] || ! jq -e --argjson id "$id" --arg n "$name" \
+    '.releases[] | select(.id == $id) | .assets | any(.name == $n)' "$state" > /dev/null \
+    || [[ ! -f "$files/r$id/$name" ]]; then
   echo "curl: (22) The requested URL returned error: 404" >&2
   exit 22
 fi
-cat "$files/$tag/$name"
+cat "$files/r$id/$name"

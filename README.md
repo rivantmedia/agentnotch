@@ -825,7 +825,10 @@ Releases are published to this repository's
   (installed copies would never take it), a draft it didn't make, a tag for that version at
   another commit, or an update key other than the one the latest release was built with
   (see below). A version that is released already gives a green run with nothing to do; a
-  draft an interrupted run left is replaced.
+  draft an interrupted run left (titled "Agent Notch <VERSION>") is deleted and made again,
+  also when you re-run the failed jobs. Drafts are checked by the publishing job, the only one
+  whose token can see them, just before it makes its own; a foreign one stops it there,
+  after the build, and nothing is deleted.
 - **Only from `main`.** Every run, a dry run too, fails on any other branch before it builds
   anything: the job holds the update key, and only `main`'s code may run with it.
 - **Dry run.** Actions › Release › Run workflow on `main`, with *Dry run* ticked, makes the

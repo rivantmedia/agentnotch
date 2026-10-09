@@ -424,21 +424,31 @@ Packages/ClaudeControl/Scripts/embed-scripts.sh [--check]
     cache with an OIDC token and never fails the run. The `release` environment's only
     deployment branch is main, and it holds every secret.
   - The plan step first fails any ref other than main, dry runs included. Then an already
-    published version is a green skip (a key-only push on a released version lands here), and
-    its own leftover draft is replaced. A foreign draft, the tag at another commit, a `VERSION`
-    below the latest `agentnotch-v*` release (`sort -V`), or a committed update key other than
-    the one at the latest release's tag (read through the contents API; unreadable is an error
-    too) is an error, the key one unless `rotate_update_key` is set. In a dry run each of these
-    is only a warning.
+    published version is a green skip (a key-only push on a released version lands here). The
+    tag at another commit, a `VERSION` below the latest `agentnotch-v*` release (`sort -V`), or
+    a committed update key other than the one at the latest release's tag (read through the
+    contents API; unreadable is an error too) is an error, the key one unless
+    `rotate_update_key` is set. In a dry run each of these is only a warning.
+  - Drafts are `publish`'s, not `plan`'s: GitHub lists a draft only to a token that can push,
+    and plan's is read-only. Right before it creates its draft, publish's "Clear the way for the
+    release" lists the releases (`gh api --paginate …/releases`) and, for the tag only: a
+    published one is a green stop (`released=true`, nothing touched); drafts titled
+    `Agent Notch <V>` are leftovers of an interrupted run, deleted by id, all of them (drafts
+    can share a tag); any other draft is foreign: an error naming it, nothing deleted. This also
+    holds on "Re-run failed jobs", which reruns publish with plan's old outputs. A dry run only
+    warns. The new draft is then addressed by id (its assets, sizes and the publishing
+    `PATCH … draft=false make_latest=true`), never `gh release view/edit <tag>`, which picks one
+    of several drafts.
   - With no `SPARKLE_ED_PRIVATE_KEY` or no committed public key, it fails with setup steps in
     the run summary (the environment commands; a missing key file means pushing it to main,
     since a re-run checks out the same commit; a missing secret alone means re-running).
   - Otherwise `publish` creates a draft with the six assets (three with `skip_windows`). The
     notes carry the Mac install steps (Gatekeeper/`xattr` only when not notarized), the
     updates line, the "Windows (preview)" steps (SmartScreen and Smart App Control only while
-    `AUTHENTICODE=unsigned`) and `--generate-notes` from the previous tag. It checks that the
-    draft holds exactly those files, each at its built size, then publishes with
-    `--draft=false --latest`, then gives a warning-only check that both live feeds serve V.
+    `AUTHENTICODE=unsigned`; "new in this release" only while the previous release has no
+    `latest.json`) and `--generate-notes` from the previous tag. It checks that the draft holds
+    exactly those files, each at its built size, then publishes it as the latest, then gives a
+    warning-only check that both live feeds serve V.
   - A dry run uploads the artifact `AgentNotch-<V>-dry-run` (the six files) and publishes
     nothing. Its Windows installer is a release build: it carries the real update key and the
     feed.

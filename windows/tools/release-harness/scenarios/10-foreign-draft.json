@@ -1,29 +1,49 @@
 {
-  "name": "a draft this workflow did not make: plan stops",
+  "name": "a draft this workflow did not make, beside one it did: publish stops before making its own and deletes nothing",
   "previous": {
     "version": "1.0.1"
   },
-  "draft": "foreign",
+  "draft": [
+    "own",
+    "foreign"
+  ],
   "expect": {
     "jobs": {
-      "plan": "failure",
-      "mac": "skipped",
-      "keys": "skipped",
-      "publish": "skipped"
+      "plan": "success",
+      "mac": "success",
+      "keys": "success",
+      "sign-windows": "success",
+      "publish": "failure"
+    },
+    "steps": {
+      "publish": {
+        "Clear the way for the release": "failure",
+        "Publish the release": "skipped",
+        "Check the feeds installs read": "skipped"
+      }
     },
     "annotations": [
       {
         "level": "error",
-        "job": "plan",
-        "contains": "did not make"
+        "job": "publish",
+        "contains": "agentnotch-v1.1.0 has a draft release this workflow did not make: \"Something else\" (id 105)"
       }
     ],
     "gh": {
+      "called": [
+        "api --paginate repos/rivantmedia/agentnotch/releases?per_page=100"
+      ],
       "notCalled": [
         "release create",
-        "release delete"
+        "release delete",
+        "api -X DELETE",
+        "api -X PATCH"
       ]
     },
+    "releasesFor": {
+      "agentnotch-v1.1.0": 2
+    },
+    "deletedCount": 0,
     "website": false
   }
 }

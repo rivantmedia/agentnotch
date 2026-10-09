@@ -1,5 +1,5 @@
 {
-  "name": "dry run with problems: only warnings, the six files kept as an artifact, nothing published",
+  "name": "dry run with problems: only warnings (the drafts' from publish, whose token sees them), the six files kept as an artifact, nothing published",
   "event": "workflow_dispatch",
   "inputs": {
     "dry_run": true
@@ -9,7 +9,10 @@
     "feed": "other-key",
     "macKey": "other"
   },
-  "draft": "foreign",
+  "draft": [
+    "own",
+    "foreign"
+  ],
   "expect": {
     "jobs": {
       "plan": "success",
@@ -26,8 +29,8 @@
     "annotations": [
       {
         "level": "warning",
-        "job": "plan",
-        "contains": "A draft release for agentnotch-v1.1.0 exists that this workflow did not make"
+        "job": "publish",
+        "contains": "agentnotch-v1.1.0 has a draft release this workflow did not make: \"Something else\" (id 105)"
       },
       {
         "level": "warning",
@@ -38,20 +41,31 @@
         "level": "warning",
         "job": "keys",
         "contains": "(a real run would stop here)"
+      },
+      {
+        "level": "notice",
+        "job": "publish",
+        "contains": "A real run would delete the draft of agentnotch-v1.1.0"
       }
     ],
     "steps": {
       "publish": {
         "Keep the files (dry run)": "success",
         "Publish the release": "skipped",
-        "Check the feeds installs read": "skipped"
+        "Check the feeds installs read": "skipped",
+        "Clear the way for the release": "success"
       }
     },
     "gh": {
       "notCalled": [
         "release create",
         "release delete",
-        "release edit"
+        "release edit",
+        "api -X DELETE",
+        "api -X PATCH"
+      ],
+      "called": [
+        "api --paginate repos/rivantmedia/agentnotch/releases?per_page=100"
       ]
     },
     "artifacts": {
@@ -65,6 +79,10 @@
       ]
     },
     "curl": 0,
-    "website": false
+    "website": false,
+    "releasesFor": {
+      "agentnotch-v1.1.0": 2
+    },
+    "deletedCount": 0
   }
 }

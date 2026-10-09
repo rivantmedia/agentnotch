@@ -1,10 +1,13 @@
 {
-  "name": "a fresh run finds the draft an interrupted run left: plan cannot see it; publish deletes it by id, makes its own, publishes it",
+  "name": "two drafts left by interrupted runs: publish deletes both by id, then makes and publishes the one release",
   "previous": {
     "version": "1.0.1",
     "feed": "test-key"
   },
-  "draft": "own",
+  "draft": [
+    "own",
+    "own"
+  ],
   "expect": {
     "jobs": {
       "plan": "success",
@@ -19,7 +22,12 @@
       {
         "level": "notice",
         "job": "publish",
-        "contains": "Deleted the draft of agentnotch-v1.1.0 an interrupted run left behind (id 104)"
+        "contains": "(id 104)"
+      },
+      {
+        "level": "notice",
+        "job": "publish",
+        "contains": "(id 105)"
       }
     ],
     "noAnnotations": [
@@ -28,15 +36,24 @@
     ],
     "gh": {
       "order": [
-        "api --paginate repos/rivantmedia/agentnotch/releases?per_page=100",
+        "api -X DELETE repos/rivantmedia/agentnotch/releases/105",
         "api -X DELETE repos/rivantmedia/agentnotch/releases/104",
         "release create agentnotch-v1.1.0",
         "api -X PATCH repos/rivantmedia/agentnotch/releases/1001 "
       ],
       "notCalled": [
         "release delete",
-        "release edit"
+        "release edit",
+        "release view agentnotch-v1.1.0 --json assets"
       ]
+    },
+    "deletedIds": [
+      104,
+      105
+    ],
+    "deletedCount": 2,
+    "releasesFor": {
+      "agentnotch-v1.1.0": 1
     },
     "release": {
       "tag": "agentnotch-v1.1.0",
@@ -50,17 +67,8 @@
         "AgentNotch-1.1.0-Setup.exe.sig",
         "latest.json"
       ],
-      "name": "Agent Notch 1.1.0",
-      "targetCommitish": "c0ffeec0ffeec0ffeec0ffeec0ffeec0ffeeabcd",
-      "generateNotes": true
+      "name": "Agent Notch 1.1.0"
     },
-    "website": true,
-    "deletedIds": [
-      104
-    ],
-    "deletedCount": 1,
-    "releasesFor": {
-      "agentnotch-v1.1.0": 1
-    }
+    "website": true
   }
 }

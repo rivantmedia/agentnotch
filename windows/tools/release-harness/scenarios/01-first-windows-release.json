@@ -31,12 +31,14 @@
     ],
     "gh": {
       "notCalled": [
-        "release download"
+        "release download",
+        "api -X DELETE"
       ],
       "order": [
+        "api --paginate repos/rivantmedia/agentnotch/releases?per_page=100",
         "release create agentnotch-v1.1.0",
-        "release view agentnotch-v1.1.0 --json assets",
-        "release edit agentnotch-v1.1.0 --draft=false --latest"
+        "api repos/rivantmedia/agentnotch/releases/1001 --jq .assets[].name",
+        "api -X PATCH repos/rivantmedia/agentnotch/releases/1001 -F draft=false -f make_latest=true"
       ]
     },
     "release": {
@@ -60,7 +62,8 @@
         "## Windows (preview)",
         "AgentNotch-1.1.0-Setup.exe",
         "isn't code-signed yet",
-        "## Updates (Windows)"
+        "## Updates (Windows)",
+        "The Windows app is new in this release and still a preview"
       ]
     },
     "artifacts": {
@@ -73,6 +76,10 @@
       "AgentNotch-1.1.0-dry-run": null
     },
     "curl": 2,
-    "website": true
+    "website": true,
+    "releasesFor": {
+      "agentnotch-v1.1.0": 1
+    },
+    "deletedCount": 0
   }
 }

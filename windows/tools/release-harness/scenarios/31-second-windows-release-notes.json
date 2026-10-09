@@ -1,0 +1,42 @@
+{
+  "name": "the second release with Windows (the previous one has latest.json): the notes call it a preview, not new",
+  "version": "1.1.1",
+  "previous": {
+    "version": "1.1.0",
+    "feed": "test-key"
+  },
+  "expect": {
+    "jobs": {
+      "plan": "success",
+      "release-tool": "success",
+      "keys": "success",
+      "mac": "success",
+      "windows": "success",
+      "sign-windows": "success",
+      "publish": "success"
+    },
+    "outputs": {
+      "plan": {
+        "previous_has_feed": "true"
+      }
+    },
+    "noAnnotations": [
+      "error",
+      "warning"
+    ],
+    "release": {
+      "tag": "agentnotch-v1.1.1",
+      "isDraft": false,
+      "isLatest": true,
+      "notesContain": [
+        "## Windows (preview)",
+        "The Windows app is still a preview",
+        "AgentNotch-1.1.1-Setup.exe"
+      ],
+      "notesLack": [
+        "new in this release"
+      ]
+    },
+    "website": true
+  }
+}
