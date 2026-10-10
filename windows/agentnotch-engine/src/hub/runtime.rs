@@ -95,6 +95,9 @@ impl Default for RuntimeOptions {
 #[derive(Clone)]
 pub struct HubInputs {
     tx: Sender<Input>,
+    /// The runtime's launch-scan flag (not the runtime itself: holding that
+    /// would keep the queue's receiver alive, and `send` could never fail).
+    launch_scanned: Arc<Mutex<Option<Arc<AtomicBool>>>>,
 }
 
 impl HubInputs {
@@ -103,6 +106,18 @@ impl HubInputs {
     pub fn send(&self, input: Input) -> bool {
         self.tx.send(input).is_ok()
     }
+
+    /// Whether the hub has started and its launch's registry reads are all
+    /// back. The attention baseline ends 2 s after that moment, read off
+    /// the clock as `an-core` takes the last read in; a test that drives a
+    /// fake clock waits for this before moving it, or a read that comes
+    /// back late (real time, on an `an-io` worker) moves the baseline's end
+    /// past what the test thinks is news.
+    pub fn launch_scanned(&self) -> bool {
+        lock(&self.launch_scanned)
+            .as_ref()
+            .is_some_and(|scanned| scanned.load(Ordering::SeqCst))
+    }
 }
 
 /// The live hub with its timings given, and a way into its queue.
@@ -110,6 +125,7 @@ pub fn live_hub(cfg: HubConfig, platform: Platform, options: RuntimeOptions) -> 
     let runtime = Runtime::new(cfg, platform, options);
     let inputs = HubInputs {
         tx: runtime.inner.tx.clone(),
+        launch_scanned: runtime.inner.launch_scanned.clone(),
     };
     (Hub::with_backend(Arc::new(runtime)), inputs)
 }
@@ -145,7 +161,7 @@ struct Inner {
     /// Banner links acted on in the last minute.
     links: Mutex<DeepLinkGate>,
     /// Set by `an-core` once the launch's registry reads are back.
-    launch_scanned: Mutex<Option<Arc<AtomicBool>>>,
+    launch_scanned: Arc<Mutex<Option<Arc<AtomicBool>>>>,
 }
 
 struct Running {
@@ -185,7 +201,7 @@ impl Runtime {
                 run: Mutex::new(None),
                 cloud: Mutex::new(None),
                 links: Mutex::new(DeepLinkGate::default()),
-                launch_scanned: Mutex::new(None),
+                launch_scanned: Arc::default(),
             }),
         }
     }
