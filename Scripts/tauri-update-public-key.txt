@@ -1,0 +1,3 @@
+# Agent Notch's Windows update key (key id 7010768765632105): the updater public key
+# of release builds, derived from the update seed. Release refuses another.
+dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDcwMTA3Njg3NjU2MzIxMDUKUldRRklXTmxoM1lRY0M1SXA5cmNnS0IvUVNZeDloWVV5R1NWdTU1STVad2ErcmVYM3lBd0MvYTUK
