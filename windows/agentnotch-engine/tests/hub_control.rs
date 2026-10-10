@@ -52,6 +52,28 @@ fn world_with(customise: impl FnOnce(&mut Platform)) -> World {
 
 /// `world_with`, with `prepare` run on the fakes before the hub starts.
 fn world_prepared(customise: impl FnOnce(&mut Platform), prepare: impl FnOnce(&TestHub)) -> World {
+    world_launched(customise, prepare, Launch::Read)
+}
+
+/// How far `world_launched` lets the launch get before the clock moves.
+#[derive(PartialEq)]
+enum Launch {
+    /// The launch's registry reads are back, so the attention baseline ends
+    /// 2 s (fake) after the start and the 3 s step closes it: what follows
+    /// is news. Without this wait a read that comes back late (real time,
+    /// on a busy `an-io` worker) starts its 2 s only then, and the next
+    /// event falls silently inside the baseline (CI run 38015401006).
+    Read,
+    /// The pipe listens; the launch's reads may still be out (a test that
+    /// holds them on purpose).
+    Listening,
+}
+
+fn world_launched(
+    customise: impl FnOnce(&mut Platform),
+    prepare: impl FnOnce(&TestHub),
+    launch: Launch,
+) -> World {
     let home = Home::new();
     home.write_json(".claude.json", &home.login(PARAS_UUID, PARAS, None));
     home.mkdir(".claude/sessions");
@@ -82,6 +104,13 @@ fn world_prepared(customise: impl FnOnce(&mut Platform), prepare: impl FnOnce(&T
         "{:?}",
         hub.logs()
     );
+    if launch == Launch::Read {
+        assert!(
+            eventually(|| hub.inputs.launch_scanned()),
+            "the launch's registry reads come back: {:?}",
+            hub.logs()
+        );
+    }
     let w = World { home, hub };
     // The launch baseline: nothing seen before it is news.
     w.advance(Duration::from_secs(3));
@@ -945,7 +974,7 @@ impl agentnotch_engine::platform::Processes for HeldRegistry {
 fn a_banner_link_that_started_the_app_waits_for_the_launch_scan() {
     let open: Arc<(Mutex<bool>, std::sync::Condvar)> = Arc::default();
     let held = open.clone();
-    let w = world_prepared(
+    let w = world_launched(
         move |platform| {
             platform.processes = Arc::new(HeldRegistry {
                 inner: platform.processes.clone(),
@@ -968,6 +997,7 @@ fn a_banner_link_that_started_the_app_waits_for_the_launch_scan() {
             )
             .unwrap();
         },
+        Launch::Listening,
     );
     assert!(w.row("cold").is_none(), "the launch read is still out");
     let hub = w.hub.hub.clone();
@@ -996,6 +1026,53 @@ fn a_banner_link_that_started_the_app_waits_for_the_launch_scan() {
 }
 
 // ---- a usage limit is announced once per account ----
+
+/// The launch baseline ends 2 s after the launch's registry reads come back,
+/// timed by the fake clock when `an-core` takes them in. On a loaded runner
+/// that read (real time, on an `an-io` worker) came back after `world()` had
+/// moved the clock 3 s on (CI run 38015401006): the limit then fell inside
+/// the baseline, and nothing was announced. `world()` waits for the read
+/// before it moves the clock, so a slow one changes nothing.
+#[test]
+fn a_launch_read_that_comes_back_late_still_lets_the_limit_through() {
+    let open: Arc<(Mutex<bool>, std::sync::Condvar)> = Arc::default();
+    let held = open.clone();
+    let late = open.clone();
+    let w = world_prepared(
+        move |platform| {
+            platform.processes = Arc::new(HeldRegistry {
+                inner: platform.processes.clone(),
+                open: held,
+            });
+            // Let the read go a little later, as a busy worker would.
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(200));
+                *late.0.lock().unwrap() = true;
+                late.1.notify_all();
+            });
+        },
+        |hub| {
+            // An entry for the read to look up (its Claude Code has ended).
+            let started = hub.handles.clock.now() - Duration::from_secs(60);
+            let started_ms = agentnotch_engine::core::time::to_ms(started);
+            let home = hub.roots.home.clone();
+            std::fs::write(
+                home.join(".claude/sessions/777.json"),
+                serde_json::to_vec(&json!({
+                    "pid": 777, "sessionId": "gone", "cwd": home.join("code/proj"),
+                    "startedAt": started_ms, "version": "2.1.282", "kind": "interactive",
+                    "entrypoint": "cli", "status": "idle",
+                    "updatedAt": started_ms, "statusUpdatedAt": started_ms,
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        },
+    );
+    w.hit_limit("s1");
+    w.settle_burst();
+    assert_eq!(w.limit_toasts(), 1, "{:?}", w.hub.handles.notifier.posted());
+}
 
 impl World {
     /// A turn that fails on the account's usage limit; returns once the row
